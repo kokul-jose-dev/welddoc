@@ -86,12 +86,12 @@ def auth_callback():
     email = claims.get("preferred_username", claims.get("email", "")).lower()
     name = claims.get("name", "")
 
-    # Restrict to @istinox.ch only
-    if not email.endswith("@istinox.ch"):
+    # Restrict to @istinox.ch and @botangelos.com only
+    if not (email.endswith("@istinox.ch") or email.endswith("@botangelos.com")):
         session.clear()
         return (
             "<h2>Access Denied</h2>"
-            "<p>Only @istinox.ch accounts are allowed.</p>"
+            "<p>Only @istinox.ch and @botangelos.com accounts are allowed.</p>"
             "<a href='/'>Back</a>"
         ), 403
 
