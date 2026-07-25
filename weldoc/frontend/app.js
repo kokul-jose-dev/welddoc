@@ -113,14 +113,14 @@ const PIECE_DNS = {
 function requiredDns(piece){ return PIECE_DNS[(piece||'').toLowerCase()] ?? 1; }
 /* Whether category shows outer diameter field */
 const PIECE_HAS_DIAMETER = {
-  "pipe":true, "flange":true, "blind flange":true, "elbow":true, "reducer":true,
+  "pipe":true, "flange":true, "blind flange":false, "elbow":true, "reducer":true,
   "tee":true, "pipe extruded outlet":true, "pipe 2 extruded outlet":true,
   "equipment":false, "3-way valve":false, "4-way valve":false, "6-way valve":false,
   "ferrule":true, "welding wire":true, "valve":true
 };
 /* Whether category shows thickness field */
 const PIECE_HAS_THICKNESS = {
-  "pipe":true, "flange":true, "blind flange":true, "elbow":true, "reducer":true,
+  "pipe":true, "flange":true, "blind flange":false, "elbow":true, "reducer":true,
   "tee":true, "pipe extruded outlet":true, "pipe 2 extruded outlet":true,
   "equipment":false, "3-way valve":false, "4-way valve":false, "6-way valve":false,
   "ferrule":true, "welding wire":false, "valve":true
