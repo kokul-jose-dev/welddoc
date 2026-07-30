@@ -8,3 +8,4 @@ marshmallow==3.*
 openpyxl==3.*
 Pillow==12.*
 gunicorn==23.*
+certifi
