@@ -14,5 +14,5 @@ class Pipeline(db.Model):
     doc_final = db.Column(db.String(500))
     archived = db.Column(db.Boolean, default=False)
 
-    materials = db.relationship("Material", backref="pipeline", lazy=True)
+    materials = db.relationship("PipelineMaterial", backref="pipeline", lazy=True)
     welds = db.relationship("Weld", backref="pipeline", lazy=True)
