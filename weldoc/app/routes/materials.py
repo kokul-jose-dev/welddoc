@@ -2,6 +2,10 @@ from flask import Blueprint, request, jsonify
 from app.database import db
 from app.models.material import Material
 from app.models.weld import Weld
+from app.models.pipeline import Pipeline
+from app.models.project import Project
+from app.models.client import Client
+from app.sharepoint import upload_waz_document
 
 materials_bp = Blueprint("materials", __name__)
 
@@ -218,6 +222,43 @@ def reorder_materials():
 
     db.session.commit()
     return jsonify({"ok": True}), 200
+
+
+@materials_bp.route("/<int:material_id>/upload-waz", methods=["POST"])
+def upload_waz(material_id):
+    """Upload a WAZ PDF document to SharePoint for a material."""
+    m = Material.query.get_or_404(material_id)
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    # Get hierarchy info
+    pipeline = Pipeline.query.get(m.pipeline_id)
+    project = Project.query.get(pipeline.project_id)
+    client = Client.query.get(project.client_id)
+
+    heat_no = m.heat_no or "unknown"
+    certificate_no = m.certificate or "unknown"
+
+    file_content = file.read()
+    content_type = file.content_type or "application/pdf"
+
+    url = upload_waz_document(
+        client.id, client.name,
+        project.title or project.ist_project_no, project.ist_project_no,
+        heat_no, certificate_no,
+        file_content, content_type
+    )
+
+    if url:
+        m.waz_pdf_url = url
+        db.session.commit()
+        return jsonify({"wazPdfUrl": url}), 200
+    else:
+        return jsonify({"error": "Failed to upload to SharePoint"}), 500
 
 
 def _serialize(m):

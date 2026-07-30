@@ -20,7 +20,8 @@ function normalizeProjects(arr){ return arr.map(normalizeProject); }
 function normalizeMaterial(m){
   if(m.category && !m.piece) m.piece=m.category;
   if(m.dn1 && !m.dimension) m.dimension=m.dn1;
-  if(typeof m.position==='string'){ const code=m.position.charCodeAt(0); m.position=code>=65&&code<=90?code-64:1; }
+  for(let i=2;i<=6;i++){ if(m[`dn${i}`] && !m[`dimension${i}`]) m[`dimension${i}`]=m[`dn${i}`]; }
+  if(typeof m.position==='string'){ const code=m.position.charCodeAt(0); m.position=code>=65&&code<=90?code-64:parseInt(m.position)||1; }
   if(!m.connections) m.connections=[];
   if(!m.materialCode && m.material_code) m.materialCode=m.material_code;
   if(!m.itemDescription && m.item_description) m.itemDescription=m.item_description;
@@ -82,18 +83,6 @@ function rebuildRelationships(){
 }
 
 /* ---- catalogs for dropdown + free-text fields ---- */
-const ITEM_CATALOG = [
-  { description:"Pipe DIN 11866 series B", code:"1.4435", piece:"Pipe", dimension:"DN 40", dimension2:"", dimension3:"", dien:"DIN 11866", diameter:"41.0 mm", thickness:"2.0 mm" },
-  { description:"Pipe DIN 11866 series B", code:"1.4435", piece:"Pipe", dimension:"DN 50", dimension2:"", dimension3:"", dien:"DIN 11866", diameter:"53.0 mm", thickness:"2.0 mm" },
-  { description:"90° pipe bend acc. to DIN EN 11865 series B", code:"1.4435", piece:"Elbow", dimension:"DN 15", dimension2:"", dimension3:"", dien:"DIN 11865", diameter:"21.3 mm", thickness:"2.0 mm" },
-  { description:"90° pipe bend acc. to DIN EN 11865 series B", code:"1.4435", piece:"Elbow", dimension:"DN 25", dimension2:"", dimension3:"", dien:"DIN 11865", diameter:"29.0 mm", thickness:"2.0 mm" },
-  { description:"T-piece DIN 11866 series B", code:"1.4435", piece:"Tee", dimension:"DN 15", dimension2:"DN 15", dimension3:"", dien:"DIN 11866", diameter:"21.3 mm", thickness:"2.0 mm" },
-  { description:"T-piece DIN 11866 series B", code:"1.4435", piece:"Tee", dimension:"DN 25", dimension2:"DN 25", dimension3:"", dien:"DIN 11866", diameter:"29.0 mm", thickness:"2.0 mm" },
-  { description:"Tri-Clamp flange DIN 32676", code:"1.4435", piece:"Flange", dimension:"DN 15", dimension2:"", dimension3:"", dien:"DIN 32676", diameter:"21.3 mm", thickness:"2.0 mm" },
-  { description:"Tri-Clamp flange DIN 32676", code:"1.4435", piece:"Flange", dimension:"DN 25", dimension2:"", dimension3:"", dien:"DIN 32676", diameter:"29.0 mm", thickness:"2.0 mm" },
-  { description:"Concentric reducer DIN 11866", code:"1.4404", piece:"Reducer", dimension:"DN 25", dimension2:"DN 15", dimension3:"", dien:"DIN 11866", diameter:"29.0 / 21.3 mm", thickness:"2.0 mm" },
-  { description:"Diaphragm valve, Tri-Clamp", code:"1.4435", piece:"Valve", dimension:"DN 15", dimension2:"", dimension3:"", dien:"DIN 32676", diameter:"21.3 mm", thickness:"2.0 mm" }
-];
 const PIECE_OPTIONS = ["Pipe","Flange","Blind Flange","Elbow","Reducer","Tee","Pipe extruded outlet","Pipe 2 extruded outlet","Equipment","3-Way Valve","4-Way Valve","6-Way Valve","Welding Wire"];
 /* Required number of welds (connections) per category */
 const PIECE_WELDS = {
@@ -195,7 +184,10 @@ function seedData(){
 let DB = null;
 function loadDB(){ return null; }
 function saveDB(){ /* no-op: data is in Azure SQL now */ }
-function initDB(){ DB = DB || { clients:[], projects:[], people:[], certificates:[], pipelines:[], materials:[], welds:[], counters:{ client:1, project:1, person:1, cert:1, pipeline:1, material:1, weld:1 } }; }
+function initDB(){ DB = DB || { clients:[], projects:[], people:[], certificates:[], pipelines:[], materials:[], welds:[], globalMaterials:[], projectMaterials:[], globalMaterialCount:0, counters:{ client:1, project:1, person:1, cert:1, pipeline:1, material:1, weld:1 } };
+  /* Fetch global material count for sidebar if not set */
+  if(!DB.globalMaterialCount) apiGet('/global-materials').then(gm=>{DB.globalMaterialCount=gm.length; const el=document.querySelector('.nav-tab[href="materials.html"] .nav-count'); if(el) el.textContent=gm.length;}).catch(()=>{});
+}
 function resetDemo(){ location.reload(); }
 
 /* ---- role / current-user (mockup auth) ---- */
@@ -477,7 +469,7 @@ const NAV_ICONS = {
 function icon(key){ return `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">${NAV_ICONS[key]||''}</svg>`; }
 function renderChrome(activeNav, breadcrumbHtml){
   const counts = { clients:clients().length, projects:projects().length, pipelines:pipelines().length, welders:people().length,
-                   materials:materials().length, waz:uniqueWaz().length };
+                   materials:DB.globalMaterialCount||materials().length, waz:uniqueWaz().length };
   const nav=(key,label,href,showCount)=>`<a class="nav-tab ${activeNav===key?'active':''}" href="${href}"><span class="nav-icon">${icon(key)}</span><span class="nav-label">${label}</span>${showCount?`<span class="nav-count">${counts[key]}</span>`:''}</a>`;
   const role=getRole();
   const roleName = role==='vendor' ? escapeHtml((getPerson(getCurrentUserId())||{}).name||'Vendor') : 'Office staff';
@@ -525,7 +517,7 @@ function mountModals(){
   <div class="modal-overlay" id="modal-project"><div class="modal modal-wide">
     <button class="modal-close" onclick="closeModal('modal-project')">&times;</button><h2 id="modal-project-title">New project</h2>
     <form id="project-form"><div class="form-grid">
-      <label class="field"><span class="lbl">IST Project number</span><input type="text" id="input-project-istno" placeholder="e.g. 926xxxx"></label>
+      <label class="field"><span class="lbl">IST Project number <span class="req">*</span></span><input type="text" id="input-project-istno" placeholder="e.g. 926xxxx" required></label>
       <div class="field"><span class="lbl">Client <span class="req">*</span></span><select id="input-project-client" required></select><input type="text" id="input-project-client-readonly" disabled style="display:none"></div>
       <label class="field"><span class="lbl">Project title <span class="req">*</span></span><input type="text" id="input-project-title" required></label>
       <div class="field"><span class="lbl">Location</span><select id="input-project-location" onchange="toggleSelectOther('input-project-location','input-project-location-new')"></select><input type="text" id="input-project-location-new" class="select-other-text" style="display:none" placeholder="Type new location…"></div>
@@ -589,7 +581,7 @@ function mountModals(){
       <div class="field"><span class="lbl">Material code <span class="req">*</span></span><select id="input-mat-code" onchange="onMatCodeChange()"></select><input type="text" id="input-mat-code-new" class="select-other-text" style="display:none" placeholder="Type material code…"></div>
       <div class="field" id="diameter-field"><span class="lbl">Outer diameter <span class="req">*</span></span><select id="input-mat-diameter" onchange="onDiameterChange()"></select><input type="text" id="input-mat-diameter-new" class="select-other-text" style="display:none" placeholder="Type diameter…"></div>
       <div class="field" id="thickness-field"><span class="lbl">Thickness <span class="req">*</span></span><select id="input-mat-thickness" onchange="toggleSelectOther('input-mat-thickness','input-mat-thickness-new')"></select><input type="text" id="input-mat-thickness-new" class="select-other-text" style="display:none" placeholder="Type thickness…"></div>
-      <label class="field"><span class="lbl">Surface</span><input type="text" id="input-mat-surface" placeholder="e.g. Ra 0.8 µm"></label>
+      <div class="field"><span class="lbl">Surface</span><div style="display:flex;gap:8px;align-items:center"><input type="text" id="input-mat-surface" placeholder="e.g. 0.8" style="flex:1;width:auto"><select id="input-mat-surface-unit" style="width:auto;flex:0 0 auto"><option value="µm">µm</option></select></div></div>
       <div class="field wide"><div class="check-row">
         <label><input type="checkbox" id="input-mat-start" onchange="onStartEndChange()"> Start of plumbing</label>
         <label><input type="checkbox" id="input-mat-end" onchange="onStartEndChange()"> End of plumbing</label>
@@ -677,15 +669,16 @@ function mountModals(){
       <div class="field"><span class="lbl">Material code</span><select id="mp-code" onchange="toggleSelectOther('mp-code','mp-code-new')"></select><input type="text" id="mp-code-new" class="select-other-text" style="display:none" placeholder="Type code…"></div>
       <div class="field" id="mp-diameter-field"><span class="lbl">Outer diameter</span><select id="mp-diameter" onchange="toggleSelectOther('mp-diameter','mp-diameter-new')"></select><input type="text" id="mp-diameter-new" class="select-other-text" style="display:none" placeholder="Type diameter…"></div>
       <div class="field" id="mp-thickness-field"><span class="lbl">Thickness</span><select id="mp-thickness" onchange="toggleSelectOther('mp-thickness','mp-thickness-new')"></select><input type="text" id="mp-thickness-new" class="select-other-text" style="display:none" placeholder="Type thickness…"></div>
-      <label class="field"><span class="lbl">Surface</span><input type="text" id="mp-surface" placeholder="e.g. Ra 0.8 µm"></label>
+      <div class="field"><span class="lbl">Surface</span><div style="display:flex;gap:8px;align-items:center"><input type="text" id="mp-surface" placeholder="e.g. 0.8" style="flex:1;width:auto"><select id="mp-surface-unit" style="width:auto;flex:0 0 auto"><option value="µm">µm</option></select></div></div>
     </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-mat-props')">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div></form>
   </div></div>
 
   <div class="modal-overlay" id="modal-apply-all"><div class="modal modal-small">
-    <button class="modal-close" onclick="closeModal('modal-apply-all')">&times;</button><h2>Apply changes</h2>
-    <p>There are <strong id="modal-apply-all-count">0</strong> other material(s) with the same combination:<br><strong id="modal-apply-all-piece"></strong></p>
-    <p>Would you like to update all of them, or only this one?</p>
-    <div class="modal-actions"><button class="btn btn-ghost" onclick="confirmApplyOne()">Only this one</button><button class="btn btn-primary" onclick="confirmApplyAll()">Update all matching</button></div>
+    <button class="modal-close" onclick="closeModal('modal-apply-all')">&times;</button><h2>Update global material</h2>
+    <p>This material is used across <strong>all projects</strong>. Changing it here will update it everywhere.</p>
+    <p><strong id="modal-apply-all-piece"></strong></p>
+    <p>Are you sure you want to proceed?</p>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="cancelGlobalEdit()">Cancel</button><button class="btn btn-primary" onclick="confirmGlobalEdit()">Update everywhere</button></div>
   </div></div>`;
   attachFormHandlers();
 }
@@ -887,7 +880,7 @@ function attachFormHandlers(){
     const matCode=readSelectOther('input-mat-code','input-mat-code-new');
     const diameter=hasDiameter(piece)?readSelectOther('input-mat-diameter','input-mat-diameter-new'):'';
     const thickness=hasThickness(piece)?readSelectOther('input-mat-thickness','input-mat-thickness-new'):'';
-    const surface=val('input-mat-surface');
+    const surfaceVal=val('input-mat-surface'); const surfaceUnit=document.getElementById('input-mat-surface-unit').value; const surface=surfaceVal?(surfaceVal+' '+surfaceUnit):'';
     if(!piece){ err.textContent='Category is required.'; err.classList.add('show'); return; }
     if(!isWire && dnCount>0){
       if(!dimension){ err.textContent='DN is required.'; err.classList.add('show'); return; }
@@ -935,19 +928,32 @@ function attachFormHandlers(){
     saveDB(); closeModal('modal-material');
     if(materialReturnToWeld){ materialReturnToWeld=false; if(document.getElementById('modal-weld').classList.contains('open')) buildWeldMaterialChecklist(getChecked('input-weld-materials')); }
     rerenderPage();
-    /* ---- Sync to API (backend handles connections + welds) ---- */
+    /* ---- Sync to API (3-step: global → project → pipeline) ---- */
     try {
       const posLtr=val('input-mat-position')||posLetter(data.position||1);
       const connPositions=(getMaterial(savedId).connections||[]).map(cid=>{
         const cm=getMaterial(cid); return cm?posLetter(cm.position):null;
       }).filter(Boolean);
-      const apiData={pipelineId:data.pipelineId, position:posLtr, category:data.piece, dn1:data.dimension, itemDescription:data.itemDescription, materialCode:data.materialCode, diameter:data.diameter, thickness:data.thickness, dienNo:data.dienNo, surface:data.surface, certificate:data.certificate, heatNo:data.heatNo, wazNo:data.wazNo, wazPdfUrl:data.wazPdfUrl, startOfPlumbing:data.startOfPlumbing, endOfPlumbing:data.endOfPlumbing, connections:connPositions};
-      if(editingMaterialId!==null) apiData.id=editingMaterialId;
-      await apiPost('/materials', apiData);
+
+      // Step 1: Create/find global material
+      const gmData={category:data.piece, itemDescription:data.itemDescription, materialCode:data.materialCode, dn1:data.dimension, diameter:data.diameter, thickness:data.thickness, dienNo:data.dienNo};
+      for(let i=2;i<=6;i++) if(data[`dimension${i}`]) gmData[`dn${i}`]=data[`dimension${i}`];
+      const gmResult=await apiPost('/global-materials', gmData);
+
+      // Step 2: Create/find project material
+      const pmData={projectId:PAGE.projectId, globalMaterialId:gmResult.id, certificate:data.certificate||'', heatNo:data.heatNo||'', surface:data.surface||'', wazNo:data.wazNo||''};
+      const pmResult=await apiPost('/project-materials', pmData);
+
+      // Step 3: Create/edit pipeline material
+      const plmData={pipelineId:data.pipelineId, projectMaterialId:pmResult.id, position:posLtr, startOfPlumbing:data.startOfPlumbing, endOfPlumbing:data.endOfPlumbing, connections:connPositions};
+      if(editingMaterialId!==null) plmData.id=editingMaterialId;
+      if(plmData.id){ await apiPost('/pipeline-materials/'+plmData.id, plmData); }
+      else { await apiPost('/pipeline-materials', plmData); }
     } catch(e){ console.error('Save material API error:', e); }
   });
 }
 function val(id){ return (document.getElementById(id).value||'').trim(); }
+function parseSurface(s){ if(!s) return {value:'',unit:'µm'}; const match=s.match(/^(.+?)\s*(µm|um|μm)$/i); if(match) return {value:match[1].trim(),unit:'µm'}; return {value:s,unit:'µm'}; }
 
 /* ================================================================ MODAL OPENERS ================================================================ */
 function openClientModal(id=null){
@@ -1118,9 +1124,9 @@ function onWeldTypeChange(){
    Category → Description → DN / DIEN / Code → Diameter → Thickness
    Dropdown options come from unique values already saved in materials(). */
 function matSource(){
-  /* combine ITEM_CATALOG with unique entries from DB.materials */
+  /* build from DB.materials */
   const fromDb=DB.materials.map(m=>({piece:m.piece,description:m.itemDescription,code:m.materialCode,dimension:m.dimension,dimension2:m.dimension2||'',dimension3:m.dimension3||'',dien:m.dienNo||'',diameter:m.diameter||'',thickness:m.thickness||''}));
-  const combined=[...ITEM_CATALOG,...fromDb];
+  const combined=fromDb;
   /* deduplicate: same piece+description+code+dimension+dimension2+dien+diameter+thickness = same entry */
   const seen=new Set(); const unique=[];
   combined.forEach(i=>{ const key=[i.piece,i.description,i.code,i.dimension,i.dimension2||'',i.dimension3||'',i.dien,i.diameter,i.thickness].join('|||');
@@ -1338,7 +1344,7 @@ function openMaterialModal(id=null, returnToWeld=false){
     buildSelectOther('input-mat-code','input-mat-code-new',allCodes,m.materialCode);
     buildSelectOther('input-mat-diameter','input-mat-diameter-new',allDiameters,m.diameter||'');
     buildSelectOther('input-mat-thickness','input-mat-thickness-new',allThicknesses,m.thickness||'');
-    setV('input-mat-surface',m.surface||'');
+    {const sp=parseSurface(m.surface||''); setV('input-mat-surface',sp.value); document.getElementById('input-mat-surface-unit').value=sp.unit;}
     document.getElementById('input-mat-start').checked=!!m.startOfPlumbing; document.getElementById('input-mat-end').checked=!!m.endOfPlumbing;
     renderConnRows(m.connections||[]);
   } else { document.getElementById('modal-material-title').textContent='New material'; setV('input-mat-position', posLetter(pipelineMaterials(PAGE.pipelineId).length+1));
@@ -1428,9 +1434,9 @@ function openDeleteModal(type,id){ openArchiveModal(type,id); }
 async function confirmArchive(){
   const {type,id}=deleteContext;
   const map={client:'clients',project:'projects',pipeline:'pipelines',welder:'people',weld:'welds',material:'materials'};
-  const apiMap={client:'/clients',project:'/projects',pipeline:'/pipelines',weld:'/welds',material:'/materials'};
+  const apiMap={client:'/clients',project:'/projects',pipeline:'/pipelines',weld:'/welds',material:'/pipeline-materials'};
   const rec = DB[map[type]].find(x=>x.id===id); if(rec) rec.archived=true;
-  if(apiMap[type]){ try { await apiPost(apiMap[type], {id, archived:true}); } catch(e){ console.error('Archive API error:', e); } }
+  if(apiMap[type]){ try { await apiPost(apiMap[type]+(type==='material'?'/'+id:''), type==='material'?{archived:true}:{id, archived:true}); } catch(e){ console.error('Archive API error:', e); } }
 
   if(type==='material'){
     const m=rec;
@@ -1560,7 +1566,7 @@ async function initArchivePage(){
       apiGet('/clients'), apiGet('/clients?archived=true'),
       apiGet('/projects'), apiGet('/projects?archived=true'),
       apiGet('/pipelines'), apiGet('/pipelines?archived=true'),
-      apiGet('/materials'), apiGet('/materials?archived=true'),
+      apiGet('/pipeline-materials'), apiGet('/pipeline-materials?archived=true'),
       apiGet('/welds'), apiGet('/welds?archived=true')
     ]);
     DB.clients=[...aC,...aCA]; DB.projects=normalizeProjects([...aP,...aPA]); DB.pipelines=[...aPl,...aPlA]; DB.materials=normalizeMaterials([...aM,...aMA]); DB.welds=normalizeWelds([...aW,...aWA]);
@@ -1666,7 +1672,7 @@ async function restoreProject(id){
 }
 async function restoreMaterial(id){
   const m=DB.materials.find(x=>x.id===id); if(m) m.archived=false;
-  try { await apiPost('/materials', {id, archived:false}); } catch(e){ console.error('Restore API error:', e); }
+  try { await apiPost('/pipeline-materials/'+id, {archived:false}); } catch(e){ console.error('Restore API error:', e); }
   saveDB(); renderArchivePage();
 }
 async function restorePipeline(id){
@@ -1862,9 +1868,11 @@ async function initPipelineDetailPage(){
     /* Fetch this pipeline first, then load only related data */
     const pl0 = await apiGet('/pipelines/'+PAGE.pipelineId);
     const projId = pl0.projectId;
-    const [apiPr, apiPl, apiM, apiW] = await Promise.all([apiGet('/projects/'+projId), apiGet('/pipelines?projectId='+projId), apiGet('/materials?pipelineId='+PAGE.pipelineId), apiGet('/welds?pipelineId='+PAGE.pipelineId)]);
+    const [apiPr, apiPl, apiM, apiW] = await Promise.all([apiGet('/projects/'+projId), apiGet('/pipelines?projectId='+projId), apiGet('/pipeline-materials?pipelineId='+PAGE.pipelineId), apiGet('/welds?pipelineId='+PAGE.pipelineId)]);
     const apiCl = await apiGet('/clients/'+apiPr.clientId);
+    const apiPM = await apiGet('/project-materials?projectId='+projId);
     DB.clients=[apiCl]; DB.projects=normalizeProjects([apiPr]); DB.pipelines=apiPl; DB.materials=normalizeMaterials(apiM); DB.welds=normalizeWelds(apiW);
+    DB.projectMaterials=apiPM||[];
     rebuildRelationships();
   } catch(e){ console.error('API error:', e); }
   const tab=qp('tab'); if(tab==='weldlist'||tab==='materials') detailView=tab; else detailView='materials';
@@ -1989,12 +1997,13 @@ function renderMaterialsList(){
     }
     return `<tr${hasErr?' class="row-error"':''} data-mat-id="${m.id}" ${canDrag?'draggable="true" ondragstart="onMatDragStart(event,'+m.id+')"':''} ondragover="onMatDragOver(event)" ondrop="onMatDrop(event,${m.id})">
       <td class="col-mono">${canDrag?'<span class="drag-handle" title="Drag to reorder">⠿</span> ':''}${posLetter(m.position)}${flags?`<span class="person-sub">${flags}</span>`:''}</td>
-      <td>${escapeHtml(m.piece)}</td><td class="col-mono${dnWarn?' dn-warn':''}">${escapeHtml(m.dimension)}</td>${extraDnCells}
+      <td>${escapeHtml(m.piece)}</td>
+      <td><a class="cell-link" href="material-detail.html?id=${m.id}">${escapeHtml(m.itemDescription)}</a></td>
+      <td class="col-mono${dnWarn?' dn-warn':''}">${escapeHtml(m.dimension)}</td>${extraDnCells}
       <td class="col-mono">${m.diameter?fmtDia(m.diameter):'<span class="muted">—</span>'}</td>
       <td class="col-mono">${escapeHtml(m.thickness)||'<span class="muted">—</span>'}</td>
       <td class="col-mono">${escapeHtml(m.dienNo)||'<span class="muted">—</span>'}</td>
       <td class="col-mono">${escapeHtml(m.surface)||'<span class="muted">—</span>'}</td>
-      <td><a class="cell-link" href="material-detail.html?id=${m.id}">${escapeHtml(m.itemDescription)}</a></td>
       <td class="col-mono">${escapeHtml(m.materialCode)}</td><td>${escapeHtml(m.certificate)}</td>
       <td class="col-mono">${escapeHtml(m.heatNo)}</td>
       <td>${m.wazNo?`<button class="doc-chip doc-weld" onclick="showWaz(${m.id})" title="View WAZ PDF">${escapeHtml(m.wazNo)}</button><button class="btn-link btn-edit-inline" onclick="openEditWazModal(${m.id})" title="Edit WAZ">✎</button>`:`<button class="btn btn-primary btn-sm" onclick="openAddWazModal(${m.id})">+</button>`}</td>
@@ -2007,7 +2016,7 @@ function renderMaterialsList(){
   if(thead){
     let dnHeader=maxDn>1?'<th>DN 1</th>':'<th>DN</th>';
     for(let i=2;i<=maxDn;i++) dnHeader+=`<th>DN ${i}</th>`;
-    thead.innerHTML=`<th>Pos.</th><th>Category</th>${dnHeader}<th>Diameter</th><th>Thickness</th><th>DIN EN No.</th><th>Surface</th><th>Item description</th><th>Material</th><th>Certificate</th><th>Heat&nbsp;No.</th><th>WAZ&nbsp;No.</th><th>Welds</th><th></th>`;
+    thead.innerHTML=`<th>Pos.</th><th>Category</th><th>Item description</th>${dnHeader}<th>Diameter</th><th>Thickness</th><th>DIN EN No.</th><th>Surface</th><th>Material</th><th>Certificate</th><th>Heat&nbsp;No.</th><th>WAZ&nbsp;No.</th><th>Welds</th><th></th>`;
   }
   // Welding Wire table
   const wireSection=document.getElementById('welding-wire-section');
@@ -2035,7 +2044,7 @@ function onMatDragStart(e,matId){
   setTimeout(()=>{ if(e.currentTarget) e.currentTarget.style.opacity=''; },300);
 }
 function onMatDragOver(e){ e.preventDefault(); e.dataTransfer.dropEffect='move'; }
-function onMatDrop(e,targetMatId){
+async function onMatDrop(e,targetMatId){
   e.preventDefault();
   if(!_dragMatId || _dragMatId===targetMatId) return;
   const dragged=getMaterial(_dragMatId);
@@ -2123,7 +2132,7 @@ function onMatDrop(e,targetMatId){
   saveDB();
   _dragMatId=null;
   rerenderPage();
-  /* Sync reorder to backend */
+  /* Sync reorder to backend and reload */
   try {
     const allMats=pipelineMaterials(pipeId);
     const payload={ pipelineId:pipeId, materials:allMats.map(m=>({
@@ -2131,7 +2140,16 @@ function onMatDrop(e,targetMatId){
       connections:(m.connections||[]).map(cid=>{ const c=getMaterial(cid); return c?posLetter(c.position):null; }).filter(Boolean),
       startOfPlumbing:!!m.startOfPlumbing, endOfPlumbing:!!m.endOfPlumbing
     }))};
-    apiPost('/materials/reorder', payload);
+    await apiPost('/pipeline-materials/reorder', payload);
+    /* Reload fresh data */
+    const [freshMats, freshWelds] = await Promise.all([
+      apiGet('/pipeline-materials?pipelineId='+PAGE.pipelineId),
+      apiGet('/welds?pipelineId='+PAGE.pipelineId)
+    ]);
+    DB.materials=normalizeMaterials(freshMats);
+    DB.welds=normalizeWelds(freshWelds);
+    rebuildRelationships();
+    rerenderPage();
   } catch(e){ console.error('Reorder API error:', e); }
 }
 /* Show welds for a material — if 1 weld, open edit directly; if multiple, open first seam detail */
@@ -2548,29 +2566,52 @@ function openEditWazModal(matId){
 }
 function confirmAddWaz(){
   const m=getMaterial(wazMaterialId); if(!m) return;
-  const wazNo=val('input-waz-no');
-  const existingWithDoc=pipelineMaterials(m.pipelineId).find(x=>x.wazNo===wazNo && x.wazPdfUrl);
-  const f=(document.getElementById('input-waz-file').files[0]||{}).name;
-  const errEl=document.getElementById('waz-err');
-  if(!existingWithDoc && !_wazProjectPdfUrl && !f && (wazDocRemoved || !getMaterial(wazMaterialId).wazPdfUrl)){
-    errEl.textContent='WAZ document is required.';
-    errEl.classList.add('show'); return; }
-  errEl.classList.remove('show');
-  m.wazNo=wazNo;
   const certEditEl=document.getElementById('input-waz-cert-edit');
   const heatEditEl=document.getElementById('input-waz-heat-edit');
-  if(certEditEl.style.display!=='none') m.certificate=certEditEl.value.trim()||m.certificate;
-  else m.certificate=readSelectOther('input-waz-cert','input-waz-cert-new')||m.certificate;
-  if(heatEditEl.style.display!=='none') m.heatNo=heatEditEl.value.trim()||m.heatNo;
-  else m.heatNo=readSelectOther('input-waz-heat','input-waz-heat-new')||m.heatNo;
-  if(f) m.wazPdfUrl=`https://istinox.sharepoint.com/…/waz/${f}`;
-  else if(wazDocRemoved) m.wazPdfUrl='';
-  else if(existingWithDoc) m.wazPdfUrl=existingWithDoc.wazPdfUrl;
-  else if(_wazProjectPdfUrl) m.wazPdfUrl=_wazProjectPdfUrl;
-  else m.wazPdfUrl=`https://istinox.sharepoint.com/…/waz/${wazNo}.pdf`;
-  _wazProjectPdfUrl='';
-  wazDocRemoved=false;
-  saveDB(); closeModal('modal-waz-add'); rerenderPage();
+  let certificate;
+  if(certEditEl.style.display!=='none') certificate=certEditEl.value.trim()||m.certificate;
+  else certificate=readSelectOther('input-waz-cert','input-waz-cert-new')||m.certificate;
+  let heatNo;
+  if(heatEditEl.style.display!=='none') heatNo=heatEditEl.value.trim()||m.heatNo;
+  else heatNo=readSelectOther('input-waz-heat','input-waz-heat-new')||m.heatNo;
+
+  const fileInput=document.getElementById('input-waz-file');
+  const file=fileInput.files[0]||null;
+  const errEl=document.getElementById('waz-err');
+
+  if(!certificate){ errEl.textContent='Certificate is required.'; errEl.classList.add('show'); return; }
+  if(!heatNo){ errEl.textContent='Heat number is required.'; errEl.classList.add('show'); return; }
+  errEl.classList.remove('show');
+
+  /* Save to backend */
+  (async ()=>{
+    try {
+      // Update certificate + heat on pipeline material (saves to project material)
+      const updated=await apiPost('/pipeline-materials/'+m.id, {certificate, heatNo});
+
+      // Upload WAZ file if provided
+      if(file){
+        const formData=new FormData();
+        formData.append('file', file);
+        const uploadResp=await fetch(`/api/pipeline-materials/${m.id}/upload-waz`, {method:'POST', body:formData});
+        const uploadResult=await uploadResp.json();
+        if(uploadResult.wazPdfUrl) updated.wazPdfUrl=uploadResult.wazPdfUrl;
+      }
+
+      // Reload materials + welds from server
+      const [freshMats, freshWelds] = await Promise.all([
+        apiGet('/pipeline-materials?pipelineId='+PAGE.pipelineId),
+        apiGet('/welds?pipelineId='+PAGE.pipelineId)
+      ]);
+      DB.materials=normalizeMaterials(freshMats);
+      DB.welds=normalizeWelds(freshWelds);
+      rebuildRelationships();
+      closeModal('modal-waz-add'); rerenderPage();
+    } catch(ex){
+      errEl.textContent='Error saving: '+ex.message;
+      errEl.classList.add('show');
+    }
+  })();
 }
 function showSeamDetail(weldId){
   const w=getWeld(weldId), pl=getPipeline(w.pipelineId);
@@ -2620,11 +2661,11 @@ async function initMaterialDetailPage(){
   PAGE.name='material-detail'; initDB();
   PAGE.materialId=Number(qp('id'));
   try {
-    const matData = await apiGet('/materials/'+PAGE.materialId);
+    const matData = await apiGet('/pipeline-materials/'+PAGE.materialId);
     const pid = matData.pipelineId;
     const pl0 = await apiGet('/pipelines/'+pid);
     const projId = pl0.projectId;
-    const [apiPr, apiPl, apiM, apiW] = await Promise.all([apiGet('/projects/'+projId), apiGet('/pipelines?projectId='+projId), apiGet('/materials?pipelineId='+pid), apiGet('/welds?pipelineId='+pid)]);
+    const [apiPr, apiPl, apiM, apiW] = await Promise.all([apiGet('/projects/'+projId), apiGet('/pipelines?projectId='+projId), apiGet('/pipeline-materials?pipelineId='+pid), apiGet('/welds?pipelineId='+pid)]);
     const apiCl = await apiGet('/clients/'+apiPr.clientId);
     DB.clients=[apiCl]; DB.projects=normalizeProjects([apiPr]); DB.pipelines=apiPl; DB.materials=normalizeMaterials(apiM); DB.welds=normalizeWelds(apiW);
     rebuildRelationships();
@@ -2679,7 +2720,7 @@ function renderMaterialDetail(){
 async function initMaterialUsagePage(){
   PAGE.name='material-usage'; initDB();
   try {
-    const [apiC, apiP, apiPl, apiM] = await Promise.all([apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines'), apiGet('/materials')]);
+    const [apiC, apiP, apiPl, apiM] = await Promise.all([apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines'), apiGet('/pipeline-materials')]);
     DB.clients=apiC; DB.projects=normalizeProjects(apiP); DB.pipelines=apiPl; DB.materials=normalizeMaterials(apiM);
   } catch(e){ console.error('API error:', e); }
   renderChrome('materials',`<a href="materials.html">Materials</a> / Usage`); mountModals(); wireModalDismiss();
@@ -2936,7 +2977,7 @@ function homeCertTable(list){
 let homeTab=null;
 async function initHomePage(){ PAGE.name='home'; initDB();
   try {
-    const [apiC, apiP, apiPl, apiM, apiW] = await Promise.all([apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines'), apiGet('/materials'), apiGet('/welds')]);
+    const [apiC, apiP, apiPl, apiM, apiW] = await Promise.all([apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines'), apiGet('/pipeline-materials'), apiGet('/welds')]);
     DB.clients=apiC; DB.projects=normalizeProjects(apiP); DB.pipelines=apiPl; DB.materials=normalizeMaterials(apiM); DB.welds=normalizeWelds(apiW);
     rebuildRelationships();
   } catch(e){ console.error('API error:', e); }
@@ -2984,7 +3025,7 @@ function renderHomePage(){
 let wazFilters={clientId:'',projectId:''};
 async function initWazPage(){ PAGE.name='waz'; initDB();
   try {
-    const [apiC, apiP, apiPl, apiM] = await Promise.all([apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines'), apiGet('/materials')]);
+    const [apiC, apiP, apiPl, apiM] = await Promise.all([apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines'), apiGet('/pipeline-materials')]);
     DB.clients=apiC; DB.projects=normalizeProjects(apiP); DB.pipelines=apiPl; DB.materials=normalizeMaterials(apiM);
   } catch(e){ console.error('API error:', e); }
   renderChrome('waz','WAZ Documents'); mountModals(); wireModalDismiss(); buildWazFilters(); renderWazPage();
@@ -3028,8 +3069,9 @@ function renderWazPage(){
 let matFilters={clientId:'',projectId:'',piece:'',dn:'',dien:'',diameter:'',thickness:'',code:''};
 async function initMaterialsPage(){ PAGE.name='materials'; initDB();
   try {
-    const [apiC, apiP, apiPl, apiM] = await Promise.all([apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines'), apiGet('/materials')]);
-    DB.clients=apiC; DB.projects=normalizeProjects(apiP); DB.pipelines=apiPl; DB.materials=normalizeMaterials(apiM);
+    const [apiC, apiP, apiPl, apiGM] = await Promise.all([apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines'), apiGet('/global-materials')]);
+    DB.clients=apiC; DB.projects=normalizeProjects(apiP); DB.pipelines=apiPl; DB.materials=normalizeMaterials(apiGM);
+    DB.globalMaterialCount=DB.materials.length;
   } catch(e){ console.error('API error:', e); }
   renderChrome('materials','Materials'); mountModals(); wireModalDismiss(); buildMatClientProjectFilters(); renderMaterialsPage();
 }
@@ -3079,9 +3121,7 @@ function onMaterialsFilterChange(){
 }
 function clearMaterialsFilters(){ matFilters={clientId:'',projectId:'',piece:'',dn:'',dien:'',diameter:'',thickness:'',code:''}; renderMaterialsPage(); }
 function renderMaterialsPage(){
-  const allMats=materials().filter(m=>{ const pl=getPipeline(m.pipelineId); if(!pl) return false; const pr=getProject(pl.projectId); if(!pr) return false;
-    if(matFilters.projectId && pr.id!==Number(matFilters.projectId)) return false;
-    if(matFilters.clientId && pr.clientId!==Number(matFilters.clientId)) return false;
+  const allMats=materials().filter(m=>{
     if(matFilters.piece && m.piece!==matFilters.piece) return false;
     if(matFilters.dn && m.dimension!==matFilters.dn) return false;
     if(matFilters.dien && (m.dienNo||'')!==matFilters.dien) return false;
@@ -3089,14 +3129,11 @@ function renderMaterialsPage(){
     if(matFilters.thickness && (m.thickness||'')!==matFilters.thickness) return false;
     if(matFilters.code && m.materialCode!==matFilters.code) return false;
     return true; });
-  /* deduplicate: show only unique combinations */
-  const seen=new Set(); const mats=[];
-  allMats.forEach(m=>{ const key=[m.piece,m.itemDescription,m.dimension,...([2,3,4,5,6].map(i=>m[`dimension${i}`]||'')),m.dienNo||'',m.diameter||'',m.thickness||'',m.materialCode].join('|||');
-    if(!seen.has(key)){ seen.add(key); mats.push(m); } });
-  document.getElementById('materials-stats').innerHTML=tile(mats.length,'Unique materials','')+tile(allMats.length,'Total used','t-neutral');
+  const mats=allMats;
+  document.getElementById('materials-stats').innerHTML=tile(mats.length,'Materials','');
   /* find max DN count */
   let maxDn=1;
-  mats.forEach(m=>{ for(let i=2;i<=6;i++){ if(m[`dimension${i}`]) maxDn=Math.max(maxDn,i); } });
+  mats.forEach(m=>{ for(let i=2;i<=6;i++){ if(m[`dimension${i}`]||m[`dn${i}`]) maxDn=Math.max(maxDn,i); } });
   const tbody=document.getElementById('materials-page-tbody');
   tbody.innerHTML=mats.length? mats.map(m=>{
     let extraDnCells='';
@@ -3108,10 +3145,11 @@ function renderMaterialsPage(){
       <td class="col-mono">${escapeHtml(m.dienNo||'')}</td>
       <td class="col-mono">${m.diameter?fmtDia(m.diameter):''}</td>
       <td class="col-mono">${escapeHtml(m.thickness||'')}</td>
+      <td class="col-mono">${escapeHtml(m.surface||'')}</td>
       <td class="col-mono">${escapeHtml(m.materialCode)}</td>
       <td class="col-actions"><button class="btn-link" onclick="openMaterialsPageEdit(${m.id})">Edit</button></td>
     </tr>`;
-  }).join('') : `<tr class="empty-row"><td colspan="${8+(maxDn-1)}">No materials match these filters.</td></tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="${9+(maxDn-1)}">No materials match these filters.</td></tr>`;
   /* update table header with clickable column filter dropdowns */
   const allMatsAll=materials();
   const allPieces=[...new Set(allMatsAll.map(m=>m.piece).filter(Boolean))].sort();
@@ -3129,6 +3167,7 @@ function renderMaterialsPage(){
     hdr+=colFilterTh('DIN EN No.','dien',allDienOpts,matFilters.dien);
     hdr+=colFilterTh('Diameter','diameter',allDiaOpts,matFilters.diameter);
     hdr+=colFilterTh('Thickness','thickness',allThkOpts,matFilters.thickness);
+    hdr+='<th>Surface</th>';
     hdr+=colFilterTh('Material','code',allCodeOpts,matFilters.code);
     hdr+=`<th></th>`;
     thead.innerHTML=hdr;
@@ -3160,7 +3199,6 @@ function openMaterialsPageEdit(id){
   buildSelectOther('mp-code','mp-code-new',allCodes,m.materialCode);
   buildSelectOther('mp-diameter','mp-diameter-new',allDiameters,m.diameter||'');
   buildSelectOther('mp-thickness','mp-thickness-new',allThicknesses,m.thickness||'');
-  setV('mp-surface',m.surface||'');
   /* show/hide diameter/thickness based on category */
   document.getElementById('mp-diameter-field').style.display=hasDiameter(m.piece)?'':'none';
   document.getElementById('mp-thickness-field').style.display=hasThickness(m.piece)?'':'none';
@@ -3214,57 +3252,47 @@ function saveMaterialProps(e){
   m.materialCode=readSelectOther('mp-code','mp-code-new');
   m.diameter=hasDiameter(m.piece)?readSelectOther('mp-diameter','mp-diameter-new'):'';
   m.thickness=hasThickness(m.piece)?readSelectOther('mp-thickness','mp-thickness-new'):'';
-  m.surface=val('mp-surface');
-  saveDB(); closeModal('modal-mat-props');
-  /* check for materials with the SAME original combination (all fields) */
-  const matching=materials().filter(x=>{
-    if(x.id===m.id) return false;
-    if(x.piece!==_mpOriginal.piece || x.itemDescription!==_mpOriginal.itemDescription) return false;
-    if(x.dimension!==_mpOriginal.dimension) return false;
-    if((x.dienNo||'')!==_mpOriginal.dienNo) return false;
-    if(x.materialCode!==_mpOriginal.materialCode) return false;
-    if((x.diameter||'')!==_mpOriginal.diameter) return false;
-    if((x.thickness||'')!==_mpOriginal.thickness) return false;
-    for(let i=2;i<=6;i++){ if((x[`dimension${i}`]||'')!==(_mpOriginal[`dimension${i}`]||'')) return false; }
-    return true;
-  });
-  if(matching.length){
-    document.getElementById('modal-apply-all-count').textContent=matching.length;
-    document.getElementById('modal-apply-all-piece').textContent=`${_mpOriginal.piece} · ${_mpOriginal.itemDescription} · ${_mpOriginal.dimension}`;
-    openModal('modal-apply-all');
-  } else { _materialsPageEditId=null; _mpOriginal=null; rerenderPage(); }
+  closeModal('modal-mat-props');
+  /* Show warning before saving global material */
+  document.getElementById('modal-apply-all-piece').textContent=`${m.piece} · ${m.itemDescription} · ${m.dimension}`;
+  openModal('modal-apply-all');
 }
-function confirmApplyAll(){
+let _pendingGlobalEdit=null;
+function confirmGlobalEdit(){
+  const m=getMaterial(_materialsPageEditId); if(!m) return;
+  saveDB();
+  /* Sync edit to global materials API */
+  try {
+    apiPost('/global-materials/'+m.id, {category:m.piece, itemDescription:m.itemDescription, dn1:m.dimension,
+      dn2:m.dimension2||'', dn3:m.dimension3||'', dn4:m.dimension4||'', dn5:m.dimension5||'', dn6:m.dimension6||'',
+      dienNo:m.dienNo, materialCode:m.materialCode, diameter:m.diameter, thickness:m.thickness});
+  } catch(e){ console.error('Edit global material API error:', e); }
+  closeModal('modal-apply-all'); _materialsPageEditId=null; _mpOriginal=null; rerenderPage();
+}
+function cancelGlobalEdit(){
+  /* Revert local changes */
   const m=getMaterial(_materialsPageEditId);
-  const matching=materials().filter(x=>{
-    if(x.id===m.id) return false;
-    if(x.piece!==_mpOriginal.piece || x.itemDescription!==_mpOriginal.itemDescription) return false;
-    if(x.dimension!==_mpOriginal.dimension) return false;
-    if((x.dienNo||'')!==_mpOriginal.dienNo) return false;
-    if(x.materialCode!==_mpOriginal.materialCode) return false;
-    if((x.diameter||'')!==_mpOriginal.diameter) return false;
-    if((x.thickness||'')!==_mpOriginal.thickness) return false;
-    for(let i=2;i<=6;i++){ if((x[`dimension${i}`]||'')!==(_mpOriginal[`dimension${i}`]||'')) return false; }
-    return true;
-  });
-  matching.forEach(x=>{
-    x.piece=m.piece; x.itemDescription=m.itemDescription;
-    x.dimension=m.dimension; x.diameter=m.diameter; x.thickness=m.thickness;
-    x.dienNo=m.dienNo; x.materialCode=m.materialCode; x.surface=m.surface;
-    for(let i=2;i<=6;i++) x[`dimension${i}`]=m[`dimension${i}`]||'';
-  });
-  saveDB(); closeModal('modal-apply-all'); _materialsPageEditId=null; _mpOriginal=null; rerenderPage();
-}
-function confirmApplyOne(){
+  if(m && _mpOriginal){
+    m.piece=_mpOriginal.piece; m.itemDescription=_mpOriginal.itemDescription;
+    m.dimension=_mpOriginal.dimension; m.dienNo=_mpOriginal.dienNo;
+    m.materialCode=_mpOriginal.materialCode; m.diameter=_mpOriginal.diameter;
+    m.thickness=_mpOriginal.thickness;
+    for(let i=2;i<=6;i++) m[`dimension${i}`]=_mpOriginal[`dimension${i}`]||'';
+  }
   closeModal('modal-apply-all'); _materialsPageEditId=null; _mpOriginal=null; rerenderPage();
 }
 
 /* ================================================================ PROJECT DETAIL PAGE ================================================================ */
+let _projMatEditId=null;
 async function initProjectDetailPage(){
   PAGE.name='project-detail'; initDB(); PAGE.projectId=Number(qp('id'));
   try {
-    const [apiC, apiP, apiPl] = await Promise.all([apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines')]);
+    const [apiC, apiP, apiPl, apiGM, apiPM] = await Promise.all([
+      apiGet('/clients'), apiGet('/projects'), apiGet('/pipelines'),
+      apiGet('/global-materials'), apiGet('/project-materials?projectId='+Number(qp('id')))
+    ]);
     DB.clients=apiC; DB.projects=normalizeProjects(apiP); DB.pipelines=apiPl;
+    DB.globalMaterials=apiGM||[]; DB.projectMaterials=apiPM||[];
   } catch(e){ console.error('API error:', e); }
   const pr=getProject(PAGE.projectId);
   if(!pr){ renderChrome('projects','Projects'); return; }
@@ -3284,5 +3312,649 @@ function renderProjectDetail(){
   document.getElementById('project-stats').innerHTML=tile(pls.length,'Pipelines','')+tile(pls.filter(p=>p.status<5).length,'In progress','t-copper')+tile(by(5),'Exported','t-success');
   document.getElementById('project-toolbar').innerHTML=`<h2>Pipelines</h2><div style="display:flex;gap:8px;"><a class="btn btn-ghost btn-sm" href="archive.html?tab=pipelines"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> Archive</a><button class="btn btn-primary btn-sm" onclick="openPipelineModal()">+ New pipeline</button></div>`;
   document.getElementById('project-pipelines').innerHTML=homePipelineTable(pls,'No pipelines in this project yet.');
+  renderProjectMaterialsTable();
 }
 
+/* --- Project view tab switching --- */
+function showProjectView(tab){
+  document.querySelectorAll('.subtab').forEach(b=>b.classList.remove('active'));
+  document.getElementById('subtab-'+tab).classList.add('active');
+  document.getElementById('project-pipelines-view').style.display=tab==='pipelines'?'':'none';
+  document.getElementById('project-materials-view').style.display=tab==='proj-materials'?'':'none';
+}
+
+/* --- Project Materials table --- */
+let pmFilters={piece:'',dn:'',dien:'',diameter:'',thickness:'',code:''};
+function setPmFilter(key,val){
+  pmFilters[key]=val;
+  document.querySelectorAll('.col-filter.open').forEach(el=>el.classList.remove('open'));
+  renderProjectMaterialsTable();
+}
+function clearPmFilters(){ pmFilters={piece:'',dn:'',dien:'',diameter:'',thickness:'',code:''}; renderProjectMaterialsTable(); }
+function renderProjectMaterialsTable(){
+  const tbody=document.getElementById('proj-materials-tbody');
+  if(!tbody) return;
+  const allMats=DB.projectMaterials||[];
+  /* Apply filters */
+  const mats=allMats.filter(pm=>{
+    const gm=(DB.globalMaterials||[]).find(g=>g.id===pm.globalMaterialId)||{};
+    if(pmFilters.piece && gm.category!==pmFilters.piece) return false;
+    if(pmFilters.dn && gm.dn1!==pmFilters.dn) return false;
+    if(pmFilters.dien && (gm.dienNo||'')!==pmFilters.dien) return false;
+    if(pmFilters.diameter && (gm.diameter||'')!==pmFilters.diameter) return false;
+    if(pmFilters.thickness && (gm.thickness||'')!==pmFilters.thickness) return false;
+    if(pmFilters.code && (gm.materialCode||'')!==pmFilters.code) return false;
+    return true;
+  });
+  /* Find max DN count across all project materials */
+  let maxDn=1;
+  const allGmsForDn=allMats.map(pm=>(DB.globalMaterials||[]).find(g=>g.id===pm.globalMaterialId)||{});
+  allGmsForDn.forEach(g=>{ for(let i=2;i<=6;i++){ if(g[`dn${i}`]) maxDn=Math.max(maxDn,i); } });
+
+  const colCount=12+maxDn; /* #, category, desc, dn1..maxDn, diameter, thickness, dien, surface, material, cert, heat, waz, edit */
+  if(!mats.length){ tbody.innerHTML=`<tr><td colspan="${colCount}" class="empty">${allMats.length?'No materials match these filters.':'No project materials yet. Click "+ Add material" to add one.'}</td></tr>`; }
+  else {
+    tbody.innerHTML=mats.map((pm,i)=>{
+    const gm=(DB.globalMaterials||[]).find(g=>g.id===pm.globalMaterialId)||{};
+    let extraDnCells='';
+    for(let d=2;d<=maxDn;d++) extraDnCells+=`<td class="col-mono">${gm[`dn${d}`]?escapeHtml(gm[`dn${d}`]):'<span class="muted">—</span>'}</td>`;
+    return `<tr>
+      <td>${i+1}</td>
+      <td>${escapeHtml(gm.category||'')}</td>
+      <td>${escapeHtml(gm.itemDescription||'')}</td>
+      <td class="col-mono">${escapeHtml(gm.dn1||'')}</td>${extraDnCells}
+      <td class="col-mono">${escapeHtml(gm.diameter||'')}</td>
+      <td class="col-mono">${escapeHtml(gm.thickness||'')}</td>
+      <td class="col-mono">${escapeHtml(gm.dienNo||'')}</td>
+      <td class="col-mono">${escapeHtml(gm.surface||'')}</td>
+      <td class="col-mono">${escapeHtml(gm.materialCode||'')}</td>
+      <td class="col-mono">${escapeHtml(pm.certificate||'')}</td>
+      <td class="col-mono">${escapeHtml(pm.heatNo||'')}</td>
+      <td>${pm.wazPdfUrl?'<a href="'+escapeHtml(pm.wazPdfUrl)+'" target="_blank" class="link">View</a>':'<span class="muted">—</span>'}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="openProjectMaterialModal(${pm.id})">Edit</button></td>
+    </tr>`;
+  }).join('');
+  }
+  /* Build column filter headers */
+  const thead=document.getElementById('proj-mat-thead');
+  if(thead){
+    const allGms=allMats.map(pm=>(DB.globalMaterials||[]).find(g=>g.id===pm.globalMaterialId)||{});
+    const opts=key=>[...new Set(allGms.map(g=>g[key]).filter(Boolean))].sort();
+    const pmfTh=(label,key,options)=>colFilterTh(label,key,options,pmFilters[key]).replace(/setMatFilter/g,'setPmFilter');
+    let hdr='<th>#</th>';
+    hdr+=pmfTh('Category','piece',opts('category'));
+    hdr+='<th>Item description</th>';
+    hdr+=pmfTh(maxDn>1?'DN 1':'DN','dn',opts('dn1'));
+    for(let d=2;d<=maxDn;d++) hdr+=`<th>DN ${d}</th>`;
+    hdr+=pmfTh('Diameter','diameter',opts('diameter'));
+    hdr+=pmfTh('Thickness','thickness',opts('thickness'));
+    hdr+=pmfTh('DIN EN No.','dien',opts('dienNo'));
+    hdr+='<th>Surface</th>';
+    hdr+=pmfTh('Material','code',opts('materialCode'));
+    hdr+='<th>Certificate</th><th>Heat No.</th><th>Mat. Cert.</th><th></th>';
+    thead.innerHTML=hdr;
+  }
+}
+
+/* --- Project Material Modal --- */
+function openProjectMaterialModal(editId){
+  _projMatEditId=editId||null;
+  const existing=_projMatEditId?DB.projectMaterials.find(m=>m.id===_projMatEditId):null;
+  const gm=existing?(DB.globalMaterials||[]).find(g=>g.id===existing.globalMaterialId):null;
+  const title=existing?'Edit project material':'Add project material';
+
+  /* Build the modal HTML with all fields */
+  const allGm=DB.globalMaterials||[];
+  const allPieces=[...new Set(allGm.map(g=>g.category).filter(Boolean))];
+  const allDescs=[...new Set(allGm.map(g=>g.itemDescription).filter(Boolean))];
+  const allDiens=[...new Set(allGm.map(g=>g.dienNo).filter(Boolean))];
+  const allCodes=[...new Set(allGm.map(g=>g.materialCode).filter(Boolean))];
+  const allDiameters=[...new Set(allGm.map(g=>g.diameter).filter(Boolean))];
+  const allThicknesses=[...new Set(allGm.map(g=>g.thickness).filter(Boolean))];
+
+  let modal=document.getElementById('modal-proj-material');
+  if(!modal){
+    const overlay=document.createElement('div');
+    overlay.className='modal-overlay';
+    overlay.id='modal-proj-material';
+    overlay.innerHTML=`<div class="modal modal-wide">
+      <button class="modal-close" onclick="closeModal('modal-proj-material')">&times;</button>
+      <h2 id="modal-proj-material-title">${title}</h2>
+      <form id="proj-material-form"><div class="form-grid">
+        <div class="field"><span class="lbl">Category <span class="req">*</span></span><select id="pm-category" onchange="onPmCategoryChange()"></select><input type="text" id="pm-category-new" class="select-other-text" style="display:none" placeholder="Type category…"></div>
+        <div class="field wide"><span class="lbl">Item description</span><select id="pm-desc" onchange="onPmDescChange()"></select><input type="text" id="pm-desc-new" class="select-other-text" style="display:none" placeholder="Type description…"></div>
+        <div id="pm-dn-container" style="display:contents"><div class="field" id="pm-dn1-field"><span class="lbl" id="pm-dn1-label">DN</span><select id="pm-dn1" onchange="onPmDnChange()"></select><input type="text" id="pm-dn1-new" class="select-other-text" style="display:none" placeholder="Type DN…"></div></div>
+        <div class="field"><span class="lbl">Material code <span class="req">*</span></span><select id="pm-code" onchange="onPmCodeChange()"></select><input type="text" id="pm-code-new" class="select-other-text" style="display:none" placeholder="Type code…"></div>
+        <div class="field"><span class="lbl">DIN EN Number <span class="req">*</span></span><select id="pm-dien" onchange="onPmDienChange()"></select><input type="text" id="pm-dien-new" class="select-other-text" style="display:none" placeholder="Type DIN EN…"></div>
+        <div class="field" id="pm-diameter-field"><span class="lbl">Outer diameter <span class="req">*</span></span><select id="pm-diameter" onchange="onPmDiameterChange()"></select><input type="text" id="pm-diameter-new" class="select-other-text" style="display:none" placeholder="Type diameter…"></div>
+        <div class="field" id="pm-thickness-field"><span class="lbl">Thickness <span class="req">*</span></span><select id="pm-thickness" onchange="toggleSelectOther('pm-thickness','pm-thickness-new')"></select><input type="text" id="pm-thickness-new" class="select-other-text" style="display:none" placeholder="Type thickness…"></div>
+        <div class="field"><span class="lbl">Surface</span><div style="display:flex;gap:8px;align-items:center"><input type="text" id="pm-surface" placeholder="e.g. 0.8" style="flex:1;width:auto"><select id="pm-surface-unit" style="width:auto;flex:0 0 auto"><option value="µm">µm</option></select></div></div>
+        <div class="field-separator wide"></div>
+        <label class="field"><span class="lbl">Certificate number <span class="req">*</span></span><input type="text" id="pm-certificate" required placeholder="e.g. 12345"></label>
+        <label class="field"><span class="lbl">Heat number <span class="req">*</span></span><input type="text" id="pm-heat" required placeholder="e.g. H-98765"></label>
+        <div class="field wide"><span class="lbl">Material certificate (PDF)</span><div id="pm-waz-section"></div></div>
+        <div class="modal-err" id="pm-err"></div>
+      </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-proj-material')">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div></form>
+    </div>`;
+    document.getElementById('modal-root').appendChild(overlay);
+    document.getElementById('proj-material-form').addEventListener('submit', saveProjectMaterial);
+  }
+  document.getElementById('modal-proj-material-title').textContent=title;
+
+  /* Populate dropdowns */
+  buildSelectOther('pm-category','pm-category-new',[...new Set([...allPieces,...PIECE_OPTIONS])],gm?gm.category:'');
+  buildSelectOther('pm-desc','pm-desc-new',allDescs,gm?gm.itemDescription:'');
+  buildSelectOther('pm-dn1','pm-dn1-new',DIMENSION_OPTIONS,gm?gm.dn1:'',true);
+  buildSelectOther('pm-dien','pm-dien-new',allDiens,gm?gm.dienNo:'');
+  buildSelectOther('pm-code','pm-code-new',allCodes,gm?gm.materialCode:'');
+  buildSelectOther('pm-diameter','pm-diameter-new',allDiameters,gm?gm.diameter:'');
+  buildSelectOther('pm-thickness','pm-thickness-new',allThicknesses,gm?gm.thickness:'');
+
+  /* Surface - stored on global material */
+  if(gm&&gm.surface){
+    const sp=parseSurface(gm.surface);
+    setV('pm-surface',sp.value);
+    document.getElementById('pm-surface-unit').value=sp.unit;
+  } else { setV('pm-surface',''); }
+
+  /* DN fields */
+  const cat=gm?gm.category:'';
+  const dnCount=requiredDns(cat);
+  const container=document.getElementById('pm-dn-container');
+  container.querySelectorAll('.dn-extra-field').forEach(el=>el.remove());
+  container.style.display=dnCount>0?'contents':'none';
+  document.getElementById('pm-dn1-field').style.display=dnCount>0?'':'none';
+  document.getElementById('pm-dn1-label').textContent=dnCount>1?'DN 1':'DN';
+  for(let i=2;i<=dnCount;i++){
+    const div=document.createElement('div');
+    div.className='field dn-extra-field';
+    div.innerHTML=`<span class="lbl">DN ${i}</span><select id="pm-dn${i}" onchange="toggleSelectOther('pm-dn${i}','pm-dn${i}-new')"></select><input type="text" id="pm-dn${i}-new" class="select-other-text" style="display:none" placeholder="Type DN ${i}…">`;
+    container.appendChild(div);
+    buildSelectOther(`pm-dn${i}`,`pm-dn${i}-new`,DIMENSION_OPTIONS,gm?gm[`dn${i}`]:'',true);
+  }
+
+  /* Show/hide diameter/thickness */
+  document.getElementById('pm-diameter-field').style.display=hasDiameter(cat)?'':'none';
+  document.getElementById('pm-thickness-field').style.display=hasThickness(cat)?'':'none';
+
+  /* Certificate fields */
+  setV('pm-certificate',existing?existing.certificate:'');
+  setV('pm-heat',existing?existing.heatNo:'');
+  /* WAZ document section */
+  const wazSection=document.getElementById('pm-waz-section');
+  if(existing&&existing.wazPdfUrl){
+    wazSection.innerHTML=`<div style="display:flex;align-items:center;gap:12px;"><a href="${escapeHtml(existing.wazPdfUrl)}" target="_blank" class="btn btn-ghost btn-sm">View PDF</a><button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="deletePmWaz(${existing.id})">Remove</button></div>`;
+  } else {
+    wazSection.innerHTML=`<input type="file" id="pm-waz-file" accept=".pdf,application/pdf">`;
+  }
+  document.getElementById('pm-err').textContent='';
+  document.getElementById('pm-err').classList.remove('show');
+
+  openModal('modal-proj-material');
+}
+
+async function deletePmWaz(pmId){
+  if(!confirm('Remove the material certificate? This will delete it from SharePoint.')) return;
+  try {
+    await apiPost('/project-materials/'+pmId+'/delete-waz', {});
+    /* Update local data */
+    const pm=DB.projectMaterials.find(m=>m.id===pmId);
+    if(pm) pm.wazPdfUrl='';
+    /* Refresh the WAZ section in the modal */
+    const wazSection=document.getElementById('pm-waz-section');
+    wazSection.innerHTML=`<input type="file" id="pm-waz-file" accept=".pdf,application/pdf">`;
+    renderProjectMaterialsTable();
+  } catch(ex){
+    alert('Error removing WAZ: '+ex.message);
+  }
+}
+
+function onPmCategoryChange(){
+  const cat=readSelectOther('pm-category','pm-category-new');
+  const dnCount=requiredDns(cat);
+  const container=document.getElementById('pm-dn-container');
+  container.querySelectorAll('.dn-extra-field').forEach(el=>el.remove());
+  container.style.display=dnCount>0?'contents':'none';
+  document.getElementById('pm-dn1-field').style.display=dnCount>0?'':'none';
+  document.getElementById('pm-dn1-label').textContent=dnCount>1?'DN 1':'DN';
+  for(let i=2;i<=dnCount;i++){
+    const div=document.createElement('div');
+    div.className='field dn-extra-field';
+    div.innerHTML=`<span class="lbl">DN ${i}</span><select id="pm-dn${i}" onchange="toggleSelectOther('pm-dn${i}','pm-dn${i}-new')"></select><input type="text" id="pm-dn${i}-new" class="select-other-text" style="display:none" placeholder="Type DN ${i}…">`;
+    container.appendChild(div);
+    buildSelectOther(`pm-dn${i}`,`pm-dn${i}-new`,DIMENSION_OPTIONS,'',true);
+  }
+  document.getElementById('pm-diameter-field').style.display=hasDiameter(cat)?'':'none';
+  document.getElementById('pm-thickness-field').style.display=hasThickness(cat)?'':'none';
+  /* Cascade: filter description by category */
+  pmCascadeDesc();
+}
+function pmCascadeDesc(){
+  const cat=readSelectOther('pm-category','pm-category-new');
+  const allGm=DB.globalMaterials||[];
+  const filtered=cat?allGm.filter(g=>g.category===cat):allGm;
+  const descs=[...new Set(filtered.map(g=>g.itemDescription).filter(Boolean))];
+  buildSelectOther('pm-desc','pm-desc-new',descs,'');
+  pmCascadeFromDesc();
+}
+function onPmDescChange(){
+  toggleSelectOther('pm-desc','pm-desc-new');
+  pmCascadeFromDesc();
+}
+function pmCascadeFromDesc(){
+  const cat=readSelectOther('pm-category','pm-category-new');
+  const desc=readSelectOther('pm-desc','pm-desc-new');
+  const allGm=DB.globalMaterials||[];
+  let filtered=allGm;
+  if(cat) filtered=filtered.filter(g=>g.category===cat);
+  if(desc) filtered=filtered.filter(g=>g.itemDescription===desc);
+  const diens=[...new Set(filtered.map(g=>g.dienNo).filter(Boolean))];
+  const codes=[...new Set(filtered.map(g=>g.materialCode).filter(Boolean))];
+  buildSelectOther('pm-dien','pm-dien-new',diens,diens.length===1?diens[0]:'');
+  buildSelectOther('pm-code','pm-code-new',codes,codes.length===1?codes[0]:'');
+  pmCascadeDiameter();
+}
+function onPmDienChange(){ toggleSelectOther('pm-dien','pm-dien-new'); }
+function onPmCodeChange(){ toggleSelectOther('pm-code','pm-code-new'); }
+function onPmDnChange(){ toggleSelectOther('pm-dn1','pm-dn1-new'); pmCascadeDiameter(); }
+function pmCascadeDiameter(){
+  const dn=readSelectOther('pm-dn1','pm-dn1-new');
+  const allGm=DB.globalMaterials||[];
+  let filtered=allGm;
+  if(dn) filtered=filtered.filter(g=>g.dn1===dn);
+  const diameters=[...new Set(filtered.map(g=>g.diameter).filter(Boolean))];
+  buildSelectOther('pm-diameter','pm-diameter-new',diameters,diameters.length===1?diameters[0]:'');
+  pmCascadeThickness();
+}
+function onPmDiameterChange(){ toggleSelectOther('pm-diameter','pm-diameter-new'); pmCascadeThickness(); }
+function pmCascadeThickness(){
+  const dn=readSelectOther('pm-dn1','pm-dn1-new');
+  const diameter=readSelectOther('pm-diameter','pm-diameter-new');
+  const allGm=DB.globalMaterials||[];
+  let filtered=allGm;
+  if(dn) filtered=filtered.filter(g=>g.dn1===dn);
+  if(diameter) filtered=filtered.filter(g=>g.diameter===diameter);
+  const thicknesses=[...new Set(filtered.map(g=>g.thickness).filter(Boolean))];
+  buildSelectOther('pm-thickness','pm-thickness-new',thicknesses,thicknesses.length===1?thicknesses[0]:'');
+}
+
+async function saveProjectMaterial(e){
+  e.preventDefault();
+  const err=document.getElementById('pm-err');
+  err.textContent=''; err.classList.remove('show');
+
+  const category=readSelectOther('pm-category','pm-category-new');
+  const itemDescription=readSelectOther('pm-desc','pm-desc-new')||category;
+  const dn1=readSelectOther('pm-dn1','pm-dn1-new');
+  const dnCount=requiredDns(category);
+  const dns={dn1};
+  for(let i=2;i<=dnCount;i++){
+    dns[`dn${i}`]=readSelectOther(`pm-dn${i}`,`pm-dn${i}-new`);
+  }
+  const dienNo=readSelectOther('pm-dien','pm-dien-new');
+  const materialCode=readSelectOther('pm-code','pm-code-new');
+  const diameter=hasDiameter(category)?readSelectOther('pm-diameter','pm-diameter-new'):'';
+  const thickness=hasThickness(category)?readSelectOther('pm-thickness','pm-thickness-new'):'';
+  const surfaceVal=val('pm-surface');
+  const surfaceUnit=document.getElementById('pm-surface-unit').value;
+  const surface=surfaceVal?(surfaceVal+' '+surfaceUnit):'';
+
+  const certificate=val('pm-certificate');
+  const heatNo=val('pm-heat');
+  const wazFileInput=document.getElementById('pm-waz-file');
+  const wazFile=wazFileInput?wazFileInput.files[0]||null:null;
+
+  /* Validation */
+  if(!category){ err.textContent='Category is required.'; err.classList.add('show'); return; }
+  if(!materialCode){ err.textContent='Material code is required.'; err.classList.add('show'); return; }
+  if(!certificate){ err.textContent='Certificate number is required.'; err.classList.add('show'); return; }
+  if(!heatNo){ err.textContent='Heat number is required.'; err.classList.add('show'); return; }
+
+  try {
+    /* Step 1: Create or find the global material */
+    const gmData={category, itemDescription, materialCode, dienNo, diameter, thickness, surface, ...dns};
+    const gmResult=await apiPost('/global-materials', gmData);
+
+    /* Step 2: Create or update project material */
+    const pmData={
+      projectId: PAGE.projectId,
+      globalMaterialId: gmResult.id,
+      certificate, heatNo
+    };
+    if(_projMatEditId) pmData.id=_projMatEditId;
+    const pmResult=await apiPost('/project-materials', pmData);
+
+    /* Step 3: Upload WAZ file if provided */
+    if(wazFile){
+      const formData=new FormData();
+      formData.append('file', wazFile);
+      const uploadResp=await fetch(`/api/project-materials/${pmResult.id}/upload-waz`, {method:'POST', body:formData});
+      const uploadResult=await uploadResp.json();
+      if(uploadResult.wazPdfUrl) pmResult.wazPdfUrl=uploadResult.wazPdfUrl;
+    }
+
+    /* Update local data */
+    if(_projMatEditId){
+      const idx=DB.projectMaterials.findIndex(m=>m.id===_projMatEditId);
+      if(idx>=0) DB.projectMaterials[idx]=pmResult;
+    } else {
+      DB.projectMaterials.push(pmResult);
+    }
+    /* Also update global materials list */
+    const gmIdx=DB.globalMaterials.findIndex(g=>g.id===gmResult.id);
+    if(gmIdx>=0) DB.globalMaterials[gmIdx]=gmResult;
+    else DB.globalMaterials.push(gmResult);
+
+    closeModal('modal-proj-material');
+    _projMatEditId=null;
+    renderProjectMaterialsTable();
+  } catch(ex){
+    err.textContent='Error saving: '+ex.message;
+    err.classList.add('show');
+  }
+}
+
+/* ================================================================ ADD MATERIAL CHOICE (Pipeline detail) ================================================================ */
+function openAddMaterialChoice(){
+  const projMats=DB.projectMaterials||[];
+  if(!projMats.length){
+    /* No project materials — go straight to new material form */
+    openMaterialModal();
+    return;
+  }
+  let modal=document.getElementById('modal-add-choice');
+  if(!modal){
+    const overlay=document.createElement('div');
+    overlay.className='modal-overlay';
+    overlay.id='modal-add-choice';
+    overlay.innerHTML=`<div class="modal modal-small">
+      <button class="modal-close" onclick="closeModal('modal-add-choice')">&times;</button>
+      <h2>Add material</h2>
+      <p>Would you like to add an existing material from this project or create a new one?</p>
+      <div class="modal-actions" style="flex-direction:column;gap:12px;">
+        <button class="btn btn-primary" onclick="closeModal('modal-add-choice');openExistingMaterialModal()">Add existing material</button>
+        <button class="btn btn-ghost" onclick="closeModal('modal-add-choice');openMaterialModal()">Add new material</button>
+      </div>
+    </div>`;
+    document.getElementById('modal-root').appendChild(overlay);
+  }
+  openModal('modal-add-choice');
+}
+
+/* --- Add existing material with cascading dropdowns --- */
+function openExistingMaterialModal(){
+  const projMats=DB.projectMaterials||[];
+  let modal=document.getElementById('modal-existing-material');
+  if(!modal){
+    const overlay=document.createElement('div');
+    overlay.className='modal-overlay';
+    overlay.id='modal-existing-material';
+    overlay.innerHTML=`<div class="modal modal-wide">
+      <button class="modal-close" onclick="closeModal('modal-existing-material')">&times;</button>
+      <h2>Add existing material</h2>
+      <form id="existing-material-form"><div class="form-grid">
+        <div class="field"><span class="lbl">Category <span class="req">*</span></span><select id="ex-category" onchange="onExCategoryChange()"><option value="">Select...</option></select></div>
+        <div class="field wide"><span class="lbl">Item description</span><select id="ex-desc" onchange="onExDescChange()"><option value="">Select...</option></select></div>
+        <div id="ex-dn-container" style="display:contents"><div class="field" id="ex-dn1-field"><span class="lbl" id="ex-dn1-label">DN</span><select id="ex-dn1" onchange="onExDnChange()"><option value="">Select...</option></select></div></div>
+        <div class="field"><span class="lbl">Material code</span><select id="ex-code" onchange="onExFieldChange()"><option value="">Select...</option></select></div>
+        <div class="field"><span class="lbl">DIN EN Number</span><select id="ex-dien" onchange="onExFieldChange()"><option value="">Select...</option></select></div>
+        <div class="field" id="ex-diameter-field"><span class="lbl">Diameter</span><select id="ex-diameter" onchange="onExDiameterChange()"><option value="">Select...</option></select></div>
+        <div class="field" id="ex-thickness-field"><span class="lbl">Thickness</span><select id="ex-thickness" onchange="onExFieldChange()"><option value="">Select...</option></select></div>
+        <div class="field"><span class="lbl">Surface</span><select id="ex-surface"><option value="">Select...</option></select></div>
+        <div class="field"><span class="lbl">Certificate</span><select id="ex-certificate" onchange="onExFieldChange()"><option value="">Select...</option></select></div>
+        <div class="field"><span class="lbl">Heat number</span><select id="ex-heat"><option value="">Select...</option></select></div>
+        <div class="field-separator wide"></div>
+        <div class="field wide"><div class="check-row">
+          <label><input type="checkbox" id="ex-start" onchange="onExStartEndChange()"> Start of plumbing</label>
+          <label><input type="checkbox" id="ex-end" onchange="onExStartEndChange()"> End of plumbing</label>
+        </div></div>
+        <div class="field wide"><span class="lbl">Connections (other materials this joins to)</span>
+          <div id="ex-conn-rows"></div>
+          <button type="button" class="inline-add-toggle" onclick="addExConnRow()">+ Add connection</button>
+        </div>
+        <div class="modal-err" id="ex-err"></div>
+      </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-existing-material')">Cancel</button><button type="submit" class="btn btn-primary">Add to pipeline</button></div></form>
+    </div>`;
+    document.getElementById('modal-root').appendChild(overlay);
+    document.getElementById('existing-material-form').addEventListener('submit', saveExistingMaterial);
+  }
+  /* Populate category dropdown */
+  const categories=[...new Set(projMats.map(pm=>pm.category).filter(Boolean))].sort();
+  document.getElementById('ex-category').innerHTML='<option value="">Select...</option>'+categories.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  _exResetFields();
+  openModal('modal-existing-material');
+}
+
+function _exResetFields(){
+  document.getElementById('ex-desc').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-dn1').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-dien').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-code').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-diameter').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-thickness').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-surface').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-certificate').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-heat').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-err').textContent='';
+  document.getElementById('ex-err').classList.remove('show');
+  /* Remove extra DN fields */
+  document.getElementById('ex-dn-container').querySelectorAll('.dn-extra-field').forEach(el=>el.remove());
+  /* Reset start/end and connections */
+  const startEl=document.getElementById('ex-start'); if(startEl) startEl.checked=false;
+  const endEl=document.getElementById('ex-end'); if(endEl) endEl.checked=false;
+  const connRows=document.getElementById('ex-conn-rows'); if(connRows) connRows.innerHTML='';
+  /* Auto-check start if pipeline is empty, otherwise auto-add connection to last material */
+  const existingMats=(DB.materials||[]).filter(m=>!m.archived);
+  if(existingMats.length===0){
+    if(startEl) startEl.checked=true;
+  } else {
+    /* Auto-add connection to the last material */
+    const lastMat=existingMats[existingMats.length-1];
+    const options=existingMats.map(m=>`<option value="${posLetter(m.position)}" ${m.id===lastMat.id?'selected':''}>${posLetter(m.position)} — ${escapeHtml(m.piece||m.category||'')} (${escapeHtml(m.itemDescription||'')})</option>`).join('');
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;gap:8px;align-items:center;margin-bottom:6px;';
+    row.innerHTML=`<select style="flex:1"><option value="">Select position...</option>${options}</select><button type="button" class="btn btn-ghost btn-sm" onclick="this.parentElement.remove()" style="color:var(--danger)">✕</button>`;
+    connRows.appendChild(row);
+  }
+}
+
+function _exFilteredProjMats(){
+  const projMats=DB.projectMaterials||[];
+  const cat=document.getElementById('ex-category').value;
+  const desc=document.getElementById('ex-desc').value;
+  const dn=document.getElementById('ex-dn1').value;
+  const dien=document.getElementById('ex-dien').value;
+  const code=document.getElementById('ex-code').value;
+  const dia=document.getElementById('ex-diameter').value;
+  const thk=document.getElementById('ex-thickness').value;
+  const cert=document.getElementById('ex-certificate').value;
+  let filtered=projMats;
+  if(cat) filtered=filtered.filter(pm=>pm.category===cat);
+  if(desc) filtered=filtered.filter(pm=>pm.itemDescription===desc);
+  if(dn) filtered=filtered.filter(pm=>pm.dn1===dn);
+  if(dien) filtered=filtered.filter(pm=>pm.dienNo===dien);
+  if(code) filtered=filtered.filter(pm=>pm.materialCode===code);
+  if(dia) filtered=filtered.filter(pm=>pm.diameter===dia);
+  if(thk) filtered=filtered.filter(pm=>pm.thickness===thk);
+  if(cert) filtered=filtered.filter(pm=>pm.certificate===cert);
+  return filtered;
+}
+
+function onExCategoryChange(){
+  const cat=document.getElementById('ex-category').value;
+  /* Reset all downstream fields first */
+  document.getElementById('ex-desc').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-dn1').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-dien').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-code').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-diameter').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-thickness').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-surface').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-certificate').innerHTML='<option value="">Select...</option>';
+  document.getElementById('ex-heat').innerHTML='<option value="">Select...</option>';
+  /* Show/hide DN fields based on category */
+  const dnCount=requiredDns(cat);
+  const container=document.getElementById('ex-dn-container');
+  container.querySelectorAll('.dn-extra-field').forEach(el=>el.remove());
+  container.style.display=dnCount>0?'contents':'none';
+  document.getElementById('ex-dn1-field').style.display=dnCount>0?'':'none';
+  document.getElementById('ex-dn1-label').textContent=dnCount>1?'DN 1':'DN';
+  /* Add extra DN fields */
+  for(let i=2;i<=dnCount;i++){
+    const div=document.createElement('div');
+    div.className='field dn-extra-field';
+    div.innerHTML=`<span class="lbl">DN ${i}</span><select id="ex-dn${i}" onchange="onExFieldChange()"><option value="">Select...</option></select>`;
+    container.appendChild(div);
+  }
+  /* Show/hide diameter/thickness */
+  document.getElementById('ex-diameter-field').style.display=hasDiameter(cat)?'':'none';
+  document.getElementById('ex-thickness-field').style.display=hasThickness(cat)?'':'none';
+  /* Cascade descriptions */
+  const projMats=DB.projectMaterials||[];
+  const filtered=cat?projMats.filter(pm=>pm.category===cat):projMats;
+  const descs=[...new Set(filtered.map(pm=>pm.itemDescription).filter(Boolean))].sort();
+  document.getElementById('ex-desc').innerHTML='<option value="">Select...</option>'+descs.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(descs.length===1) document.getElementById('ex-desc').value=descs[0];
+  onExDescChange();
+}
+
+function onExDescChange(){
+  const filtered=_exFilteredProjMats();
+  /* DN options - preserve current values */
+  const dns=[...new Set(filtered.map(pm=>pm.dn1).filter(Boolean))].sort();
+  const curDn=document.getElementById('ex-dn1').value;
+  document.getElementById('ex-dn1').innerHTML='<option value="">Select...</option>'+dns.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(dns.includes(curDn)) document.getElementById('ex-dn1').value=curDn;
+  else if(dns.length===1) document.getElementById('ex-dn1').value=dns[0];
+  /* Populate extra DN fields */
+  const cat=document.getElementById('ex-category').value;
+  const dnCount=requiredDns(cat);
+  for(let i=2;i<=dnCount;i++){
+    const sel=document.getElementById(`ex-dn${i}`);
+    if(sel){
+      const dnOpts=[...new Set(filtered.map(pm=>pm[`dn${i}`]).filter(Boolean))].sort();
+      const curVal=sel.value;
+      sel.innerHTML='<option value="">Select...</option>'+dnOpts.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+      if(dnOpts.includes(curVal)) sel.value=curVal;
+      else if(dnOpts.length===1) sel.value=dnOpts[0];
+    }
+  }
+  onExDnChange();
+}
+
+function onExDnChange(){
+  const filtered=_exFilteredProjMats();
+  const diens=[...new Set(filtered.map(pm=>pm.dienNo).filter(Boolean))].sort();
+  const codes=[...new Set(filtered.map(pm=>pm.materialCode).filter(Boolean))].sort();
+  const curDien=document.getElementById('ex-dien').value;
+  const curCode=document.getElementById('ex-code').value;
+  document.getElementById('ex-dien').innerHTML='<option value="">Select...</option>'+diens.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  document.getElementById('ex-code').innerHTML='<option value="">Select...</option>'+codes.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(diens.includes(curDien)) document.getElementById('ex-dien').value=curDien;
+  else if(diens.length===1) document.getElementById('ex-dien').value=diens[0];
+  if(codes.includes(curCode)) document.getElementById('ex-code').value=curCode;
+  else if(codes.length===1) document.getElementById('ex-code').value=codes[0];
+  onExFieldChange();
+}
+
+function onExDiameterChange(){ onExFieldChange(); }
+
+function onExFieldChange(){
+  const filtered=_exFilteredProjMats();
+  /* Diameter */
+  const dias=[...new Set(filtered.map(pm=>pm.diameter).filter(Boolean))].sort();
+  const diaSel=document.getElementById('ex-diameter');
+  const curDia=diaSel.value;
+  diaSel.innerHTML='<option value="">Select...</option>'+dias.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(dias.includes(curDia)) diaSel.value=curDia;
+  else if(dias.length===1) diaSel.value=dias[0];
+  document.getElementById('ex-diameter-field').style.display=dias.length?'':'none';
+  /* Thickness */
+  const thks=[...new Set(filtered.map(pm=>pm.thickness).filter(Boolean))].sort();
+  const thkSel=document.getElementById('ex-thickness');
+  const curThk=thkSel.value;
+  thkSel.innerHTML='<option value="">Select...</option>'+thks.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(thks.includes(curThk)) thkSel.value=curThk;
+  else if(thks.length===1) thkSel.value=thks[0];
+  document.getElementById('ex-thickness-field').style.display=thks.length?'':'none';
+  /* DIN EN - hide if no options */
+  const diens=[...new Set(filtered.map(pm=>pm.dienNo).filter(Boolean))].sort();
+  const dienSel=document.getElementById('ex-dien');
+  const curDien=dienSel.value;
+  dienSel.innerHTML='<option value="">Select...</option>'+diens.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(diens.includes(curDien)) dienSel.value=curDien;
+  else if(diens.length===1) dienSel.value=diens[0];
+  dienSel.closest('.field').style.display=diens.length?'':'none';
+  /* Surface */
+  const surfaces=[...new Set(filtered.map(pm=>pm.surface).filter(Boolean))].sort();
+  document.getElementById('ex-surface').innerHTML='<option value="">Select...</option>'+surfaces.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(surfaces.length===1) document.getElementById('ex-surface').value=surfaces[0];
+  document.getElementById('ex-surface').closest('.field').style.display=surfaces.length?'':'none';
+  /* Certificate */
+  const certs=[...new Set(filtered.map(pm=>pm.certificate).filter(Boolean))].sort();
+  document.getElementById('ex-certificate').innerHTML='<option value="">Select...</option>'+certs.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(certs.length===1) document.getElementById('ex-certificate').value=certs[0];
+  document.getElementById('ex-certificate').closest('.field').style.display=certs.length?'':'none';
+  /* Heat */
+  const heats=[...new Set(filtered.map(pm=>pm.heatNo).filter(Boolean))].sort();
+  document.getElementById('ex-heat').innerHTML='<option value="">Select...</option>'+heats.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(heats.length===1) document.getElementById('ex-heat').value=heats[0];
+  document.getElementById('ex-heat').closest('.field').style.display=heats.length?'':'none';
+}
+
+function onExStartEndChange(){
+  /* If start is checked, ensure it's the only start */
+  /* No special logic needed — backend handles it */
+}
+
+function addExConnRow(){
+  const container=document.getElementById('ex-conn-rows');
+  const existingMats=(DB.materials||[]).filter(m=>!m.archived);
+  if(!existingMats.length){ return; }
+  const options=existingMats.map(m=>`<option value="${posLetter(m.position)}">${posLetter(m.position)} — ${escapeHtml(m.piece||m.category||'')} (${escapeHtml(m.itemDescription||'')})</option>`).join('');
+  const row=document.createElement('div');
+  row.style.cssText='display:flex;gap:8px;align-items:center;margin-bottom:6px;';
+  row.innerHTML=`<select style="flex:1"><option value="">Select position...</option>${options}</select><button type="button" class="btn btn-ghost btn-sm" onclick="this.parentElement.remove()" style="color:var(--danger)">✕</button>`;
+  container.appendChild(row);
+}
+
+async function saveExistingMaterial(e){
+  e.preventDefault();
+  const err=document.getElementById('ex-err');
+  err.classList.remove('show');
+  const cat=document.getElementById('ex-category').value;
+  if(!cat){ err.textContent='Category is required.'; err.classList.add('show'); return; }
+
+  const matched=_exFilteredProjMats();
+  if(!matched.length){ err.textContent='No matching material found. Please select values.'; err.classList.add('show'); return; }
+  if(matched.length>1){ err.textContent='Multiple matches — please narrow your selection.'; err.classList.add('show'); return; }
+
+  const pmId=matched[0].id;
+  const startOfPlumbing=document.getElementById('ex-start').checked;
+  const endOfPlumbing=document.getElementById('ex-end').checked;
+
+  /* Collect connections */
+  const connSelects=document.querySelectorAll('#ex-conn-rows select');
+  const connections=[...connSelects].map(s=>s.value).filter(Boolean);
+
+  try {
+    await apiPost('/pipeline-materials', {
+      pipelineId: PAGE.pipelineId,
+      projectMaterialId: pmId,
+      startOfPlumbing,
+      endOfPlumbing,
+      connections: connections.length ? connections : undefined
+    });
+    closeModal('modal-existing-material');
+    const [freshMats, freshWelds] = await Promise.all([
+      apiGet('/pipeline-materials?pipelineId='+PAGE.pipelineId),
+      apiGet('/welds?pipelineId='+PAGE.pipelineId)
+    ]);
+    DB.materials=normalizeMaterials(freshMats);
+    DB.welds=normalizeWelds(freshWelds);
+    rebuildRelationships();
+    rerenderPage();
+  } catch(ex){
+    err.textContent='Error: '+ex.message; err.classList.add('show');
+  }
+}

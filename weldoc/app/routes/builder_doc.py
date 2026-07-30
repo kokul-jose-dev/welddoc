@@ -3,7 +3,7 @@ from app.database import db
 from app.models.pipeline import Pipeline
 from app.models.project import Project
 from app.models.client import Client
-from app.models.material import Material
+from app.models.pipeline_material import PipelineMaterial
 from app.models.weld import Weld
 import openpyxl
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
@@ -21,11 +21,34 @@ def generate_builder_doc(pipeline_id):
     pr = Project.query.get(pl.project_id) if pl.project_id else None
     cli = Client.query.get(pr.client_id) if pr and pr.client_id else None
 
-    materials = (
-        Material.query.filter_by(pipeline_id=pipeline_id, archived=False)
-        .order_by(Material.position)
+    raw_materials = (
+        PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, archived=False)
+        .order_by(PipelineMaterial.position)
         .all()
     )
+
+    # Flatten pipeline materials for easy property access
+    class MatView:
+        def __init__(self, plm):
+            pm = plm.project_material
+            gm = pm.global_material if pm else None
+            self.position = plm.position
+            self.start_of_plumbing = plm.start_of_plumbing
+            self.end_of_plumbing = plm.end_of_plumbing
+            self.waz_no = plm.waz_no
+            self.category = gm.category if gm else ""
+            self.item_description = gm.item_description if gm else ""
+            self.dn1 = gm.dn1 if gm else ""
+            self.dn2 = gm.dn2 if gm else ""
+            self.diameter = gm.diameter if gm else ""
+            self.thickness = gm.thickness if gm else ""
+            self.material_code = gm.material_code if gm else ""
+            self.dien_no = gm.dien_no if gm else ""
+            self.surface = gm.surface if gm else ""
+            self.certificate = pm.certificate if pm else ""
+            self.heat_no = pm.heat_no if pm else ""
+
+    materials = [MatView(m) for m in raw_materials]
     welds = (
         Weld.query.filter_by(pipeline_id=pipeline_id, archived=False)
         .order_by(Weld.id)

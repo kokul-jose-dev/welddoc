@@ -2,5 +2,8 @@ from app.models.client import Client
 from app.models.project import Project
 from app.models.pipeline import Pipeline
 from app.models.material import Material
+from app.models.global_material import GlobalMaterial
+from app.models.project_material import ProjectMaterial
+from app.models.pipeline_material import PipelineMaterial
 from app.models.weld import Weld
 from app.models.person import User

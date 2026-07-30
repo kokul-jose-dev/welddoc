@@ -1,6 +1,8 @@
 from flask import Blueprint, request, jsonify
 from app.database import db
 from app.models.project import Project
+from app.models.client import Client
+from app.sharepoint import create_project_folders
 
 projects_bp = Blueprint("projects", __name__)
 
@@ -47,6 +49,10 @@ def create_or_update_project():
             status=data.get("status", "Not started"),
         )
         db.session.add(p)
+        db.session.commit()
+        client = Client.query.get(p.client_id)
+        create_project_folders(client.id, client.name, p.title or p.ist_project_no, p.ist_project_no)
+        return jsonify(_serialize(p)), 200
     db.session.commit()
     return jsonify(_serialize(p)), 200
 

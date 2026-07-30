@@ -1,6 +1,9 @@
 from flask import Blueprint, request, jsonify
 from app.database import db
 from app.models.pipeline import Pipeline
+from app.models.project import Project
+from app.models.client import Client
+from app.sharepoint import create_pipeline_folder
 
 pipelines_bp = Blueprint("pipelines", __name__)
 
@@ -44,6 +47,11 @@ def create_or_update_pipeline():
             status=data.get("status", 0),
         )
         db.session.add(p)
+        db.session.commit()
+        project = Project.query.get(p.project_id)
+        client = Client.query.get(project.client_id)
+        create_pipeline_folder(client.id, client.name, project.title or project.ist_project_no, project.ist_project_no, p.no)
+        return jsonify(_serialize(p)), 200
     db.session.commit()
     return jsonify(_serialize(p)), 200
 

@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from app.database import db
 from app.models.client import Client
+from app.sharepoint import create_client_folder
 
 clients_bp = Blueprint("clients", __name__)
 
@@ -39,6 +40,9 @@ def create_or_update_client():
             remarks=data.get("remarks", ""),
         )
         db.session.add(c)
+        db.session.commit()
+        create_client_folder(c.id, c.name)
+        return jsonify(_serialize(c)), 200
     db.session.commit()
     return jsonify(_serialize(c)), 200
 

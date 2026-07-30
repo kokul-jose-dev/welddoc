@@ -1,9 +1,11 @@
 from flask import Blueprint, redirect, request, session, jsonify, current_app
 import uuid
 import json
+import ssl
 import urllib.request
 import urllib.parse
 import base64
+import certifi
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -74,7 +76,8 @@ def auth_callback():
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
 
     try:
-        with urllib.request.urlopen(req) as resp:
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        with urllib.request.urlopen(req, context=ssl_context) as resp:
             result = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         error_body = e.read().decode()
