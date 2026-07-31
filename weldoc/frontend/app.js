@@ -4052,16 +4052,19 @@ async function _getPickerToken(resource){
 }
 
 async function openFolderPicker(){
+  /* Open window immediately (must be synchronous with user click) */
+  const win=window.open("","FolderPicker","width=1080,height=680");
+  if(!win){ alert('Popup blocked. Please allow popups for this site.'); return; }
+  win.document.title='Loading SharePoint...';
+
   const cfg=await fetch('/api/sharepoint-config').then(r=>r.json());
-  if(!cfg.host){ alert('SharePoint not configured.'); return; }
+  if(!cfg.host){ win.close(); alert('SharePoint not configured.'); return; }
   const baseUrl=`https://${cfg.host}${cfg.sitePath}`;
 
-  /* Get delegated token FIRST (may show login popup) */
   let token;
   try { token=await _getPickerToken('https://'+cfg.host); }
-  catch(e){ alert('Failed to get SharePoint token: '+e.message); return; }
+  catch(e){ win.close(); alert('Failed to get SharePoint token: '+e.message); return; }
 
-  /* NOW open the picker popup (user gesture still in stack) */
   const channelId=crypto.randomUUID();
   const options={
     sdk:"8.0",
@@ -4073,8 +4076,6 @@ async function openFolderPicker(){
     commands:{ pick:{ action:"select" }, createFolder:{ enabled:true } }
   };
 
-  const win=window.open("","FolderPicker","width=1080,height=680");
-  if(!win){ alert('Popup blocked. Please allow popups for this site.'); return; }
   const queryString=new URLSearchParams({ filePicker:JSON.stringify(options), locale:'en-us' });
   const url=baseUrl+`/_layouts/15/FilePicker.aspx?${queryString}`;
   const form=win.document.createElement("form");
