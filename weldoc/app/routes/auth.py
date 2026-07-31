@@ -48,6 +48,10 @@ def login():
 
 @auth_bp.route("/auth/callback", methods=["GET", "POST"])
 def auth_callback():
+    # Already logged in (e.g. browser refresh on callback URL)
+    if "user" in session:
+        return redirect("/home.html")
+
     params = request.form if request.method == "POST" else request.args
 
     if params.get("state") != session.get("state"):
