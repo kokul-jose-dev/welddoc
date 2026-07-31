@@ -4033,7 +4033,7 @@ async function _getMsalInstance(){
   if(_msalInstance) return _msalInstance;
   const cfg=await fetch('/api/sharepoint-config').then(r=>r.json());
   _msalInstance=new msal.PublicClientApplication({
-    auth:{ clientId:cfg.clientId, authority:`https://login.microsoftonline.com/${cfg.tenantId}`, redirectUri:window.location.origin },
+    auth:{ clientId:cfg.clientId, authority:`https://login.microsoftonline.com/${cfg.tenantId}`, redirectUri:window.location.origin+'/' },
     cache:{ cacheLocation:'sessionStorage' }
   });
   await _msalInstance.initialize();
