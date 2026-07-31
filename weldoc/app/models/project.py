@@ -13,5 +13,8 @@ class Project(db.Model):
     description = db.Column(db.Text)
     status = db.Column(db.String(50), default="Not started")
     archived = db.Column(db.Boolean, default=False)
+    sharepoint_drive_id = db.Column(db.String(500))
+    sharepoint_folder_id = db.Column(db.String(500))
+    sharepoint_folder_url = db.Column(db.String(1000))
 
     pipelines = db.relationship("Pipeline", backref="project", lazy=True)

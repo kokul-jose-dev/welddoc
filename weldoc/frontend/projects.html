@@ -1,5 +1,6 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WeldDoc — Projects</title><link rel="stylesheet" href="styles.css"></head><body>
+<title>WeldDoc — Projects</title><link rel="stylesheet" href="styles.css">
+<script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script></head><body>
 <div id="chrome"></div>
 <main class="content">
   <div class="page-header"><div><h1>Projects</h1><div class="page-subtitle">A body of work for a client — each holds many pipelines.</div></div>
@@ -12,7 +13,7 @@
     <button class="filter-clear" onclick="clearProjectFilters()">Clear filters</button>
     <a class="btn btn-ghost btn-sm" href="archive.html?tab=projects" style="margin-left:auto;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> Archive</a>
   </div>
-  <div class="table-card"><table class="table-wide"><thead><tr><th>IST Project&nbsp;No.</th><th>Project title</th><th>Location</th><th>Client name</th><th>Order&nbsp;No.</th><th>Description</th><th>Status</th><th></th></tr></thead><tbody id="projects-tbody"></tbody></table></div>
+  <div class="table-card"><table class="table-wide"><thead><tr><th>IST Project&nbsp;No.</th><th>Project title</th><th>Location</th><th>Client name</th><th>Order&nbsp;No.</th><th>Description</th><th>SP Folder</th><th>Status</th><th></th></tr></thead><tbody id="projects-tbody"></tbody></table></div>
 </main>
 <div id="modal-root"></div>
 <script src="app.js"></script><script>initProjectsPage();</script>

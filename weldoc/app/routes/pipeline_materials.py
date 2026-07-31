@@ -141,8 +141,7 @@ def edit_pipeline_material(pm_id):
 def upload_waz_for_pipeline_material(pm_id):
     """Upload WAZ document — saves to the project material."""
     from app.models.project import Project
-    from app.models.client import Client
-    from app.sharepoint import upload_waz_document
+    from app.sharepoint import upload_waz_to_project_folder
 
     m = PipelineMaterial.query.get_or_404(pm_id)
     pm = m.project_material
@@ -154,22 +153,21 @@ def upload_waz_for_pipeline_material(pm_id):
         return jsonify({"error": "Empty filename"}), 400
 
     project = Project.query.get(pm.project_id)
-    client = Client.query.get(project.client_id)
-    project_name = project.title or project.ist_project_no or str(project.id)
+    if not project.sharepoint_drive_id or not project.sharepoint_folder_id:
+        return jsonify({"error": "No SharePoint folder configured for this project."}), 400
 
     file_content = file.read()
     content_type = file.content_type or "application/pdf"
 
-    url = upload_waz_document(
-        client.id, client.name,
-        project_name, project.ist_project_no,
+    url = upload_waz_to_project_folder(
+        project.sharepoint_drive_id,
+        project.sharepoint_folder_id,
         pm.heat_no or "unknown", pm.certificate or "unknown",
         file_content, content_type
     )
 
     if url:
         pm.waz_pdf_url = url
-        # Assign WAZ number if not yet assigned
         if not m.waz_no and pm.certificate and pm.heat_no:
             m.waz_no = _assign_waz_no(m.pipeline_id, m.project_material_id)
         db.session.commit()

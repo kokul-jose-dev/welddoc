@@ -4,7 +4,7 @@ from app.models.project_material import ProjectMaterial
 from app.models.global_material import GlobalMaterial
 from app.models.project import Project
 from app.models.client import Client
-from app.sharepoint import upload_waz_document
+from app.sharepoint import upload_waz_to_project_folder
 
 project_materials_bp = Blueprint("project_materials", __name__)
 
@@ -72,10 +72,10 @@ def upload_waz(pm_id):
     if not file.filename:
         return jsonify({"error": "Empty filename"}), 400
 
-    # Get hierarchy info
+    # Get project's SharePoint folder
     project = Project.query.get(m.project_id)
-    client = Client.query.get(project.client_id)
-    project_name = project.title or project.ist_project_no or str(project.id)
+    if not project.sharepoint_drive_id or not project.sharepoint_folder_id:
+        return jsonify({"error": "No SharePoint folder configured for this project. Please set it in Project settings."}), 400
 
     heat_no = m.heat_no or "unknown"
     certificate_no = m.certificate or "unknown"
@@ -83,9 +83,9 @@ def upload_waz(pm_id):
     file_content = file.read()
     content_type = file.content_type or "application/pdf"
 
-    url = upload_waz_document(
-        client.id, client.name,
-        project_name, project.ist_project_no,
+    url = upload_waz_to_project_folder(
+        project.sharepoint_drive_id,
+        project.sharepoint_folder_id,
         heat_no, certificate_no,
         file_content, content_type
     )
@@ -101,32 +101,36 @@ def upload_waz(pm_id):
 @project_materials_bp.route("/<int:pm_id>/delete-waz", methods=["POST"])
 def delete_waz(pm_id):
     """Delete WAZ document from SharePoint and clear the URL."""
-    from app.sharepoint import _get_site_id, _get_drive_id, _get_app_token, _ssl_context, _sanitize_name, GRAPH_BASE
+    from app.sharepoint import _get_app_token, _ssl_context, _sanitize_name, GRAPH_BASE
     import urllib.parse
+    import json
 
     m = ProjectMaterial.query.get_or_404(pm_id)
 
-    # Try to delete from SharePoint
+    # Try to delete from SharePoint using the project's saved folder
     if m.waz_pdf_url:
         try:
             project = Project.query.get(m.project_id)
-            client_obj = Client.query.get(project.client_id)
-            site_id = _get_site_id()
-            drive_id = _get_drive_id(site_id)
-            base_path = current_app.config.get("SHAREPOINT_BASE_FOLDER", "weldoc")
-            client_folder = _sanitize_name(f"{client_obj.name}_{client_obj.id}")
-            project_name = project.title or project.ist_project_no or str(project.id)
-            project_folder = _sanitize_name(f"{project_name}_{project.ist_project_no}")
-            file_name = _sanitize_name(f"{m.heat_no or 'unknown'}_{m.certificate or 'unknown'}") + ".pdf"
-            file_path = f"{base_path}/{client_folder}/{project_folder}/Materials/{file_name}"
-
-            token = _get_app_token()
-            encoded_path = urllib.parse.quote(file_path, safe="/")
-            url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{encoded_path}"
-            import urllib.request
-            req = urllib.request.Request(url, method="DELETE")
-            req.add_header("Authorization", f"Bearer {token}")
-            urllib.request.urlopen(req, context=_ssl_context())
+            if project.sharepoint_drive_id:
+                token = _get_app_token()
+                import urllib.request
+                import ssl, certifi
+                ctx = ssl.create_default_context(cafile=certifi.where())
+                file_name = _sanitize_name(f"{m.heat_no or 'unknown'}_{m.certificate or 'unknown'}") + ".pdf"
+                # Get file by path: /WAZ/filename.pdf relative to the project folder
+                file_path = urllib.parse.quote(f"WAZ/{file_name}", safe="/")
+                item_url = f"{GRAPH_BASE}/drives/{project.sharepoint_drive_id}/items/{project.sharepoint_folder_id}:/{file_path}"
+                req = urllib.request.Request(item_url)
+                req.add_header("Authorization", f"Bearer {token}")
+                with urllib.request.urlopen(req, context=ctx) as resp:
+                    file_item = json.loads(resp.read())
+                    file_id = file_item["id"]
+                # Delete by item ID
+                del_url = f"{GRAPH_BASE}/drives/{project.sharepoint_drive_id}/items/{file_id}"
+                req2 = urllib.request.Request(del_url, method="DELETE")
+                req2.add_header("Authorization", f"Bearer {token}")
+                urllib.request.urlopen(req2, context=ctx)
+                current_app.logger.info(f"SharePoint: Deleted WAZ document '{file_name}'")
         except Exception as e:
             current_app.logger.error(f"SharePoint delete failed: {e}")
 

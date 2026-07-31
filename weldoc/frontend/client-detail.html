@@ -1,5 +1,6 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WeldDoc — Client detail</title><link rel="stylesheet" href="styles.css"></head><body>
+<title>WeldDoc — Client detail</title><link rel="stylesheet" href="styles.css">
+<script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script></head><body>
 <div id="chrome"></div>
 <main class="content">
   <div class="context-bar" id="client-context"></div>
@@ -10,7 +11,7 @@
   <div class="info-panel"><div class="info-grid" id="client-info"></div></div>
   <div class="stat-grid" id="client-detail-stats"></div>
   <div class="detail-toolbar"><h2>Projects</h2><span style="flex:1;"></span><a class="btn btn-ghost btn-sm" href="archive.html?tab=projects"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> Archive</a><button class="btn btn-primary btn-sm" onclick="openProjectModal()">+ New project</button></div>
-  <div class="table-card"><table class="table-wide"><thead><tr><th>IST Project&nbsp;No.</th><th>Project title</th><th>Location</th><th>Order&nbsp;No.</th><th>Description</th><th>Status</th><th></th></tr></thead><tbody id="client-projects-tbody"></tbody></table></div>
+  <div class="table-card"><table class="table-wide"><thead><tr><th>IST Project&nbsp;No.</th><th>Project title</th><th>Location</th><th>Order&nbsp;No.</th><th>Description</th><th>SP Folder</th><th>Status</th><th></th></tr></thead><tbody id="client-projects-tbody"></tbody></table></div>
 </main>
 <div id="modal-root"></div>
 <script src="app.js"></script><script>initClientDetailPage();</script>
