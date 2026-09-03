@@ -414,8 +414,11 @@ function docCell(pl){
     iso = `<button class="btn btn-primary btn-sm" onclick="uploadIsoDoc(${pl.id})" title="${t('upload_iso','Upload ISO document')}">+</button>`;
   }
   let builder;
-  if(pl.docBuilder) builder=`<a class="doc-chip doc-weld" href="${escapeHtml(pl.docBuilder)}" target="_blank" rel="noopener">${t('doc_welder','Welder')}</a>`;
-  else builder=slot(t('doc_welder','Welder document'));
+  if(pl.status >= 3 && pl.docBuilder){
+    builder = `<a class="doc-chip doc-weld" href="${escapeHtml(pl.docBuilder)}" target="_blank" rel="noopener" title="${t('doc_welder','Welder document (SharePoint)')}">${t('doc_welder','Welder')}</a>`;
+  } else {
+    builder = slot(t('doc_welder','Welder document'));
+  }
   const fin = pl.docFinal
     ? `<a class="doc-chip doc-final" href="${escapeHtml(pl.docFinal)}" target="_blank" rel="noopener" title="${t('doc_final_title','Final documentation package (SharePoint)')}">${t('doc_final','Final')}</a>`
     : slot(t('doc_final_pending','Final document available after export'));
@@ -809,6 +812,7 @@ function mountModals(){
       <label class="field"><span class="lbl" data-i18n="project">Project <span class="req">*</span></span><select id="input-pl-project" onchange="onPipelineProjectChange()" required></select></label>
       <label class="field"><span class="lbl" data-i18n="order_no_from_project">Order number (from project)</span><input type="text" id="input-pl-order" disabled></label>
       <label class="field"><span class="lbl" data-i18n="plant">Plant</span><input type="text" id="input-pl-plant"></label>
+      <label class="field"><span class="lbl" data-i18n="status">Status</span><select id="input-pl-status"></select></label>
       <div class="modal-note" data-i18n="order_inherited_note">Order number is inherited from the project.</div>
     </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-pipeline')" data-i18n="cancel">Cancel</button><button type="submit" class="btn btn-primary" data-i18n="save_pipeline">Save pipeline</button></div></form>
   </div></div>
@@ -1143,10 +1147,9 @@ function attachFormHandlers(){
     const submitBtn=e.target.querySelector('[type="submit"]');
     if(submitBtn && submitBtn.disabled) return;
     setButtonLoading(submitBtn, true, t('saving', 'Saving…'));
-    const existingPl = editingPipelineId !== null ? getPipeline(editingPipelineId) : null;
-    const currentStatus = existingPl ? existingPl.status : 0;
+    const statusVal = Number(val('input-pl-status')) || 0;
     const projectId=Number(val('input-pl-project')), no=val('input-pl-no');
-    const data={ no, projectId, plant:val('input-pl-plant'), status: currentStatus };
+    const data={ no, projectId, plant:val('input-pl-plant'), status: statusVal };
     if(editingPipelineId!==null) data.id=editingPipelineId;
     try {
       const saved = await apiPost('/pipelines', data);
@@ -1154,7 +1157,7 @@ function attachFormHandlers(){
       else DB.pipelines.push(saved);
       saveDB(); invalidateCache('counts'); closeModal('modal-pipeline'); rerenderPage();
     } catch(e){ console.error('Save pipeline failed:', e);
-      const fallback={ no, projectId, drawingNo:'', plant:val('input-pl-plant'), welderIds:[], inspectorIds:[], procNo:'', procName:'', status: currentStatus };
+      const fallback={ no, projectId, drawingNo:'', plant:val('input-pl-plant'), welderIds:[], inspectorIds:[], procNo:'', procName:'', status: statusVal };
       if(editingPipelineId!==null) Object.assign(getPipeline(editingPipelineId),fallback); else DB.pipelines.push({id:nextId('pipeline'),...fallback});
       saveDB(); invalidateCache('counts'); closeModal('modal-pipeline'); rerenderPage();
     } finally {
@@ -1441,8 +1444,13 @@ function openPipelineModal(id=null){
   editingPipelineId=id; document.getElementById('pipeline-form').reset();
   const projSel=document.getElementById('input-pl-project');
   projSel.innerHTML=projects().map(p=>`<option value="${p.id}">${escapeHtml(p.title)} — ${escapeHtml(getClientName(p.clientId))}</option>`).join('');
+  const statusSel=document.getElementById('input-pl-status');
+  if(statusSel){
+    statusSel.innerHTML=_RAW_PIPE_STATUS.map((s, idx)=>`<option value="${idx}">${typeof t==='function'?t(`status_${idx}`, s):s}</option>`).join('');
+  }
   if(id!==null){ const pl=getPipeline(id); document.getElementById('modal-pipeline-title').textContent=t('edit_pipeline','Edit pipeline');
     setV('input-pl-no',pl.no); setV('input-pl-project',String(pl.projectId)); setV('input-pl-plant',pl.plant);
+    setV('input-pl-status', String(pl.status !== undefined && pl.status !== null ? pl.status : 0));
     projSel.disabled=true; projSel.style.display='none';
     const pr=getProject(pl.projectId);
     let readOnly=document.getElementById('input-pl-project-readonly');
@@ -2907,14 +2915,24 @@ function renderCombinedView(){
     if(!branchMap[bl.from.id]) branchMap[bl.from.id]=[];
     branchMap[bl.from.id].push(idx);
   });
+  /* Walk any additional segments/unvisited chains */
+  const extraLines=[];
+  mats.forEach(m=>{
+    if(!visited.has(m.id) && (m.piece||'').toLowerCase()!=='welding wire'){
+      const eLine=walkLine(m.id);
+      if(eLine.length) extraLines.push(eLine);
+    }
+  });
+
   let allRows=[];
   mainLine.forEach(item=>allRows.push(item));
   branchLines.forEach(bl=>{
     if(bl.junctionWeld) allRows.push({type:'weld', data:bl.junctionWeld});
     bl.line.forEach(item=>allRows.push(item));
   });
-  const unvisited=mats.filter(m=>!visited.has(m.id)&&(m.piece||'').toLowerCase()!=='welding wire');
-  unvisited.forEach(m=>allRows.push({type:'material', data:m}));
+  extraLines.forEach(el=>{
+    el.forEach(item=>allRows.push(item));
+  });
 
   /* assign row ids for scroll targets — use the junction weld id */
   let branchWeldIds={}; /* branchIdx -> junction weld id */
@@ -3974,8 +3992,8 @@ async function initProjectDetailPage(){
   try {
     const data = await apiGet('/page/project-detail/'+PAGE.projectId);
     DB.clients=data.client?[data.client]:[];
-    DB.projects=normalizeProjects(data.projects||(data.project?[data.project]:[]));
     DB.pipelines=data.pipelines||[];
+    DB.projects=normalizeProjects(data.projects||(data.project?[data.project]:[]));
     DB.globalMaterials=data.globalMaterials||[];
     DB.projectMaterials=data.projectMaterials||[];
   } catch(e){ console.error('API error:', e); }
@@ -3987,12 +4005,13 @@ async function initProjectDetailPage(){
 function switchProject(id){ if(id&&Number(id)!==PAGE.projectId) location.href='project-detail.html?id='+id; }
 function renderProjectDetail(){
   const pr=getProject(PAGE.projectId); if(!pr) return; const cli=getClient(pr.clientId);
+  pr.status=computeProjectStatus(pr);
   document.getElementById('project-context').innerHTML=`${cli?`<a href="projects.html?client=${cli.id}">${escapeHtml(cli.name)}</a>`:''}<span class="sep">›</span><span>${escapeHtml(pr.title)}</span>`;
   const siblings=cli?clientProjects(cli.id):[pr];
   document.getElementById('project-switch').innerHTML=siblings.map(s=>`<option value="${s.id}" ${s.id===pr.id?'selected':''}>${escapeHtml(s.title)}</option>`).join('');
   document.getElementById('project-subtitle').textContent=`${cli?cli.name:'—'}${pr.location?' · '+pr.location:''}${siblings.length>1?` · ${siblings.length} ${t('projects_for_client','projects for this client')}`:''}`;
   const item=(k,v,mono)=>`<div class="info-item"><div class="k">${k}</div><div class="v ${mono?'mono':''}">${v}</div></div>`;
-  document.getElementById('project-info').innerHTML=item(t('client','Client'),cli?escapeHtml(cli.name):'—')+item(t('location','Location'),escapeHtml(pr.location)||'—')+item(t('order_number','Order number'),pr.order?escapeHtml(pr.order):'—',true)+item(t('th_ist_project_no','IST Project No.'),escapeHtml(pr.istProjectNo)||'—',true)+item(t('status','Status'),`<span class="status-badge status-${pr.status}">${STATUS_LABELS[pr.status]}</span>`)+item(t('description','Description'),escapeHtml(pr.description)||'—')+(pr.sharepointFolderUrl?item(t('sharepoint_folder','SharePoint folder'),`<a href="${escapeHtml(pr.sharepointFolderUrl)}" target="_blank" class="link">${t('view_folder','View folder')}</a>`):'');
+  document.getElementById('project-info').innerHTML=item(t('client','Client'),cli?escapeHtml(cli.name):'—')+item(t('location','Location'),escapeHtml(pr.location)||'—')+item(t('order_number','Order number'),pr.order?escapeHtml(pr.order):'—',true)+item(t('th_ist_project_no','IST Project No.'),escapeHtml(pr.istProjectNo)||'—',true)+item(t('status','Status'),`<span class="status-badge status-${pr.status}">${STATUS_LABELS[pr.status]||pr.status}</span>`)+item(t('description','Description'),escapeHtml(pr.description)||'—')+(pr.sharepointFolderUrl?item(t('sharepoint_folder','SharePoint folder'),`<a href="${escapeHtml(pr.sharepointFolderUrl)}" target="_blank" class="link">${t('view_folder','View folder')}</a>`):'');
   const pls=projectPipelines(pr.id); const by=s=>pls.filter(p=>p.status===s).length;
   document.getElementById('project-stats').innerHTML=tile(pls.length,t('total_pipelines','Pipelines'),'')+tile(pls.filter(p=>p.status<5).length,t('in_progress','In progress'),'t-copper')+tile(by(5),t('exported','Exported'),'t-success');
   document.getElementById('project-toolbar').innerHTML=`<h2>${t('pipelines','Pipelines')}</h2><div style="display:flex;gap:8px;"><a class="btn btn-ghost btn-sm" href="archive.html?tab=pipelines"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> ${t('archive','Archive')}</a><button class="btn btn-primary btn-sm" onclick="openPipelineModal()">${t('new_pipeline','+ New pipeline')}</button></div>`;

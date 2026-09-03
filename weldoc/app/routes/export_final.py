@@ -140,7 +140,7 @@ def export_final(pipeline_id):
         walk(start_mat["position"])
     for m in materials:
         if m["position"] not in visited:
-            combined.append(("mat", m))
+            walk(m["position"])
 
     # --- Generate builder table PDF with row position tracking ---
     table_pdf, row_positions = _generate_table_pdf(
@@ -386,7 +386,7 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
         walk(start_mat["position"])
     for m in materials:
         if m["position"] not in visited:
-            combined.append(("mat", m))
+            walk(m["position"])
 
     # Build rows + track metadata
     mat_hdr = [Paragraph("Teil Nr.<br/>Part Nr.", s7bc), Paragraph("Beschreibung<br/>Description", s7bc), "", "",

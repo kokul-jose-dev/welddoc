@@ -116,10 +116,10 @@ def generate_builder_doc(pipeline_id):
     if start_mat:
         walk(start_mat.position)
 
-    # Add any unvisited materials
+    # Walk any unvisited material chains/segments
     for m in materials:
         if m.position not in visited:
-            combined_rows.append(("material", m, ""))
+            walk(m.position)
 
     # === Generate Excel (A-P = 16 columns) ===
     wb = openpyxl.Workbook()
