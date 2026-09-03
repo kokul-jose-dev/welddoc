@@ -4,13 +4,13 @@
 <main class="content" id="material-body">
   <div class="context-bar" id="material-context"></div>
   <div class="page-header"><div><h1 id="material-title">Material</h1><div class="page-subtitle" id="material-subtitle"></div></div>
-    <button class="btn btn-ghost" id="material-edit-btn">Edit material</button></div>
+    <button class="btn btn-ghost" id="material-edit-btn" data-i18n="edit_material">Edit material</button></div>
   <div class="info-panel"><div class="info-grid" id="material-info"></div></div>
-  <div class="section-label">Connections</div>
+  <div class="section-label" data-i18n="connections">Connections</div>
   <div class="chip-links" id="material-connections"></div>
-  <div class="section-label">Welds on this material</div>
-  <div class="table-card"><table class="table-wide"><thead><tr><th>Weld No.</th><th>Between</th><th>Type</th><th>Proc.</th><th>Welding Wire</th><th>Welder</th><th>Inspector</th><th>Date</th><th>Endo. Video</th><th>Endo. Image</th><th>Remarks</th><th></th></tr></thead><tbody id="material-welds-tbody"></tbody></table></div>
+  <div class="section-label" data-i18n="welds_on_this_material">Welds on this material</div>
+  <div class="table-card"><table class="table-wide"><thead><tr><th data-i18n="th_weld_no">Weld No.</th><th data-i18n="th_between">Between</th><th data-i18n="th_type">Type</th><th data-i18n="th_proc">Proc.</th><th data-i18n="th_welding_wire">Welding Wire</th><th data-i18n="th_welder">Welder</th><th data-i18n="th_inspector">Inspector</th><th data-i18n="th_date">Date</th><th data-i18n="th_endo_video">Endo. Video</th><th data-i18n="th_endo_image">Endo. Image</th><th data-i18n="th_remarks">Remarks</th><th></th></tr></thead><tbody id="material-welds-tbody"></tbody></table></div>
 </main>
 <div id="modal-root"></div>
-<script src="app.js"></script><script>initMaterialDetailPage();</script>
+<script src="i18n.js"></script><script src="app.js"></script><script>initMaterialDetailPage();</script>
 </body></html>

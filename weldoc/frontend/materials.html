@@ -2,15 +2,15 @@
 <title>WeldDoc — Materials</title><link rel="stylesheet" href="styles.css"></head><body>
 <div id="chrome"></div>
 <main class="content">
-  <div class="page-header"><div><h1>Materials</h1><div class="page-subtitle">Every material across all pipelines — click a column header to filter.</div></div></div>
+  <div class="page-header"><div><h1 data-i18n="materials_title">Materials</h1><div class="page-subtitle" data-i18n="materials_sub">Every material across all pipelines — click a column header to filter.</div></div></div>
   <div class="stat-grid" id="materials-stats"></div>
   <div class="filter-bar">
     <select id="mat-filter-client" onchange="onMaterialsFilterChange()"></select>
     <select id="mat-filter-project" onchange="onMaterialsFilterChange()"></select>
-    <button class="filter-clear" onclick="clearMaterialsFilters()">Clear all filters</button>
+    <button class="filter-clear" onclick="clearMaterialsFilters()" data-i18n="clear_all_filters">Clear all filters</button>
   </div>
   <div class="table-card"><table class="table-wide"><thead><tr id="mat-thead"></tr></thead><tbody id="materials-page-tbody"></tbody></table></div>
 </main>
 <div id="modal-root"></div>
-<script src="app.js"></script><script>initMaterialsPage();</script>
+<script src="i18n.js"></script><script src="app.js"></script><script>initMaterialsPage();</script>
 </body></html>

@@ -3,6 +3,10 @@ from app.database import db
 
 class ProjectMaterial(db.Model):
     __tablename__ = "weldoc_project_materials"
+    __table_args__ = (
+        db.Index("ix_projmat_project_archived", "project_id", "archived"),
+        db.Index("ix_projmat_global", "global_material_id"),
+    )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     project_id = db.Column(db.Integer, db.ForeignKey("weldoc_projects.id"), nullable=False)

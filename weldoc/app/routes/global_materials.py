@@ -34,14 +34,11 @@ def create_or_find_global_material():
         diameter=data.get("diameter", ""),
         thickness=data.get("thickness", ""),
         item_description=data.get("itemDescription", ""),
+        surface=data.get("surface", ""),
         archived=False,
     ).first()
 
     if existing:
-        # Update surface if provided
-        if data.get("surface"):
-            existing.surface = data["surface"]
-            db.session.commit()
         return jsonify(_serialize(existing)), 200
 
     # Create new
@@ -58,6 +55,7 @@ def create_or_find_global_material():
         item_description=data.get("itemDescription", ""),
         material_code=data.get("materialCode", ""),
         dien_no=data.get("dienNo", ""),
+        surface=data.get("surface", ""),
     )
     db.session.add(m)
     db.session.commit()

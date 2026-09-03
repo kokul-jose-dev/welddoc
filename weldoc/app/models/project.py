@@ -3,6 +3,9 @@ from app.database import db
 
 class Project(db.Model):
     __tablename__ = "weldoc_projects"
+    __table_args__ = (
+        db.Index("ix_projects_client_archived", "client_id", "archived"),
+    )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     client_id = db.Column(db.Integer, db.ForeignKey("weldoc_clients.id"), nullable=False)

@@ -30,6 +30,15 @@ def create_or_update_client():
         c.remarks = data.get("remarks", c.remarks)
         if "archived" in data:
             c.archived = data["archived"]
+            # Cascade archive / restore to all projects and their pipelines
+            from app.models.project import Project
+            from app.models.pipeline import Pipeline
+            projects = Project.query.filter_by(client_id=c.id).all()
+            for p in projects:
+                p.archived = c.archived
+                Pipeline.query.filter_by(project_id=p.id).update(
+                    {"archived": c.archived}, synchronize_session=False
+                )
     else:
         c = Client(
             name=data["name"],

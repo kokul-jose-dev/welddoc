@@ -2,12 +2,12 @@
 <title>WeldDoc — Welders</title><link rel="stylesheet" href="styles.css"></head><body>
 <div id="chrome"></div>
 <main class="content">
-  <div class="page-header"><div><h1>Welders &amp; Certificates</h1><div class="page-subtitle">Certificate register — one row per certificate. Click a name for the full profile.</div></div>
-    <button class="btn btn-primary" onclick="openWelderModal()">+ New welder</button></div>
+  <div class="page-header"><div><h1 data-i18n="welders_title">Welders &amp; Certificates</h1><div class="page-subtitle" data-i18n="welders_sub">Certificate register — one row per certificate. Click a name for the full profile.</div></div>
+    <button class="btn btn-primary" onclick="openWelderModal()" data-i18n="new_welder">+ New welder</button></div>
   <div class="stat-grid" id="welders-stats"></div>
   <div class="subtab-nav">
-    <button class="subtab active" id="wtab-active" onclick="switchWelderTab('active')">Active certificates</button>
-    <button class="subtab" id="wtab-archived" onclick="switchWelderTab('archived')">Archived certificates</button>
+    <button class="subtab active" id="wtab-active" onclick="switchWelderTab('active')" data-i18n="active_certificates">Active certificates</button>
+    <button class="subtab" id="wtab-archived" onclick="switchWelderTab('archived')" data-i18n="archived_certificates">Archived certificates</button>
   </div>
   <div id="welders-active-section">
     <div class="table-card"><table class="table-wide"><thead><tr id="welders-thead"></tr></thead><tbody id="welders-tbody"></tbody></table></div>
@@ -17,5 +17,5 @@
   </div>
 </main>
 <div id="modal-root"></div>
-<script src="app.js"></script><script>initWeldersPage();</script>
+<script src="i18n.js"></script><script src="app.js"></script><script>initWeldersPage();</script>
 </body></html>

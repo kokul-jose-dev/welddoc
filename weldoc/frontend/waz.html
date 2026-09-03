@@ -2,15 +2,15 @@
 <title>WeldDoc — WAZ Documents</title><link rel="stylesheet" href="styles.css"></head><body>
 <div id="chrome"></div>
 <main class="content">
-  <div class="page-header"><div><h1>WAZ Documents</h1><div class="page-subtitle">Material acceptance (WAZ) documents across all clients and projects.</div></div></div>
+  <div class="page-header"><div><h1 data-i18n="waz_title">WAZ Documents</h1><div class="page-subtitle" data-i18n="waz_sub">Material acceptance (WAZ) documents across all clients and projects.</div></div></div>
   <div class="stat-grid" id="waz-stats"></div>
   <div class="filter-bar">
     <select id="waz-filter-client" onchange="onWazFilterChange()"></select>
     <select id="waz-filter-project" onchange="onWazFilterChange()"></select>
-    <button class="filter-clear" onclick="clearWazFilters()">Clear filters</button>
+    <button class="filter-clear" onclick="clearWazFilters()" data-i18n="clear_filters">Clear filters</button>
   </div>
-  <div class="table-card"><table class="table-wide"><thead><tr><th>WAZ&nbsp;No.</th><th>Materials</th><th>Certificate</th><th>Heat&nbsp;No.</th><th>Project</th><th>PDF</th></tr></thead><tbody id="waz-tbody"></tbody></table></div>
+  <div class="table-card"><table class="table-wide"><thead><tr><th data-i18n="th_waz_no">WAZ&nbsp;No.</th><th data-i18n="th_materials">Materials</th><th data-i18n="th_certificate">Certificate</th><th data-i18n="th_heat_no">Heat&nbsp;No.</th><th data-i18n="th_project">Project</th><th data-i18n="th_pdf">PDF</th></tr></thead><tbody id="waz-tbody"></tbody></table></div>
 </main>
 <div id="modal-root"></div>
-<script src="app.js"></script><script>initWazPage();</script>
+<script src="i18n.js"></script><script src="app.js"></script><script>initWazPage();</script>
 </body></html>

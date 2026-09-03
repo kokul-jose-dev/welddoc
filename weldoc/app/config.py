@@ -13,6 +13,8 @@ class Config:
     SQLALCHEMY_ENGINE_OPTIONS = {
         "pool_pre_ping": True,
         "pool_recycle": 300,
+        "pool_size": 10,
+        "max_overflow": 20,
     }
     SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "change-me-in-production")
     AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")

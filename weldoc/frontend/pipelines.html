@@ -2,8 +2,8 @@
 <title>WeldDoc — Pipelines</title><link rel="stylesheet" href="styles.css"></head><body>
 <div id="chrome"></div>
 <main class="content">
-  <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;"><div><h1>Pipelines</h1><div class="page-subtitle">The central working object — click a row to open its detail view.</div></div>
-    <button class="btn btn-primary" onclick="openPipelineModal()">+ New pipeline</button></div>
+  <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;"><div><h1 data-i18n="pipelines">Pipelines</h1><div class="page-subtitle" data-i18n="pipelines_sub">The central working object — click a row to open its detail view.</div></div>
+    <button class="btn btn-primary" onclick="openPipelineModal()" data-i18n="new_pipeline">+ New pipeline</button></div>
   <div class="stat-grid" id="pipelines-stats"></div>
   <div class="filter-chip-bar" id="pipeline-filter-bar"></div>
   <div class="filter-bar">
@@ -11,14 +11,14 @@
     <select id="pf-project" onchange="onPipeFilterChange()"></select>
     <select id="pf-status" onchange="onPipeFilterChange()"></select>
     <select id="pf-plant" onchange="onPipeFilterChange()"></select>
-    <button class="filter-clear" onclick="clearPipeFilters()">Clear filters</button>
-    <a class="btn btn-ghost btn-sm" style="margin-left:auto;" href="archive.html?tab=pipelines"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> Archive</a>
+    <button class="filter-clear" onclick="clearPipeFilters()" data-i18n="clear_filters">Clear filters</button>
+    <a class="btn btn-ghost btn-sm" style="margin-left:auto;" href="archive.html?tab=pipelines"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> <span data-i18n="archive">Archive</span></a>
   </div>
-  <div class="filter-input-wrap"><input type="text" id="pf-search" placeholder="Search by pipeline number…" oninput="onPipeSearchInput(this.value)"></div>
+  <div class="filter-input-wrap"><input type="text" id="pf-search" placeholder="Search by pipeline number…" data-i18n-placeholder="search_pipeline_ph" oninput="onPipeSearchInput(this.value)"></div>
   <div class="table-card"><table class="table-xwide"><thead><tr>
-    <th>Pipeline No.</th><th>Project</th><th>Client</th><th>Plant</th><th>Status</th><th>Documents</th><th></th>
+    <th data-i18n="th_pipeline_no">Pipeline No.</th><th data-i18n="th_project">Project</th><th data-i18n="th_client">Client</th><th data-i18n="th_plant">Plant</th><th data-i18n="th_status">Status</th><th data-i18n="th_documents">Documents</th><th></th>
   </tr></thead><tbody id="pipelines-tbody"></tbody></table></div>
 </main>
 <div id="modal-root"></div>
-<script src="app.js"></script><script>initPipelinesPage();</script>
+<script src="i18n.js"></script><script src="app.js"></script><script>initPipelinesPage();</script>
 </body></html>

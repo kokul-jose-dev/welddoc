@@ -1,0 +1,7 @@
+[    2114ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5000/api/bulk?include=clients%2Cprojects%2Cpipelines%2CpipelineMaterials%2Cwelds:0
+[    2114ms] [ERROR] API error: TypeError: Failed to fetch
+    at apiGet (http://localhost:8000/app.js:12:44)
+    at apiBulk (http://localhost:8000/app.js:14:316)
+    at initHomePage (http://localhost:8000/app.js:3039:24)
+    at http://localhost:8000/home.html:11:70 @ http://localhost:8000/app.js:3041
+[    2391ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5000/api/bulk?include=clients%2Cprojects%2Cpipelines%2Cwelders%2CglobalMaterials:0

@@ -89,9 +89,9 @@ tbody tr.clickable-row{cursor:pointer;}
 .col-name{font-weight:600;} .col-mono{font-family:var(--mono);font-size:0.82rem;color:var(--text);}
 .col-remarks{color:var(--text-muted);max-width:240px;} .col-actions{text-align:right;white-space:nowrap;}
 .muted{color:#A9B4BE;font-family:var(--sans);}
-.empty-row td{text-align:center;padding:44px 20px;color:var(--text-muted);}
-.row-error td{background:rgba(220,38,38,0.08);border-top:1px solid rgba(220,38,38,0.25);border-bottom:1px solid rgba(220,38,38,0.25);}
-.row-error td:first-child{border-left:3px solid #dc2626;}
+.row-error td{background:#FDF2F2 !important;border-top:1px solid #FCA5A5 !important;border-bottom:1px solid #FCA5A5 !important;}
+.row-error td:first-child{border-left:3px solid #DC2626 !important;}
+.row-error:hover td{background:#FDE8E8 !important;}
 .btn-edit-inline{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.85rem;padding:2px 4px;margin-left:4px;opacity:0.6;} .btn-edit-inline:hover{opacity:1;color:var(--blueprint);}
 .waz-doc-current{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);}
 .waz-doc-remove{color:#dc2626;font-size:0.8rem;}
@@ -122,6 +122,9 @@ tbody tr.clickable-row{cursor:pointer;}
 
 .docs{display:flex;gap:5px;}
 .doc-chip{display:inline-flex;align-items:center;padding:3px 9px;border-radius:4px;font-size:0.72rem;font-weight:600;font-family:var(--mono);text-decoration:none;border:1px solid var(--border);white-space:nowrap;cursor:pointer;}
+.doc-chip.is-loading{position:relative;pointer-events:none;opacity:0.9;background:var(--blueprint-soft) !important;border-color:var(--blueprint-light) !important;color:var(--blueprint) !important;cursor:wait;}
+.doc-spinner{display:inline-block;width:8px;height:8px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:doc-spin 0.6s linear infinite;margin-right:4px;}
+@keyframes doc-spin{to{transform:rotate(360deg);}}
 .doc-iso{color:var(--blueprint);} .doc-iso:hover{background:var(--blueprint-soft);border-color:var(--blueprint-light);}
 .doc-weld{color:var(--copper-ink);} .doc-weld:hover{background:var(--copper-soft);border-color:#E3C4AE;}
 .doc-final{color:var(--success);} .doc-final:hover{background:var(--success-soft);border-color:#9BD3AF;}
@@ -195,7 +198,7 @@ tbody tr.clickable-row{cursor:pointer;}
 .field input:focus,.field textarea:focus,.field select:focus{outline:none;border-color:var(--copper);box-shadow:0 0 0 3px var(--copper-soft);}
 .field input:disabled{background:#F1F4F6;color:var(--text-muted);cursor:not-allowed;}
 .field input[type=file]{padding:7px 10px;font-size:0.82rem;}
-.field-hint{font-size:0.72rem;color:var(--text-muted);margin-top:5px;}
+.field-hint{font-size:0.75rem;color:var(--text-muted);margin-top:5px;word-break:break-all;overflow-wrap:anywhere;}
 .field-separator{border-top:1px solid var(--border);margin:8px 0;padding:0;}
 .check-row{display:flex;gap:20px;align-items:center;}
 .check-row label{display:flex;align-items:center;gap:8px;font-size:0.86rem;cursor:pointer;} .check-row input{width:auto;}
@@ -355,3 +358,88 @@ tr.drag-over td{border-top:2px solid var(--copper)!important;}
   .content{margin-left:0;padding:22px 16px 48px;}
   .breadcrumb{display:none;} .col-actions{text-align:left;}
 }
+
+/* ---- Loading Spinner & Button Loading State ---- */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  border-top-color: #ffffff;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.btn-ghost .spinner, .btn-link .spinner, .btn-restore .spinner, .btn-archive .spinner {
+  border-color: rgba(0, 0, 0, 0.15);
+  border-top-color: var(--copper);
+}
+
+.btn.is-loading {
+  position: relative;
+  pointer-events: none;
+  opacity: 0.85;
+  cursor: wait;
+}
+
+.btn-spinner-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Global Top Progress Bar */
+#global-progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, var(--copper), #E28743, var(--blueprint));
+  background-size: 200% 100%;
+  animation: progress-indeterminate 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  z-index: 99999;
+  display: none;
+}
+
+@keyframes progress-indeterminate {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* SharePoint folder input in Project Modal */
+.sp-folder-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 0;
+}
+.sp-folder-path {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  color: var(--blueprint);
+  font-size: 0.84rem;
+  font-family: var(--mono, monospace);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.sp-folder-path:hover {
+  color: var(--copper);
+}
+

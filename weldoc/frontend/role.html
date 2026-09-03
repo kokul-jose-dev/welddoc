@@ -3,47 +3,75 @@
 <style>
 .ms-btn{display:inline-flex;align-items:center;gap:12px;padding:12px 24px;border:1px solid #8c8c8c;border-radius:4px;background:#fff;cursor:pointer;font-size:1rem;font-family:inherit;transition:box-shadow .15s}
 .ms-btn:hover{box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.role-lang-bar{position:fixed;top:20px;right:24px;z-index:100;}
+.role-lang-toggle{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:0.82rem;font-weight:600;background:var(--surface);box-shadow:var(--shadow-sm);}
+.role-lang-toggle button{padding:6px 14px;border:none;cursor:pointer;font-family:var(--sans);font-weight:600;font-size:0.82rem;background:transparent;color:var(--text-muted);transition:all .15s ease;}
+.role-lang-toggle button.active{background:var(--copper, #d97706);color:#fff;}
 </style>
+<script src="i18n.js"></script>
 </head><body>
+<div class="role-lang-bar">
+  <div class="role-lang-toggle">
+    <button type="button" id="btn-lang-de" onclick="setLang('de')">DE</button>
+    <button type="button" id="btn-lang-en" onclick="setLang('en')">EN</button>
+  </div>
+</div>
 <div class="role-page">
   <div class="role-brand">
     <svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 4H10V14C10 17.3137 12.6863 20 16 20H20" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="4" cy="4" r="1.7" fill="currentColor"/><circle cx="20" cy="20" r="1.7" fill="currentColor"/></svg>
     <span class="brand-name">WELDDOC</span>
   </div>
-  <div class="role-tagline">Pharmaceutical Piping Documentation</div>
+  <div class="role-tagline" data-i18n="brand_tagline">Pharmaceutical Piping Documentation</div>
 
   <!-- Step 1: Role selection -->
   <div id="role-select">
-    <div style="font-weight:700;font-size:1.05rem;margin-bottom:20px;">Who's signing in?</div>
+    <div style="font-weight:700;font-size:1.05rem;margin-bottom:20px;" data-i18n="who_is_signing_in">Who's signing in?</div>
     <div class="role-cards">
       <a class="role-card" href="#" onclick="selectRole('office');return false;">
         <div class="role-icon"><svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8 9h8M8 13h8M8 17h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
-        <h2>Office Staff</h2>
-        <p>Manage clients, projects and pipelines end-to-end. See everything grouped by what needs doing next.</p>
+        <h2 data-i18n="office_staff">Office Staff</h2>
+        <p data-i18n="office_desc">Manage clients, projects and pipelines end-to-end. See everything grouped by what needs doing next.</p>
       </a>
       <a class="role-card" href="#" onclick="selectRole('vendor');return false;">
         <div class="role-icon"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="7" r="3" stroke="currentColor" stroke-width="1.8"/><path d="M6 20c0-3 2.7-5.5 6-5.5s6 2.5 6 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m17 4 2 2-1 1-2-2z" fill="currentColor"/></svg></div>
-        <h2>Welder / Vendor</h2>
-        <p>See the pipelines assigned to you, plus unassigned work available to pick up.</p>
+        <h2 data-i18n="vendor_title">Welder / Vendor</h2>
+        <p data-i18n="vendor_desc">See the pipelines assigned to you, plus unassigned work available to pick up.</p>
       </a>
     </div>
   </div>
 
   <!-- Step 2: Microsoft login (hidden initially) -->
   <div id="login-step" style="display:none;">
-    <div style="font-weight:700;font-size:1.05rem;margin-bottom:24px;">Sign in to continue</div>
+    <div style="font-weight:700;font-size:1.05rem;margin-bottom:24px;" data-i18n="signin_to_continue">Sign in to continue</div>
     <a id="ms-login-btn" href="/login" class="ms-btn">
       <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>
-      Sign in with Microsoft
+      <span data-i18n="signin_with_ms">Sign in with Microsoft</span>
     </a>
     <div style="margin-top:16px;">
-      <button onclick="backToRoles()" style="background:none;border:none;color:var(--copper);cursor:pointer;font-size:0.85rem;">&larr; Back to role selection</button>
+      <button onclick="backToRoles()" style="background:none;border:none;color:var(--copper);cursor:pointer;font-size:0.85rem;" data-i18n="back_to_roles">&larr; Back to role selection</button>
     </div>
   </div>
 
-  <div class="role-foot">Only @botangelos.com accounts are allowed.</div>
+  <div class="role-foot" data-i18n="domain_note">Only @istinox.ch and @botangelos.com accounts are allowed.</div>
 </div>
 <script>
+function syncLangUI(){
+  const lang = (typeof getLang === 'function') ? getLang() : (localStorage.getItem('weldoc_lang') || 'de');
+  const deBtn = document.getElementById('btn-lang-de');
+  const enBtn = document.getElementById('btn-lang-en');
+  if(deBtn && enBtn){
+    if(lang === 'de'){
+      deBtn.classList.add('active');
+      enBtn.classList.remove('active');
+    } else {
+      enBtn.classList.add('active');
+      deBtn.classList.remove('active');
+    }
+  }
+}
+document.addEventListener('DOMContentLoaded', syncLangUI);
+window.addEventListener('load', syncLangUI);
+
 function selectRole(role){
   localStorage.setItem('weldoc_role', role);
   document.getElementById('role-select').style.display='none';

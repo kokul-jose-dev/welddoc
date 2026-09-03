@@ -2,19 +2,19 @@
 <title>WeldDoc — Archive</title><link rel="stylesheet" href="styles.css"></head><body>
 <div id="chrome"></div>
 <main class="content">
-  <a class="back-link" href="index.html">&larr; Back</a>
-  <div class="page-header"><div><h1>Archive</h1><div class="page-subtitle">View and restore archived items.</div></div></div>
+  <a class="back-link" href="index.html" data-i18n="back">&larr; Back</a>
+  <div class="page-header"><div><h1 data-i18n="archive_title">Archive</h1><div class="page-subtitle" data-i18n="archive_sub">View and restore archived items.</div></div></div>
   <div class="stat-grid" id="archive-stats"></div>
   <div class="subtab-nav">
-    <button class="subtab active" id="arc-tab-clients" onclick="switchArchiveTab('clients')">Clients</button>
-    <button class="subtab" id="arc-tab-projects" onclick="switchArchiveTab('projects')">Projects</button>
-    <button class="subtab" id="arc-tab-pipelines" onclick="switchArchiveTab('pipelines')">Pipelines</button>
-    <button class="subtab" id="arc-tab-materials" onclick="switchArchiveTab('materials')">Materials</button>
-    <button class="subtab" id="arc-tab-welds" onclick="switchArchiveTab('welds')">Welds</button>
+    <button class="subtab active" id="arc-tab-clients" onclick="switchArchiveTab('clients')" data-i18n="clients">Clients</button>
+    <button class="subtab" id="arc-tab-projects" onclick="switchArchiveTab('projects')" data-i18n="projects">Projects</button>
+    <button class="subtab" id="arc-tab-pipelines" onclick="switchArchiveTab('pipelines')" data-i18n="pipelines">Pipelines</button>
+    <button class="subtab" id="arc-tab-materials" onclick="switchArchiveTab('materials')" data-i18n="nav_materials">Materials</button>
+    <button class="subtab" id="arc-tab-welds" onclick="switchArchiveTab('welds')" data-i18n="th_welds">Welds</button>
   </div>
   <div id="archive-tab-content"></div>
   <div id="archive-expanded"></div>
 </main>
 <div id="modal-root"></div>
-<script src="app.js"></script><script>initArchivePage();</script>
+<script src="i18n.js"></script><script src="app.js"></script><script>initArchivePage();</script>
 </body></html>

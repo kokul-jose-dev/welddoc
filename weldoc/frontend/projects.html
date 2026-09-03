@@ -3,18 +3,18 @@
 <script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script></head><body>
 <div id="chrome"></div>
 <main class="content">
-  <div class="page-header"><div><h1>Projects</h1><div class="page-subtitle">A body of work for a client — each holds many pipelines.</div></div>
-    <button class="btn btn-primary" onclick="openProjectModal()">+ New project</button></div>
+  <div class="page-header"><div><h1 data-i18n="projects">Projects</h1><div class="page-subtitle" data-i18n="projects_sub">A body of work for a client — each holds many pipelines.</div></div>
+    <button class="btn btn-primary" onclick="openProjectModal()" data-i18n="new_project">+ New project</button></div>
   <div class="stat-grid" id="projects-stats"></div>
   <div class="filter-bar">
     <select id="filter-location" onchange="onProjectFilterChange()"></select>
     <select id="filter-client" onchange="onProjectFilterChange()"></select>
-    <select id="filter-status" onchange="onProjectFilterChange()"><option value="">All statuses</option><option value="not-started">Not started</option><option value="ongoing">Ongoing</option><option value="completed">Completed</option></select>
-    <button class="filter-clear" onclick="clearProjectFilters()">Clear filters</button>
-    <a class="btn btn-ghost btn-sm" href="archive.html?tab=projects" style="margin-left:auto;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> Archive</a>
+    <select id="filter-status" onchange="onProjectFilterChange()"><option value="" data-i18n="all_statuses">All statuses</option><option value="not-started" data-i18n="status_not_started">Not started</option><option value="ongoing" data-i18n="status_ongoing">Ongoing</option><option value="completed" data-i18n="status_completed">Completed</option></select>
+    <button class="filter-clear" onclick="clearProjectFilters()" data-i18n="clear_filters">Clear filters</button>
+    <a class="btn btn-ghost btn-sm" href="archive.html?tab=projects" style="margin-left:auto;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> <span data-i18n="archive">Archive</span></a>
   </div>
-  <div class="table-card"><table class="table-wide"><thead><tr><th>IST Project&nbsp;No.</th><th>Project title</th><th>Location</th><th>Client name</th><th>Order&nbsp;No.</th><th>Description</th><th>SP Folder</th><th>Status</th><th></th></tr></thead><tbody id="projects-tbody"></tbody></table></div>
+  <div class="table-card"><table class="table-wide"><thead><tr><th data-i18n="th_ist_project_no">IST Project&nbsp;No.</th><th data-i18n="th_project_title">Project title</th><th data-i18n="th_location">Location</th><th data-i18n="th_client_name">Client name</th><th data-i18n="th_order_no">Order&nbsp;No.</th><th data-i18n="th_description">Description</th><th data-i18n="th_sp_folder">SP Folder</th><th data-i18n="th_status">Status</th><th></th></tr></thead><tbody id="projects-tbody"></tbody></table></div>
 </main>
 <div id="modal-root"></div>
-<script src="app.js"></script><script>initProjectsPage();</script>
+<script src="i18n.js"></script><script src="app.js"></script><script>initProjectsPage();</script>
 </body></html>

@@ -9,3 +9,6 @@ openpyxl==3.*
 Pillow==12.*
 gunicorn==23.*
 certifi
+reportlab==5.*
+PyPDF2==3.*
+flask-compress>=1.14

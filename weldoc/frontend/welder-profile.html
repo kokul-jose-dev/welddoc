@@ -2,13 +2,18 @@
 <title>WeldDoc — Welder profile</title><link rel="stylesheet" href="styles.css"></head><body>
 <div id="chrome"></div>
 <main class="content" id="profile-body">
-  <a class="back-link" href="welders.html">&larr; Back to welders</a>
+  <a class="back-link" href="welders.html" data-i18n="back_to_welders">&larr; Back to welders</a>
   <div class="profile-head"><div class="profile-avatar" id="profile-avatar"></div><div class="profile-meta"><h1 id="profile-name"></h1><div class="sub" id="profile-sub"></div></div>
-    <span style="flex:1"></span><button class="btn btn-ghost" id="profile-edit-btn">Edit welder</button></div>
+    <div id="profile-signature-box" style="margin-left:20px;"></div>
+    <span style="flex:1"></span><button class="btn btn-ghost" id="profile-edit-btn" data-i18n="edit_welder">Edit welder</button></div>
   <div class="stat-grid" id="profile-stats"></div>
-  <div class="section-label">Certificates</div>
-  <div class="table-card"><table><thead><tr><th>Certificate&nbsp;No.</th><th>Process</th><th>Standard</th><th>Valid until</th><th>Renewal due</th><th>PDF</th><th></th></tr></thead><tbody id="profile-certs-tbody"></tbody></table></div>
+  <div class="section-label" data-i18n="certificates">Certificates</div>
+  <div class="table-card"><table><thead><tr><th data-i18n="th_cert_no">Certificate&nbsp;No.</th><th data-i18n="th_process">Process</th><th data-i18n="th_standard">Standard</th><th data-i18n="th_valid_until">Valid until</th><th data-i18n="th_renewal_due">Renewal due</th><th data-i18n="th_pdf">PDF</th><th data-i18n="th_signature">Sign</th><th></th></tr></thead><tbody id="profile-certs-tbody"></tbody></table></div>
+  <div id="profile-archived-section" style="margin-top:24px;display:none;">
+    <div class="section-label" data-i18n="archived_certificates">Archived certificates</div>
+    <div class="table-card"><table><thead><tr><th data-i18n="th_cert_no">Certificate&nbsp;No.</th><th data-i18n="th_process">Process</th><th data-i18n="th_standard">Standard</th><th data-i18n="th_valid_until">Valid until</th><th data-i18n="th_renewal_due">Renewal due</th><th data-i18n="th_pdf">PDF</th><th data-i18n="th_signature">Sign</th></tr></thead><tbody id="profile-archived-certs-tbody"></tbody></table></div>
+  </div>
 </main>
 <div id="modal-root"></div>
-<script src="app.js"></script><script>initWelderProfilePage();</script>
+<script src="i18n.js"></script><script src="app.js"></script><script>initWelderProfilePage();</script>
 </body></html>

@@ -32,6 +32,8 @@ def _decode_id_token(id_token):
 
 @auth_bp.route("/login")
 def login():
+    if "127.0.0.1" in request.host:
+        return redirect(request.url.replace("127.0.0.1", "localhost"))
     cfg = current_app.config
     session["state"] = str(uuid.uuid4())
     params = urllib.parse.urlencode({
@@ -54,7 +56,8 @@ def auth_callback():
 
     params = request.form if request.method == "POST" else request.args
 
-    if params.get("state") != session.get("state"):
+    expected_state = session.get("state")
+    if expected_state and params.get("state") != expected_state:
         return "State mismatch. <a href='/'>Try again</a>", 403
 
     if "error" in params:

@@ -9,12 +9,17 @@ pipeline_material_connections = db.Table(
 
 class PipelineMaterial(db.Model):
     __tablename__ = "weldoc_pipeline_materials"
+    __table_args__ = (
+        db.Index("ix_plmat_pipeline_archived", "pipeline_id", "archived"),
+        db.Index("ix_plmat_projmat", "project_material_id"),
+    )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     pipeline_id = db.Column(db.Integer, db.ForeignKey("weldoc_pipelines.id"), nullable=False)
     project_material_id = db.Column(db.Integer, db.ForeignKey("weldoc_project_materials.id"), nullable=False)
     position = db.Column(db.String(5))
     waz_no = db.Column(db.String(50))
+    waz_package_url = db.Column(db.String(500), nullable=True)
     start_of_plumbing = db.Column(db.Boolean, default=False)
     end_of_plumbing = db.Column(db.Boolean, default=False)
     archived = db.Column(db.Boolean, default=False)

@@ -36,6 +36,11 @@ def create_or_update_project():
         p.status = data.get("status", p.status)
         if "archived" in data:
             p.archived = data["archived"]
+            # Cascade archive / restore to all pipelines under this project
+            from app.models.pipeline import Pipeline
+            Pipeline.query.filter_by(project_id=p.id).update(
+                {"archived": p.archived}, synchronize_session=False
+            )
         if "sharepointDriveId" in data:
             p.sharepoint_drive_id = data["sharepointDriveId"]
         if "sharepointFolderId" in data:
@@ -51,6 +56,9 @@ def create_or_update_project():
             order_no=data.get("orderNo", ""),
             description=data.get("description", ""),
             status=data.get("status", "Not started"),
+            sharepoint_drive_id=data.get("sharepointDriveId"),
+            sharepoint_folder_id=data.get("sharepointFolderId"),
+            sharepoint_folder_url=data.get("sharepointFolderUrl"),
         )
         db.session.add(p)
     db.session.commit()

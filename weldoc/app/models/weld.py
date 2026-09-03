@@ -3,6 +3,9 @@ from app.database import db
 
 class Weld(db.Model):
     __tablename__ = "weldoc_welds"
+    __table_args__ = (
+        db.Index("ix_welds_pipeline_archived", "pipeline_id", "archived"),
+    )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     pipeline_id = db.Column(db.Integer, db.ForeignKey("weldoc_pipelines.id"), nullable=False)
@@ -14,6 +17,8 @@ class Weld(db.Model):
     welding_wire = db.Column(db.String(200))
     welder = db.Column(db.String(200))
     inspector = db.Column(db.String(200))
+    welder_id = db.Column(db.Integer, db.ForeignKey("weldoc_welders.id"), nullable=True)
+    inspector_id = db.Column(db.Integer, db.ForeignKey("weldoc_welders.id"), nullable=True)
     date = db.Column(db.String(20))
     endoscopy_video_url = db.Column(db.String(500))
     endoscopy_image_url = db.Column(db.String(500))

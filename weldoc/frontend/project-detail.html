@@ -5,24 +5,24 @@
 <main class="content">
   <div class="context-bar" id="project-context"></div>
   <div class="page-header"><div>
-    <div class="title-switch"><span class="title-switch-label">Project</span><select id="project-switch" onchange="switchProject(this.value)"></select></div>
+    <div class="title-switch"><span class="title-switch-label" data-i18n="th_project">Project</span><select id="project-switch" onchange="switchProject(this.value)"></select></div>
     <div class="page-subtitle" id="project-subtitle"></div>
-  </div><button class="btn btn-primary" onclick="openProjectModal(PAGE.projectId)">Edit project</button></div>
+  </div><button class="btn btn-primary" onclick="openProjectModal(PAGE.projectId)" data-i18n="edit_project">Edit project</button></div>
   <div class="info-panel"><div class="info-grid" id="project-info"></div></div>
   <div class="stat-grid" id="project-stats"></div>
   <div class="subtab-nav">
-    <button class="subtab active" id="subtab-pipelines" onclick="showProjectView('pipelines')">Pipelines</button>
-    <button class="subtab" id="subtab-proj-materials" onclick="showProjectView('proj-materials')">Project Materials</button>
+    <button class="subtab active" id="subtab-pipelines" onclick="showProjectView('pipelines')" data-i18n="pipelines">Pipelines</button>
+    <button class="subtab" id="subtab-proj-materials" onclick="showProjectView('proj-materials')" data-i18n="project_materials">Project Materials</button>
   </div>
   <div id="project-pipelines-view">
     <div class="detail-toolbar" id="project-toolbar"></div>
     <div id="project-pipelines"></div>
   </div>
   <div id="project-materials-view" style="display:none">
-    <div class="detail-toolbar"><h2>Project Materials</h2><div style="display:flex;gap:8px;"><button class="btn btn-primary btn-sm" onclick="openProjectMaterialModal()">+ Add material</button></div></div>
+    <div class="detail-toolbar"><h2 data-i18n="project_materials">Project Materials</h2><div style="display:flex;gap:8px;"><button class="btn btn-primary btn-sm" onclick="openProjectMaterialModal()" data-i18n="add_material">+ Add material</button></div></div>
     <div class="table-card"><table class="table-xwide"><thead><tr id="proj-mat-thead"></tr></thead><tbody id="proj-materials-tbody"></tbody></table></div>
   </div>
 </main>
 <div id="modal-root"></div>
-<script src="app.js"></script><script>initProjectDetailPage();</script>
+<script src="i18n.js"></script><script src="app.js"></script><script>initProjectDetailPage();</script>
 </body></html>

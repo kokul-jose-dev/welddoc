@@ -6,3 +6,4 @@ from app.models.project_material import ProjectMaterial
 from app.models.pipeline_material import PipelineMaterial
 from app.models.weld import Weld
 from app.models.person import User
+from app.models.welder import Welder, Certificate
