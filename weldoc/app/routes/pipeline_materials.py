@@ -128,7 +128,19 @@ def edit_pipeline_material(pm_id):
     if "archived" in data:
         m.archived = data["archived"]
         if data["archived"]:
+            # 1. If m was connected to 2 neighbors, bridge them together in DB
+            active_conns = [c for c in m.connections if not c.archived]
+            if len(active_conns) == 2:
+                cA, cB = active_conns[0], active_conns[1]
+                if cB not in cA.connections:
+                    cA.connections.append(cB)
+                if cA not in cB.connections:
+                    cB.connections.append(cA)
+
+            # 2. Clear m's connections
             m.connections = []
+
+            # 3. Delete welds connected directly to m
             pos = m.position
             Weld.query.filter_by(pipeline_id=m.pipeline_id, archived=False).filter(
                 db.or_(Weld.between_a == pos, Weld.between_b == pos)
@@ -575,34 +587,84 @@ def _update_connections(m, conn_positions, pipeline_id):
         if m not in connected.connections:
             connected.connections.append(m)
 
-        # Auto-create weld if not exists
-        existing_weld = Weld.query.filter_by(
-            pipeline_id=pipeline_id, archived=False
-        ).filter(
-            db.or_(
-                db.and_(Weld.between_a == m.position, Weld.between_b == connected.position),
-                db.and_(Weld.between_a == connected.position, Weld.between_b == m.position),
-            )
-        ).first()
-        if not existing_weld:
-            weld_count = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).count()
-            new_weld = Weld(
-                pipeline_id=pipeline_id,
-                weld_no=str(weld_count + 1),
-                between_a=m.position,
-                between_b=connected.position,
-            )
-            db.session.add(new_weld)
+    db.session.commit()
+    _sync_and_renumber_welds(pipeline_id)
 
 
-def _renumber_positions(pipeline_id):
-    """Renumber positions sequentially after a deletion."""
+def _sync_and_renumber_welds(pipeline_id):
+    """Synchronize welds with active material connections, eliminate duplicates, and renumber sequentially 1..N."""
     mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
     ).order_by(PipelineMaterial.position).all()
-    for idx, m in enumerate(mats, 1):
-        m.position = _pos_letter(idx)
+    mat_positions = {m.position for m in mats if m.position}
+
+    # 1. Clean up invalid/dangling and duplicate welds
+    welds = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).order_by(Weld.id).all()
+    valid_welds = []
+    seen_pairs = set()
+
+    for w in welds:
+        if not w.between_a or not w.between_b:
+            db.session.delete(w)
+            continue
+        if w.between_a not in mat_positions or w.between_b not in mat_positions:
+            db.session.delete(w)
+            continue
+        pair = tuple(sorted([w.between_a, w.between_b]))
+        if pair in seen_pairs:
+            db.session.delete(w)
+            continue
+        seen_pairs.add(pair)
+        valid_welds.append(w)
+
+    # 2. Ensure every active connection pair has a weld
+    for m in mats:
+        for conn in m.connections:
+            if not conn.archived and m.position and conn.position:
+                pair = tuple(sorted([m.position, conn.position]))
+                if pair not in seen_pairs:
+                    w = Weld(
+                        pipeline_id=pipeline_id,
+                        weld_no="0",
+                        between_a=min(m.position, conn.position),
+                        between_b=max(m.position, conn.position),
+                    )
+                    db.session.add(w)
+                    valid_welds.append(w)
+                    seen_pairs.add(pair)
+
+    # 3. Sort welds by (between_a, between_b) and assign unique sequential weld_no: 1, 2, 3...
+    valid_welds.sort(key=lambda w: (w.between_a or "", w.between_b or ""))
+    for idx, w in enumerate(valid_welds, 1):
+        w.weld_no = str(idx)
+
     db.session.commit()
+
+
+def _renumber_positions(pipeline_id):
+    """Renumber positions sequentially after a deletion and synchronize welds."""
+    mats = PipelineMaterial.query.filter_by(
+        pipeline_id=pipeline_id, archived=False
+    ).order_by(PipelineMaterial.position).all()
+    pos_map = {}
+    for idx, m in enumerate(mats, 1):
+        new_pos = _pos_letter(idx)
+        if m.position != new_pos:
+            pos_map[m.position] = new_pos
+            m.position = new_pos
+    db.session.commit()
+
+    # Re-map weld between letters
+    if pos_map:
+        welds = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).all()
+        for w in welds:
+            if w.between_a in pos_map:
+                w.between_a = pos_map[w.between_a]
+            if w.between_b in pos_map:
+                w.between_b = pos_map[w.between_b]
+        db.session.commit()
+
+    _sync_and_renumber_welds(pipeline_id)
 
 
 def _serialize(m):

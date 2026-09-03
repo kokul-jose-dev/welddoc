@@ -24,16 +24,22 @@ def create_app():
     with app.app_context():
         try:
             db.create_all()
-            # Ensure signature_url column exists in weldoc_welders
-            db.session.execute(db.text("ALTER TABLE weldoc_welders ADD signature_url NVARCHAR(500) NULL"))
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-
-        try:
-            # Ensure waz_package_url column exists in weldoc_pipeline_materials
-            db.session.execute(db.text("ALTER TABLE weldoc_pipeline_materials ADD waz_package_url NVARCHAR(500) NULL"))
-            db.session.commit()
+            # Auto-migrate any missing columns on existing tables
+            migrations = [
+                "ALTER TABLE weldoc_welders ADD signature_url NVARCHAR(500) NULL",
+                "ALTER TABLE weldoc_pipeline_materials ADD waz_package_url NVARCHAR(500) NULL",
+                "ALTER TABLE weldoc_pipelines ADD welding_start NVARCHAR(20) NULL",
+                "ALTER TABLE weldoc_pipelines ADD welding_end NVARCHAR(20) NULL",
+                "ALTER TABLE weldoc_pipelines ADD welding_remarks NVARCHAR(MAX) NULL",
+                "ALTER TABLE weldoc_welds ADD welder_id INT NULL",
+                "ALTER TABLE weldoc_welds ADD inspector_id INT NULL",
+            ]
+            for sql in migrations:
+                try:
+                    db.session.execute(db.text(sql))
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
         except Exception:
             db.session.rollback()
 

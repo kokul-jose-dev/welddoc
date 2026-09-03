@@ -64,12 +64,19 @@ def get_pipeline_detail(pipeline_id):
         WHERE project_id = :proj_id AND archived = 0
     """), {"proj_id": row.project_id}).fetchall()
 
+    from app.routes.pipeline_materials import _sync_and_renumber_welds
+    try:
+        _sync_and_renumber_welds(pipeline_id)
+    except Exception:
+        db.session.rollback()
+
     weld_rows = db.session.execute(db.text("""
         SELECT id, pipeline_id, weld_no, between_a, between_b, type, [procedure],
                welding_wire, welder, inspector, welder_id, inspector_id, date,
                endoscopy_video_url, endoscopy_image_url, remarks, archived
         FROM weldoc_welds
         WHERE pipeline_id = :pid AND archived = 0
+        ORDER BY CAST(weld_no AS INT), id
     """), {"pid": pipeline_id}).fetchall()
 
     pm_rows = db.session.execute(db.text("""

@@ -1349,10 +1349,10 @@ function attachFormHandlers(){
       else { await apiPost('/pipeline-materials', plmData); }
 
       /* Reload from server so DB.materials has real IDs and projectMaterials has newly created items */
-      const data = await apiGet('/pipeline-detail/'+PAGE.pipelineId);
-      DB.materials=normalizeMaterials(data.materials||[]);
-      DB.welds=normalizeWelds(data.welds||[]);
-      if(data.projectMaterials && Array.isArray(data.projectMaterials)) DB.projectMaterials=data.projectMaterials;
+      const freshPipeData = await apiGet('/pipeline-detail/'+PAGE.pipelineId);
+      DB.materials=normalizeMaterials(freshPipeData.materials||[]);
+      DB.welds=normalizeWelds(freshPipeData.welds||[]);
+      if(freshPipeData.projectMaterials && Array.isArray(freshPipeData.projectMaterials)) DB.projectMaterials=freshPipeData.projectMaterials;
       rebuildRelationships();
       saveDB();
       closeModal('modal-material');
@@ -2047,44 +2047,19 @@ async function confirmArchive(){
     if(apiMap[type]){ await apiPost(apiMap[type]+(type==='material'?'/'+id:''), type==='material'?{archived:true}:{id, archived:true}); }
   } catch(e){ console.error('Archive API error:', e); }
 
-  if(type==='material'){
-    const m=rec;
-    const pipeId=m.pipelineId;
-    /* Remove all connections from other materials pointing to this one */
-    (m.connections||[]).forEach(cid=>{
-      const c=getMaterial(cid);
-      if(c) c.connections=(c.connections||[]).filter(x=>x!==m.id);
-    });
-    /* Archive all welds involving this material */
-    DB.welds.filter(w=>w.pipelineId===pipeId && w.materialIds.includes(m.id)).forEach(w=>{ w.archived=true; });
-    /* Reconnect neighbors if they were both connected to this material */
-    const conns=(m.connections||[]);
-    if(conns.length===2){
-      const [a,b]=conns;
-      const mA=getMaterial(a), mB=getMaterial(b);
-      if(mA && mB && !(mA.connections||[]).includes(b)){
-        mA.connections=mA.connections||[]; mA.connections.push(b);
-        mB.connections=mB.connections||[]; mB.connections.push(a);
-        ensureWeldForPair(pipeId,a,b);
+  if(type==='material' || type==='weld'){
+    const pipeId = rec ? rec.pipelineId : PAGE.pipelineId;
+    if(pipeId){
+      try {
+        const data = await apiGet('/pipeline-detail/' + pipeId);
+        DB.materials = normalizeMaterials(data.materials || []);
+        DB.welds = normalizeWelds(data.welds || []);
+        if(data.projectMaterials && Array.isArray(data.projectMaterials)) DB.projectMaterials = data.projectMaterials;
+        rebuildRelationships();
+      } catch(err){
+        console.error('Failed to reload pipeline after archive:', err);
       }
     }
-    m.connections=[];
-    /* Reorder positions */
-    reorderMaterialPositions(pipeId);
-    renumberWelds(pipeId);
-  }
-
-  if(type==='weld'){
-    const w=rec;
-    const pipeId=w.pipelineId;
-    /* Remove connections between the materials this weld joined */
-    if(w.materialIds&&w.materialIds.length===2){
-      const [aId,bId]=w.materialIds;
-      const a=getMaterial(aId), b=getMaterial(bId);
-      if(a) a.connections=(a.connections||[]).filter(x=>x!==bId);
-      if(b) b.connections=(b.connections||[]).filter(x=>x!==aId);
-    }
-    renumberWelds(pipeId);
   }
 
   setButtonLoading(btn, false);
