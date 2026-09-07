@@ -3437,20 +3437,38 @@ function showWaz(matId){
     alert(t('no_file_uploaded', 'No file uploaded yet'));
   }
 }
-function toggleWazMore(btn, containerId, count){
-  const container = document.getElementById(containerId);
-  if(!container) return;
-  const isHidden = container.style.display === 'none' || !container.style.display;
-  if(isHidden){
-    container.style.display = 'inline-flex';
-    btn.textContent = '−';
-    btn.title = t('show_less', 'Show less');
-  } else {
-    container.style.display = 'none';
-    btn.textContent = `+${count}`;
-    btn.title = `${t('show_more', 'Show')} ${count} ${t('more', 'more')}`;
+function toggleWazPopover(event, idx){
+  if(event) event.stopPropagation();
+  const wrap = document.getElementById(`waz-wrap-${idx}`);
+  if(!wrap) return;
+  const wasOpen = wrap.classList.contains('open');
+  document.querySelectorAll('.waz-popover-wrap.open').forEach(el => el.classList.remove('open'));
+  if(!wasOpen){
+    wrap.classList.add('open');
+    const panel = document.getElementById(`waz-popover-${idx}`);
+    if(panel){
+      const rect = wrap.getBoundingClientRect();
+      const panelH = Math.min(panel.scrollHeight || 180, 220);
+      if(rect.bottom + panelH + 8 > window.innerHeight){
+        panel.style.top = Math.max(8, rect.top - panelH - 4) + 'px';
+      } else {
+        panel.style.top = (rect.bottom + 4) + 'px';
+      }
+      const panelW = 200;
+      if(rect.left + panelW > window.innerWidth){
+        panel.style.left = Math.max(8, window.innerWidth - panelW - 16) + 'px';
+      } else {
+        panel.style.left = rect.left + 'px';
+      }
+    }
   }
 }
+document.addEventListener('click', e => {
+  if(!e.target.closest('.waz-popover-wrap')){
+    document.querySelectorAll('.waz-popover-wrap.open').forEach(el => el.classList.remove('open'));
+  }
+});
+
 let wazMaterialId=null;
 function nextWazNo(pipelineId){
   const existing=pipelineMaterials(pipelineId).map(m=>m.wazNo).filter(Boolean);
@@ -4524,8 +4542,13 @@ function renderMaterialsPage(){
       let hiddenHtml = '';
       if(hiddenWaz.length){
         const hiddenChips = hiddenWaz.map(w => `<button class="doc-chip doc-weld" onclick="showWaz(${w.matId})" title="${t('view_document','View WAZ PDF')}">${escapeHtml(w.wazNo)}</button>`).join('');
-        hiddenHtml = `<span class="waz-extra-chips" id="waz-extra-${idx}" style="display:none;">${hiddenChips}</span>` +
-          `<button type="button" class="doc-chip doc-more" onclick="toggleWazMore(this, 'waz-extra-${idx}', ${hiddenWaz.length})" title="${t('show_more', 'Show')} ${hiddenWaz.length} ${t('more', 'more')}">+${hiddenWaz.length}</button>`;
+        hiddenHtml = `<div class="waz-popover-wrap" id="waz-wrap-${idx}">` +
+          `<button type="button" class="doc-chip doc-more" onclick="toggleWazPopover(event, '${idx}')" title="${t('view_all','View')} +${hiddenWaz.length} ${t('waz_documents','WAZ documents')}">+${hiddenWaz.length}</button>` +
+          `<div class="waz-popover-panel" id="waz-popover-${idx}">` +
+            `<div class="waz-popover-header">${t('more_waz_docs','Extra WAZ')} (${hiddenWaz.length})</div>` +
+            `<div class="waz-popover-list">${hiddenChips}</div>` +
+          `</div>` +
+        `</div>`;
       }
       wazChips = `<div class="waz-chip-group">${visibleHtml}${hiddenHtml}</div>`;
     }

@@ -461,20 +461,51 @@ tr.drag-over td{border-top:2px solid var(--copper)!important;}
 }
 
 .td-waz-cell {
-  white-space: normal;
+  white-space: nowrap;
   min-width: 130px;
 }
 .waz-chip-group {
   display: inline-flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
-.waz-extra-chips {
+.waz-popover-wrap {
+  position: relative;
   display: inline-flex;
+  vertical-align: middle;
+}
+.waz-popover-panel {
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  background: var(--surface, #ffffff);
+  border: 1px solid var(--border, #E2E8F0);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.14);
+  padding: 8px 10px;
+  min-width: 160px;
+  max-width: 260px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.waz-popover-wrap.open .waz-popover-panel {
+  display: block;
+}
+.waz-popover-header {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #64748B);
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-light, #F1F5F9);
+}
+.waz-popover-list {
+  display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 4px;
+  align-items: center;
 }
 .doc-more {
   background: var(--surface, #ffffff);
@@ -491,4 +522,5 @@ tr.drag-over td{border-top:2px solid var(--copper)!important;}
   color: var(--copper, #C26D2B);
   border-color: var(--copper, #C26D2B);
 }
+
 
