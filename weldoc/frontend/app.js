@@ -804,7 +804,6 @@ function renderChrome(activeNav, breadcrumbHtml){
       ${nav('home',t('nav_home','Home'),'home.html',false)}
       ${nav('clients',t('clients','Clients'),'index.html',true)}
       ${nav('projects',t('projects','Projects'),'projects.html'+(activeClient?'?client='+activeClient:''),true)}
-      ${nav('pipelines',t('pipelines','Pipelines'),'pipelines.html'+(activeProject?'?project='+activeProject:(activeClient?'?client='+activeClient:'')),true)}
       <div class="nav-section-label" data-i18n="nav_documents">${t('nav_documents','Documents')}</div>
       ${nav('materials',t('nav_materials','Materials'),'materials.html',true)}
       ${nav('welders',t('welders','Welders'),'welders.html',true)}
@@ -2860,12 +2859,12 @@ async function initPipelineDetailPage(){
   } catch(e){ console.error('API error:', e); }
   const tab=qp('tab'); if(tab==='weldlist'||tab==='materials') detailView=tab; else detailView='materials';
   const pl=getPipeline(PAGE.pipelineId);
-  if(!pl){ renderChrome('pipelines','Pipelines'); return; }
+  if(!pl){ renderChrome('projects',t('projects','Projects')); return; }
   const pr=getProject(pl.projectId);
   PAGE.projectId=pl.projectId;
   if(pr) PAGE.clientId=pr.clientId;
   renumberWelds(PAGE.pipelineId); saveDB();
-  renderChrome('pipelines',`<a href="pipelines.html">${t('pipelines','Pipelines')}</a> / ${escapeHtml(pl.no)}`); mountModals(); wireModalDismiss();
+  renderChrome('projects',`<a href="projects.html">${t('projects','Projects')}</a> / ${pr?`<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a> / `:''}${escapeHtml(pl.no)}`); mountModals(); wireModalDismiss();
   renderPipelineDetail();
   const seam=qp('seam'); if(seam){ const w=getWeld(Number(seam)); if(w&&w.pipelineId===PAGE.pipelineId) showSeamDetail(w.id); }
 
@@ -3734,12 +3733,12 @@ async function initMaterialDetailPage(){
     rebuildRelationships();
   } catch(e){ console.error('API error:', e); }
   PAGE.materialId=Number(qp('id')); const m=getMaterial(PAGE.materialId);
-  if(!m){ renderChrome('pipelines',t('pipelines','Pipelines')); return; }
+  if(!m){ renderChrome('projects',t('projects','Projects')); return; }
   PAGE.pipelineId=m.pipelineId;
   const pl=getPipeline(m.pipelineId);
   PAGE.projectId=pl.projectId;
   const pr=getProject(pl.projectId); if(pr) PAGE.clientId=pr.clientId;
-  renderChrome('pipelines',`<a href="pipelines.html">${t('pipelines','Pipelines')}</a> / <a href="pipeline-detail.html?id=${pl.id}">${escapeHtml(pl.no)}</a> / ${posLetter(m.position)}`); mountModals(); wireModalDismiss(); renderMaterialDetail();
+  renderChrome('projects',`<a href="projects.html">${t('projects','Projects')}</a> / ${pr?`<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a> / `:''}<a href="pipeline-detail.html?id=${pl.id}">${escapeHtml(pl.no)}</a> / ${posLetter(m.position)}`); mountModals(); wireModalDismiss(); renderMaterialDetail();
 }
 function renderMaterialDetail(){
   const m=getMaterial(PAGE.materialId); if(!m) return;
@@ -4222,7 +4221,7 @@ function homePipelineTable(list, emptyMsg){
       <td>${cli?escapeHtml(cli.name):'<span class="muted">—</span>'}</td>
       <td>${statusPill(pl.status)}</td>
       <td>${docCell(pl)}</td>
-      <td class="col-actions"><a class="btn-link" href="pipeline-detail.html?id=${pl.id}">${t('open','Open')}</a>${archiveBtn('pipeline',pl.id)}</td>
+      <td class="col-actions"><a class="btn-link" href="pipeline-detail.html?id=${pl.id}" data-i18n="open">${t('open','Open')}</a><button class="btn-link" onclick="openPipelineModal(${pl.id})" data-i18n="edit">${t('edit','Edit')}</button>${archiveBtn('pipeline',pl.id)}</td>
     </tr>`;
   }).join('');
   return `<div class="table-card"><table class="table-wide"><thead><tr><th>${t('th_pipeline_no','Pipeline No.')}</th><th>${t('th_project','Project')}</th><th>${t('th_client','Client')}</th><th>${t('th_status','Status')}</th><th>${t('th_documents','Documents')}</th><th></th></tr></thead><tbody>${list.length?rows:`<tr class="empty-row"><td colspan="6">${escapeHtml(emptyMsg)}</td></tr>`}</tbody></table></div>`;
@@ -4717,9 +4716,9 @@ async function initProjectDetailPage(){
     DB.projectMaterials=data.projectMaterials||[];
   } catch(e){ console.error('API error:', e); }
   const pr=getProject(PAGE.projectId);
-  if(!pr){ renderChrome('pipelines',t('projects','Projects')); return; }
+  if(!pr){ renderChrome('projects',t('projects','Projects')); return; }
   PAGE.clientId=pr.clientId;
-  renderChrome('pipelines',`<a href="projects.html">${t('projects','Projects')}</a> / ${escapeHtml(pr.title)}`); mountModals(); wireModalDismiss(); renderProjectDetail();
+  renderChrome('projects',`<a href="projects.html">${t('projects','Projects')}</a> / ${escapeHtml(pr.title)}`); mountModals(); wireModalDismiss(); renderProjectDetail();
 }
 function switchProject(id){ if(id&&Number(id)!==PAGE.projectId) location.href='project-detail.html?id='+id; }
 function renderProjectDetail(){
