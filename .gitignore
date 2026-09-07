@@ -1,4 +1,6 @@
 .claude/
+.playwright-mcp/
+*.log
 __pycache__/
 *.pyc
 .env

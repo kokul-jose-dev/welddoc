@@ -175,6 +175,8 @@ def create_certificate(wid):
     )
     db.session.add(c)
     db.session.commit()
+    from app.routes.wps_processes import ensure_wps_process
+    ensure_wps_process(c.cert_no, c.process)
     return jsonify(_serialize_cert(c)), 201
 
 
@@ -207,16 +209,21 @@ def update_certificate(cid):
                     _move_cert_to_archive(cert_id)
             threading.Thread(target=_bg_archive, daemon=True).start()
     db.session.commit()
+    if not c.archived:
+        from app.routes.wps_processes import ensure_wps_process
+        ensure_wps_process(c.cert_no, c.process)
     return jsonify(_serialize_cert(c)), 200
 
 
 @welders_bp.route("/certificates/<int:cid>/upload", methods=["POST"])
 def upload_certificate_pdf(cid):
-    """Upload certificate PDF to SharePoint global welder folder."""
+    """Upload certificate PDF to SharePoint process folder."""
     from app.sharepoint import upload_welder_cert
 
     c = Certificate.query.get_or_404(cid)
     w = Welder.query.get(c.welder_id)
+    if not w:
+        return jsonify({"error": "Welder not found"}), 404
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
     file = request.files["file"]
@@ -225,9 +232,14 @@ def upload_certificate_pdf(cid):
 
     file_content = file.read()
     content_type = file.content_type or "application/pdf"
-    file_name = f"{w.no or w.name}_{c.cert_no}.pdf"
 
-    url = upload_welder_cert(file_name, file_content, content_type)
+    url = upload_welder_cert(
+        process=c.process,
+        welder_name=w.name,
+        welder_no=w.no,
+        file_content=file_content,
+        content_type=content_type,
+    )
     if url:
         c.pdf_url = url
         db.session.commit()
@@ -265,70 +277,25 @@ def _serialize_cert(c):
 
 
 def _move_cert_to_archive(cert_id):
-    """Move an archived certificate PDF to weldoc/welder/Archive/ in SharePoint."""
-    from app.sharepoint import _get_app_token, _ssl_context, _get_weldoc_site_drive, _sanitize_name, GRAPH_BASE
+    """Move an archived certificate PDF to 3.2_Personal & Ausbildung/Schweissprüfungen/{process}/_Archive/ in SharePoint."""
+    from app.sharepoint import archive_welder_cert
     import logging
 
     c = Certificate.query.get(cert_id)
     if not c or not c.pdf_url:
         return
+    w = Welder.query.get(c.welder_id)
 
     try:
-        token = _get_app_token()
-        drive_id = _get_weldoc_site_drive()
-
-        # Find the file by sharing URL
-        import base64
-        encoded_url = base64.urlsafe_b64encode(c.pdf_url.encode()).decode().rstrip("=")
-        share_id = "u!" + encoded_url
-
-        # Get the item ID
-        import urllib.request, urllib.parse, json, ssl, certifi
-        ctx = _ssl_context()
-        item_url = f"{GRAPH_BASE}/shares/{share_id}/driveItem"
-        req = urllib.request.Request(item_url)
-        req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req, context=ctx) as resp:
-            item = json.loads(resp.read())
-
-        item_id = item["id"]
-        file_name = item.get("name", "cert.pdf")
-
-        # Ensure Archive folder exists and get its ID
-        archive_path = "weldoc/welder/Archive"
-        folder_url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{urllib.parse.quote(archive_path)}"
-        req = urllib.request.Request(folder_url)
-        req.add_header("Authorization", f"Bearer {token}")
-        try:
-            with urllib.request.urlopen(req, context=ctx) as resp:
-                folder = json.loads(resp.read())
-                archive_folder_id = folder["id"]
-        except urllib.error.HTTPError:
-            # Create the folder
-            create_url = f"{GRAPH_BASE}/drives/{drive_id}/root:/weldoc/welder:/children"
-            body = json.dumps({"name": "Archive", "folder": {}, "@microsoft.graph.conflictBehavior": "replace"}).encode()
-            req = urllib.request.Request(create_url, data=body, method="POST")
-            req.add_header("Authorization", f"Bearer {token}")
-            req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, context=ctx) as resp:
-                folder = json.loads(resp.read())
-                archive_folder_id = folder["id"]
-
-        # Move the file
-        move_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}"
-        move_body = json.dumps({"parentReference": {"id": archive_folder_id}, "name": file_name}).encode()
-        req = urllib.request.Request(move_url, data=move_body, method="PATCH")
-        req.add_header("Authorization", f"Bearer {token}")
-        req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, context=ctx) as resp:
-            result = json.loads(resp.read())
-
-        # Update the URL in DB
-        new_url = result.get("webUrl", "")
+        new_url = archive_welder_cert(
+            pdf_url=c.pdf_url,
+            process=c.process,
+            welder_name=w.name if w else "Welder",
+            welder_no=w.no if w else "",
+            valid_until=c.valid_until,
+        )
         if new_url:
             c.pdf_url = new_url
             db.session.commit()
-
-        logging.getLogger(__name__).info(f"SharePoint: Moved cert '{file_name}' to Archive/")
     except Exception as e:
-        logging.getLogger(__name__).error(f"SharePoint: Failed to archive cert: {e}")
+        logging.getLogger(__name__).error(f"SharePoint: Failed to archive cert {cert_id}: {e}")

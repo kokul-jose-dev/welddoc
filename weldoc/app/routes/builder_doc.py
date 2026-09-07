@@ -312,24 +312,20 @@ def generate_builder_doc(pipeline_id):
 
         def _bg_upload():
             with app.app_context():
-                from app.sharepoint import _get_app_token, _ssl_context, _sanitize_name, GRAPH_BASE
-                import urllib.request, urllib.parse, json as _json
+                from app.sharepoint import upload_to_pipeline_subfolder
+                import logging
                 try:
-                    token = _get_app_token()
-                    safe_pipeline = _sanitize_name(pipe_no)
-                    safe_name = _sanitize_name(f"{pipe_no}_welder.xlsx")
-                    upload_path = f"{safe_pipeline}/{safe_name}"
-                    upload_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/{urllib.parse.quote(upload_path)}:/content"
-                    req = urllib.request.Request(upload_url, data=content, method="PUT")
-                    req.add_header("Authorization", f"Bearer {token}")
-                    req.add_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    with urllib.request.urlopen(req, context=_ssl_context()) as resp:
-                        result = _json.loads(resp.read())
-                    pipeline = Pipeline.query.get(pl_id)
-                    pipeline.doc_builder = result.get("webUrl", "")
-                    db.session.commit()
+                    url = upload_to_pipeline_subfolder(
+                        drive_id, folder_id,
+                        pipe_no, "02 Schweissnahtliste",
+                        f"{pipe_no}_welder.xlsx", content,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                    if url:
+                        pipeline = Pipeline.query.get(pl_id)
+                        pipeline.doc_builder = url
+                        db.session.commit()
                 except Exception as e:
-                    import logging
                     logging.getLogger(__name__).error(f"Failed to upload builder doc to SharePoint: {e}")
 
         threading.Thread(target=_bg_upload, daemon=True).start()

@@ -77,8 +77,18 @@ def upload_waz(pm_id):
     if not project.sharepoint_drive_id or not project.sharepoint_folder_id:
         return jsonify({"error": "No SharePoint folder configured for this project. Please set it in Project settings."}), 400
 
-    heat_no = m.heat_no or "unknown"
-    certificate_no = m.certificate or "unknown"
+    from app.sharepoint import upload_waz_to_project_folder, format_waz_filename
+
+    gm = m.global_material
+    file_name = format_waz_filename(
+        item_desc=gm.item_description if gm else "",
+        dn=gm.dn1 if gm else "",
+        diameter=gm.diameter if gm else "",
+        thickness=gm.thickness if gm else "",
+        material_code=gm.material_code if gm else "",
+        surface=gm.surface if gm else "",
+        heat_no=m.heat_no or "",
+    )
 
     file_content = file.read()
     content_type = file.content_type or "application/pdf"
@@ -86,8 +96,9 @@ def upload_waz(pm_id):
     url = upload_waz_to_project_folder(
         project.sharepoint_drive_id,
         project.sharepoint_folder_id,
-        heat_no, certificate_no,
-        file_content, content_type
+        file_name,
+        file_content,
+        content_type,
     )
 
     if url:

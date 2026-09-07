@@ -385,7 +385,7 @@ def get_home_page():
 
 @page_views_bp.route("/materials", methods=["GET"])
 def get_materials_page():
-    """Single SQL round-trip for Global Materials master page."""
+    """Single SQL round-trip for Materials page with pipeline materials, WAZ numbers, projects, and clients."""
     c_rows = db.session.execute(db.text("""
         SELECT id, name, street, zip_code, location, remarks, archived
         FROM weldoc_clients WHERE archived = 0 ORDER BY name
@@ -396,8 +396,7 @@ def get_materials_page():
                p.description, p.status, p.archived, p.sharepoint_drive_id,
                p.sharepoint_folder_id, p.sharepoint_folder_url
         FROM weldoc_projects p
-        JOIN weldoc_clients c ON p.client_id = c.id
-        WHERE p.archived = 0 AND c.archived = 0
+        WHERE p.archived = 0
         ORDER BY p.id DESC
     """)).fetchall()
 
@@ -405,16 +404,22 @@ def get_materials_page():
         SELECT pl.id, pl.project_id, pl.no, pl.plant, pl.status, pl.doc_iso, pl.doc_builder,
                pl.doc_final, pl.welding_start, pl.welding_end, pl.welding_remarks, pl.archived
         FROM weldoc_pipelines pl
-        JOIN weldoc_projects p ON pl.project_id = p.id
-        JOIN weldoc_clients c ON p.client_id = c.id
-        WHERE pl.archived = 0 AND p.archived = 0 AND c.archived = 0
+        WHERE pl.archived = 0
         ORDER BY pl.id DESC
     """)).fetchall()
 
-    gm_rows = db.session.execute(db.text("""
-        SELECT id, category, dn1, dn2, dn3, dn4, dn5, dn6, diameter,
-               thickness, surface, item_description, material_code, dien_no, archived
-        FROM weldoc_global_materials WHERE archived = 0 ORDER BY category, item_description
+    mat_rows = db.session.execute(db.text("""
+        SELECT pm.id, pm.pipeline_id, pm.position, pm.waz_no, pm.waz_package_url,
+               pm.start_of_plumbing, pm.end_of_plumbing, pm.archived,
+               gm.category, gm.item_description,
+               gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6, gm.diameter,
+               gm.thickness, gm.surface, gm.material_code, gm.dien_no,
+               proj.certificate, proj.heat_no, proj.waz_pdf_url
+        FROM weldoc_pipeline_materials pm
+        LEFT JOIN weldoc_project_materials proj ON pm.project_material_id = proj.id
+        LEFT JOIN weldoc_global_materials gm ON proj.global_material_id = gm.id
+        WHERE pm.archived = 0
+        ORDER BY pm.position
     """)).fetchall()
 
     return jsonify({
@@ -422,15 +427,19 @@ def get_materials_page():
         "projects": [_ser_project(r) for r in pr_rows],
         "pipelines": [_ser_pipeline(r) for r in pl_rows],
         "materials": [{
-            "id": r.id, "category": r.category, "piece": r.category,
-            "dn1": r.dn1, "dimension": r.dn1, "dn2": r.dn2, "dimension2": r.dn2,
-            "dn3": r.dn3, "dimension3": r.dn3, "dn4": r.dn4, "dimension4": r.dn4,
-            "dn5": r.dn5, "dimension5": r.dn5, "dn6": r.dn6, "dimension6": r.dn6,
-            "diameter": r.diameter, "thickness": r.thickness,
-            "surface": r.surface, "itemDescription": r.item_description,
-            "materialCode": r.material_code, "dienNo": r.dien_no,
-            "archived": r.archived,
-        } for r in gm_rows],
+            "id": r.id, "pipelineId": r.pipeline_id, "position": r.position,
+            "piece": r.category or "", "dimension": r.dn1 or "",
+            "dimension2": r.dn2 or "", "dimension3": r.dn3 or "",
+            "dimension4": r.dn4 or "", "dimension5": r.dn5 or "",
+            "dimension6": r.dn6 or "", "dienNo": r.dien_no or "",
+            "materialCode": r.material_code or "", "diameter": r.diameter or "",
+            "thickness": r.thickness or "", "surface": r.surface or "",
+            "itemDescription": r.item_description or "", "certificate": r.certificate or "",
+            "heatNo": r.heat_no or "", "wazNo": r.waz_no or "",
+            "wazPdfUrl": r.waz_pdf_url or "", "wazPackageUrl": r.waz_package_url or "",
+            "startOfPlumbing": bool(r.start_of_plumbing),
+            "endOfPlumbing": bool(r.end_of_plumbing), "archived": bool(r.archived),
+        } for r in mat_rows],
     })
 
 
@@ -504,4 +513,97 @@ def get_archive_page():
             "endoscopyImageUrl": w.endoscopy_image_url, "remarks": w.remarks,
             "archived": bool(w.archived),
         } for w in weld_rows],
+    })
+
+
+@page_views_bp.route("/material-usage", methods=["GET"])
+def get_material_usage_page():
+    """Single ultra-fast SQL query with JOINs for Material Usage / Details page."""
+    piece = request.args.get("piece")
+    desc = request.args.get("desc")
+    dn = request.args.get("dn")
+    dien = request.args.get("dien")
+    dia = request.args.get("dia")
+    thk = request.args.get("thk")
+    code = request.args.get("code")
+
+    sql_conds = ["pm.archived = 0"]
+    params = {}
+    if piece:
+        sql_conds.append("gm.category = :piece")
+        params["piece"] = piece
+    if desc:
+        sql_conds.append("gm.item_description = :desc")
+        params["desc"] = desc
+    if dn:
+        sql_conds.append("gm.dn1 = :dn")
+        params["dn"] = dn
+    if dien:
+        sql_conds.append("(gm.dien_no = :dien OR :dien = '')")
+        params["dien"] = dien
+    if dia:
+        sql_conds.append("(gm.diameter = :dia OR :dia = '')")
+        params["dia"] = dia
+    if thk:
+        sql_conds.append("(gm.thickness = :thk OR :thk = '')")
+        params["thk"] = thk
+    if code:
+        sql_conds.append("gm.material_code = :code")
+        params["code"] = code
+
+    where_clause = " AND ".join(sql_conds)
+
+    rows = db.session.execute(db.text(f"""
+        SELECT pm.id, pm.pipeline_id, pm.position, pm.waz_no, pm.waz_package_url,
+               pm.start_of_plumbing, pm.end_of_plumbing, pm.archived,
+               gm.category, gm.item_description,
+               gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6, gm.diameter,
+               gm.thickness, gm.surface, gm.material_code, gm.dien_no,
+               proj.certificate, proj.heat_no, proj.waz_pdf_url,
+               pl.no as pipeline_no, pl.project_id,
+               pr.title as project_title, pr.client_id,
+               c.name as client_name
+        FROM weldoc_pipeline_materials pm
+        LEFT JOIN weldoc_project_materials proj ON pm.project_material_id = proj.id
+        LEFT JOIN weldoc_global_materials gm ON proj.global_material_id = gm.id
+        LEFT JOIN weldoc_pipelines pl ON pm.pipeline_id = pl.id
+        LEFT JOIN weldoc_projects pr ON pl.project_id = pr.id
+        LEFT JOIN weldoc_clients c ON pr.client_id = c.id
+        WHERE {where_clause}
+        ORDER BY pm.position
+    """), params).fetchall()
+
+    clients_map = {}
+    projects_map = {}
+    pipelines_map = {}
+    materials_list = []
+
+    for r in rows:
+        if r.client_id and r.client_id not in clients_map:
+            clients_map[r.client_id] = {"id": r.client_id, "name": r.client_name or "", "archived": False}
+        if r.project_id and r.project_id not in projects_map:
+            projects_map[r.project_id] = {"id": r.project_id, "clientId": r.client_id, "title": r.project_title or "", "archived": False}
+        if r.pipeline_id and r.pipeline_id not in pipelines_map:
+            pipelines_map[r.pipeline_id] = {"id": r.pipeline_id, "projectId": r.project_id, "no": r.pipeline_no or "", "archived": False}
+
+        materials_list.append({
+            "id": r.id, "pipelineId": r.pipeline_id, "position": r.position,
+            "piece": r.category or "", "dimension": r.dn1 or "",
+            "dimension2": r.dn2 or "", "dimension3": r.dn3 or "",
+            "dimension4": r.dn4 or "", "dimension5": r.dn5 or "",
+            "dimension6": r.dn6 or "", "dienNo": r.dien_no or "",
+            "materialCode": r.material_code or "", "diameter": r.diameter or "",
+            "thickness": r.thickness or "", "surface": r.surface or "",
+            "itemDescription": r.item_description or "", "certificate": r.certificate or "",
+            "heatNo": r.heat_no or "", "wazNo": r.waz_no or "",
+            "wazPdfUrl": r.waz_pdf_url or "", "wazPackageUrl": r.waz_package_url or "",
+            "startOfPlumbing": bool(r.start_of_plumbing),
+            "endOfPlumbing": bool(r.end_of_plumbing), "archived": bool(r.archived),
+        })
+
+    return jsonify({
+        "clients": list(clients_map.values()),
+        "projects": list(projects_map.values()),
+        "pipelines": list(pipelines_map.values()),
+        "materials": materials_list,
     })

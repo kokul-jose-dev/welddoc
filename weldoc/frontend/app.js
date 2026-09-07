@@ -245,11 +245,33 @@ function hasThickness(piece){ return PIECE_HAS_THICKNESS[(piece||'').toLowerCase
 const DIMENSION_OPTIONS = ["DN 8","DN 10","DN 15","DN 20","DN 25","DN 32","DN 40","DN 50","DN 65","DN 80","DN 100","DN 125","DN 150","DN 200","DN 250","DN 300","DN 350","DN 400","DN 450","DN 500","DN 550","DN 600","DN 700","DN 800","DN 900"];
 const CERT_OPTIONS = ["EN 10204 3.1","EN 10204 3.2","EN 10204 2.2"];
 const PROC_OPTIONS = ["141","147"];
+const DEFAULT_WPS_PROCESSES = [
+  { wpsNo: "SP2", process: "141" },
+  { wpsNo: "SP5", process: "135" },
+  { wpsNo: "SP6", process: "136" },
+  { wpsNo: "SP13", process: "141" },
+  { wpsNo: "SP14", process: "147" },
+  { wpsNo: "VP7", process: "135 / 136" },
+  { wpsNo: "VP7", process: "135" },
+  { wpsNo: "VP7", process: "136" },
+  { wpsNo: "VP9", process: "141 / 136" },
+  { wpsNo: "VP9", process: "141" },
+  { wpsNo: "VP9", process: "136" },
+  { wpsNo: "VP11", process: "145" },
+  { wpsNo: "VP14", process: "142" },
+  { wpsNo: "VP14.1", process: "142" },
+  { wpsNo: "VP15", process: "141" },
+  { wpsNo: "VP16.1", process: "141" },
+  { wpsNo: "VP17", process: "141" },
+  { wpsNo: "VP18", process: "136" },
+  { wpsNo: "VP21", process: "145" }
+];
 
 /* ================================================================ PERSISTENCE ================================================================ */
 let DB = null;
 function saveDB(){ /* no-op: data is in Azure SQL now */ }
-function initDB(){ DB = DB || { clients:[], projects:[], people:[], certificates:[], pipelines:[], materials:[], welds:[], globalMaterials:[], projectMaterials:[], globalMaterialCount:0, counters:{ client:1, project:1, person:1, cert:1, pipeline:1, material:1, weld:1 } };
+function initDB(){ DB = DB || { clients:[], projects:[], people:[], certificates:[], pipelines:[], materials:[], welds:[], globalMaterials:[], projectMaterials:[], wpsProcesses:[...DEFAULT_WPS_PROCESSES], globalMaterialCount:0, counters:{ client:1, project:1, person:1, cert:1, pipeline:1, material:1, weld:1 } };
+  if(DB && (!DB.wpsProcesses || !DB.wpsProcesses.length)) DB.wpsProcesses = [...DEFAULT_WPS_PROCESSES];
 }
 
 /* ---- role / current-user (mockup auth) ---- */
@@ -566,11 +588,23 @@ function buildSelectOther(selectId, textId, options, value, noOther){
   else { sel.value=value||''; txt.style.display='none'; txt.value=''; }
 }
 function toggleSelectOther(selectId, textId){ const sel=document.getElementById(selectId), txt=document.getElementById(textId); if(sel.value==='__other__'){ txt.style.display='block'; txt.focus(); } else { txt.style.display='none'; } }
-function readSelectOther(selectId, textId){ const sel=document.getElementById(selectId); return sel.value==='__other__'?document.getElementById(textId).value.trim():sel.value; }
+function readSelectOther(selectId, textId){ const sel=document.getElementById(selectId); if(!sel) return ''; const txt=document.getElementById(textId); return sel.value==='__other__'? (txt ? txt.value.trim() : '') : sel.value; }
 
 /* ---- checklist helper ---- */
 function buildPersonChecklist(containerId, selectedIds){
-  document.getElementById(containerId).innerHTML = people().map(p=>`<label class="check-item"><input type="checkbox" value="${p.id}" ${selectedIds.includes(p.id)?'checked':''}> ${escapeHtml(p.name)} · No. ${escapeHtml(p.no)}</label>`).join('');
+  document.getElementById(containerId).innerHTML = people().map(p=>{
+    const certs = personCerts(p.id);
+    const rank = personCertRank(p.id);
+    let badge = '';
+    if(certs.length === 0){
+      badge = ` <span class="cpill cpill-expired" style="margin-left:6px;font-size:0.75rem;padding:2px 6px;">⚠️ ${t('no_cert_on_file','No certificate')}</span>`;
+    } else if(rank === 'expired'){
+      badge = ` <span class="cpill cpill-expired" style="margin-left:6px;font-size:0.75rem;padding:2px 6px;">⚠️ ${t('cert_expired','Expired')}</span>`;
+    } else if(rank === 'expiring'){
+      badge = ` <span class="cpill cpill-expiring" style="margin-left:6px;font-size:0.75rem;padding:2px 6px;">⏳ ${t('cert_expiring','Expiring')}</span>`;
+    }
+    return `<label class="check-item"><input type="checkbox" value="${p.id}" ${selectedIds.includes(p.id)?'checked':''}> ${escapeHtml(p.name)} · No. ${escapeHtml(p.no)}${badge}</label>`;
+  }).join('');
 }
 function getChecked(containerId){ return [...document.querySelectorAll('#'+containerId+' input:checked')].map(i=>Number(i.value)); }
 
@@ -740,6 +774,9 @@ function renderChrome(activeNav, breadcrumbHtml){
     }).catch(()=>{});
   }
 
+  const activeClient = PAGE.clientId ? String(PAGE.clientId) : getSharedClientFilter();
+  const activeProject = PAGE.projectId ? String(PAGE.projectId) : getSharedProjectFilter();
+
   document.getElementById('chrome').innerHTML = `
     <div class="accent-bar"></div>
     <header class="topbar">
@@ -766,8 +803,8 @@ function renderChrome(activeNav, breadcrumbHtml){
       <div class="nav-section-label" data-i18n="nav_workspace">${t('nav_workspace','Workspace')}</div>
       ${nav('home',t('nav_home','Home'),'home.html',false)}
       ${nav('clients',t('clients','Clients'),'index.html',true)}
-      ${nav('projects',t('projects','Projects'),'projects.html'+(PAGE.clientId?'?client='+PAGE.clientId:''),true)}
-      ${nav('pipelines',t('pipelines','Pipelines'),'pipelines.html'+(PAGE.projectId?'?project='+PAGE.projectId:(PAGE.clientId?'?client='+PAGE.clientId:'')),true)}
+      ${nav('projects',t('projects','Projects'),'projects.html'+(activeClient?'?client='+activeClient:''),true)}
+      ${nav('pipelines',t('pipelines','Pipelines'),'pipelines.html'+(activeProject?'?project='+activeProject:(activeClient?'?client='+activeClient:'')),true)}
       <div class="nav-section-label" data-i18n="nav_documents">${t('nav_documents','Documents')}</div>
       ${nav('materials',t('nav_materials','Materials'),'materials.html',true)}
       ${nav('welders',t('welders','Welders'),'welders.html',true)}
@@ -841,7 +878,7 @@ function mountModals(){
 
   <div class="modal-overlay" id="modal-welder"><div class="modal modal-wide">
     <button class="modal-close" onclick="closeModal('modal-welder')">&times;</button><h2 id="modal-welder-title" data-i18n="new_welder">New welder</h2>
-    <form id="welder-form"><div class="form-grid">
+    <form id="welder-form" onsubmit="submitWelderModal(event); return false;" novalidate><div class="form-grid">
       <label class="field"><span class="lbl" data-i18n="welder_name">Welder name <span class="req">*</span></span><input type="text" id="input-w-name" required></label>
       <label class="field"><span class="lbl" data-i18n="welder_no">Welder number <span class="req">*</span></span><input type="text" id="input-w-no" required></label>
       <div class="field wide">
@@ -869,7 +906,7 @@ function mountModals(){
         <button type="button" class="inline-add-toggle" onclick="addWelderCertRow()" data-i18n="add_another_certificate">+ Add another certificate</button>
       </div>
       <button type="button" class="inline-add-toggle" id="w-cert-add-btn" onclick="showWelderCertSection()" style="text-align:left;grid-column:1/-1;" data-i18n="add_certificate">+ Add certificate</button>
-    </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-welder')" data-i18n="cancel">Cancel</button><button type="submit" class="btn btn-primary" data-i18n="save_welder">Save welder</button></div></form>
+    </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-welder')" data-i18n="cancel">Cancel</button><button type="button" id="welder-submit-btn" class="btn btn-primary" onclick="submitWelderModal(event)" data-i18n="save_welder">Save welder</button></div></form>
   </div></div>
 
   <div class="modal-overlay" id="modal-weld"><div class="modal modal-wide">
@@ -919,12 +956,18 @@ function mountModals(){
   <div class="modal-overlay" id="modal-renew"><div class="modal modal-small">
     <button class="modal-close" onclick="closeModal('modal-renew')">&times;</button><h2 data-i18n="renew_cert_title">Renew certificate</h2>
     <p id="renew-text"></p>
-    <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="cert_no">Certificate number <span class="req">*</span></span><input type="text" id="renew-certno" required></label>
+    <div class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="wps_no">WPS No. <span class="req">*</span></span>
+      <select id="renew-wps-sel" onchange="onRenewWpsChange()"></select>
+      <input type="text" id="renew-wps-new" class="select-other-text" style="display:none;margin-top:4px;" placeholder="e.g. SP2/VP14" data-i18n-placeholder="wps_no_placeholder" oninput="onRenewWpsNewInput()">
+    </div>
+    <div class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="qualified_processes">Qualified processes <span class="req">*</span></span>
+      <div id="renew-procs-wrap"><input type="text" id="renew-procs" placeholder="e.g. 141 / 142"></div>
+    </div>
     <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="new_valid_until">New valid until <span class="req">*</span></span><input type="date" id="renew-valid" required></label>
     <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="next_renewal_due">Next renewal due <span class="req">*</span></span><input type="date" id="renew-renewal" required></label>
     <label class="field"><span class="lbl" data-i18n="renewal_attachment">Renewal attachment (→ SharePoint) <span class="req">*</span></span><input type="file" id="renew-file" accept="application/pdf"></label>
     <div class="field-hint" data-i18n="renew_cert_hint">The uploaded PDF is stored in SharePoint; all fields are required.</div>
-    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('modal-renew')" data-i18n="cancel">Cancel</button><button class="btn btn-primary" onclick="confirmRenew()" data-i18n="confirm_renewal">Confirm renewal</button></div>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('modal-renew')" data-i18n="cancel">Cancel</button><button id="renew-confirm-btn" class="btn btn-primary" onclick="confirmRenew()" data-i18n="confirm_renewal">Confirm renewal</button></div>
   </div></div>
 
   <div class="modal-overlay" id="modal-people"><div class="modal modal-small">
@@ -1164,63 +1207,8 @@ function attachFormHandlers(){
       setButtonLoading(submitBtn, false);
     }
   });
-  document.getElementById('welder-form').addEventListener('submit',async e=>{
-    e.preventDefault();
-    const submitBtn=e.target.querySelector('[type="submit"]');
-    if(submitBtn.disabled) return;
-    submitBtn.disabled=true;
-    const data={ name:val('input-w-name'), no:val('input-w-no') };
-    const certs=getWelderCertRows();
-    if(certs._validationError){
-      alert(certs._validationError);
-      submitBtn.disabled=false;
-      return;
-    }
-    if(editingWelderId===null && !certs.length){
-      alert(t('at_least_one_cert_required','At least one certificate is required.'));
-      submitBtn.disabled=false;
-      return;
-    }
-    try {
-      const welderPayload=editingWelderId!==null?{id:editingWelderId,...data}:data;
-      if(_welderSignatureRemoved) welderPayload.signatureUrl = '';
-      const savedWelder=await apiPost('/welders', welderPayload);
-      const personId=savedWelder.id;
-      if(_welderSignatureFile){
-        const sigData = new FormData();
-        sigData.append('file', _welderSignatureFile);
-        const sigResp = await fetch(`/api/welders/${personId}/upload-signature`, { method: 'POST', body: sigData });
-        if(!sigResp.ok){
-          const errData = await sigResp.json().catch(()=>({}));
-          alert(t('sig_upload_failed','Signature upload failed:')+' '+(errData.error||sigResp.statusText));
-        }
-      }
-      for(const c of certs){
-        const certPayload={certNo:c.certNo, process:c.process, standard:c.standard, validUntil:c.validUntil, renewalDue:c.renewalDue};
-        const savedCert=await apiPost(`/welders/${personId}/certificates`, certPayload);
-        const row=[...document.querySelectorAll('#w-cert-rows .w-cert-row')].find(r=>{
-          const cn=(r.querySelector('[id^="wc-certno-"]')||{}).value?.trim();
-          return cn===c.certNo;
-        });
-        if(row){
-          const fileInput=row.querySelector('[id^="wc-file-"]');
-          if(fileInput&&fileInput.files&&fileInput.files[0]){
-            const formData=new FormData();
-            formData.append('file', fileInput.files[0]);
-            await fetch(`/api/welders/certificates/${savedCert.id}/upload`,{method:'POST',body:formData});
-          }
-        }
-      }
-      await loadWeldersFromApi();
-      closeModal('modal-welder');
-      if(welderReturnToWeld){ welderReturnToWeld=false;
-        if(document.getElementById('modal-weld').classList.contains('open')){ buildPersonChecklist('input-weld-welders',getChecked('input-weld-welders')); buildPersonChecklist('input-weld-inspectors',getChecked('input-weld-inspectors')); }
-        if(document.getElementById('modal-pipeline').classList.contains('open')){ buildPersonChecklist('input-pl-welders',getChecked('input-pl-welders')); buildPersonChecklist('input-pl-inspectors',getChecked('input-pl-inspectors')); }
-      }
-      rerenderPage();
-    } catch(ex){ alert('Error saving welder: '+ex.message); }
-    finally { submitBtn.disabled=false; }
-  });
+  const welderForm = document.getElementById('welder-form');
+  if(welderForm) welderForm.addEventListener('submit', submitWelderModal);
   document.getElementById('export-final-form')?.addEventListener('submit', async e => {
     e.preventDefault();
     if(!_exportingPipelineId) return;
@@ -1557,7 +1545,144 @@ function removeWelderSignature(){
   if(wrap) wrap.style.display = '';
 }
 
-function openWelderModal(id=null, returnToWeld=false){
+function getDistinctWpsNos(){
+  const list = DB.wpsProcesses || [];
+  const set = new Set();
+  const res = [];
+  list.forEach(item => {
+    const w = (item.wpsNo || '').trim();
+    if(w && !set.has(w.toUpperCase())){
+      set.add(w.toUpperCase());
+      res.push(w);
+    }
+  });
+  return res.sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
+}
+
+function getProcessesForWps(wpsNo){
+  if(!wpsNo) return [];
+  const list = DB.wpsProcesses || [];
+  const clean = wpsNo.trim().toLowerCase();
+  const matches = list.filter(item => (item.wpsNo || '').trim().toLowerCase() === clean);
+  const procs = [];
+  const set = new Set();
+  matches.forEach(m => {
+    const p = (m.process || '').trim();
+    if(p && !set.has(p)){
+      set.add(p);
+      procs.push(p);
+    }
+    if(p && p.includes('/')){
+      const parts = p.split('/').map(x => x.trim()).filter(Boolean);
+      parts.forEach(part => {
+        if(!set.has(part)){
+          set.add(part);
+          procs.push(part);
+        }
+      });
+    }
+  });
+  return procs;
+}
+
+async function submitWelderModal(e){
+  if(e) e.preventDefault();
+  const submitBtn = document.getElementById('welder-submit-btn') || document.querySelector('#modal-welder [type="submit"]') || document.querySelector('#modal-welder .btn-primary');
+  if(submitBtn && submitBtn.disabled) return;
+  const name = val('input-w-name');
+  const no = val('input-w-no');
+  if(!name){
+    alert(t('welder_name_required','Welder name is required.'));
+    document.getElementById('input-w-name').focus();
+    return;
+  }
+  if(!no){
+    alert(t('welder_no_required','Welder number is required.'));
+    document.getElementById('input-w-no').focus();
+    return;
+  }
+  const certs = getWelderCertRows();
+  if(certs._validationError){
+    alert(certs._validationError);
+    return;
+  }
+  if(editingWelderId === null && !certs.length){
+    alert(t('at_least_one_cert_required','At least one certificate is required.'));
+    return;
+  }
+  setButtonLoading(submitBtn, true, t('saving', 'Saving…'));
+  const data = { name, no };
+  try {
+    const welderPayload = editingWelderId !== null ? {id: editingWelderId, ...data} : data;
+    if(_welderSignatureRemoved) welderPayload.signatureUrl = '';
+    const savedWelder = await apiPost('/welders', welderPayload);
+    const personId = savedWelder.id;
+    const uploadTasks = [];
+
+    if(_welderSignatureFile){
+      const sigData = new FormData();
+      sigData.append('file', _welderSignatureFile);
+      uploadTasks.push(
+        fetch(`/api/welders/${personId}/upload-signature`, { method: 'POST', body: sigData })
+          .then(async resp => {
+            if(!resp.ok){
+              const errData = await resp.json().catch(()=>({}));
+              console.warn('Signature upload error:', errData.error || resp.statusText);
+            }
+          })
+      );
+    }
+
+    const rows = [...document.querySelectorAll('#w-cert-rows .w-cert-row')];
+    for(let i = 0; i < certs.length; i++){
+      const c = certs[i];
+      const certPayload = {certNo: c.certNo, process: c.process, standard: c.standard, validUntil: c.validUntil, renewalDue: c.renewalDue};
+      const savedCert = await apiPost(`/welders/${personId}/certificates`, certPayload);
+      const row = rows[i];
+      if(row){
+        const fileInput = row.querySelector('input[type="file"]');
+        if(fileInput && fileInput.files && fileInput.files[0]){
+          const formData = new FormData();
+          formData.append('file', fileInput.files[0]);
+          uploadTasks.push(
+            fetch(`/api/welders/certificates/${savedCert.id}/upload`, {method: 'POST', body: formData})
+          );
+        }
+      }
+    }
+
+    if(uploadTasks.length){
+      setButtonLoading(submitBtn, true, t('uploading_sp', 'Uploading to SharePoint…'));
+      await Promise.all(uploadTasks);
+    }
+
+    await loadWeldersFromApi();
+    closeModal('modal-welder');
+    if(welderReturnToWeld){
+      welderReturnToWeld = false;
+      if(document.getElementById('modal-weld').classList.contains('open')){
+        buildPersonChecklist('input-weld-welders', getChecked('input-weld-welders'));
+        buildPersonChecklist('input-weld-inspectors', getChecked('input-weld-inspectors'));
+      }
+      if(document.getElementById('modal-pipeline').classList.contains('open')){
+        buildPersonChecklist('input-pl-welders', getChecked('input-pl-welders'));
+        buildPersonChecklist('input-pl-inspectors', getChecked('input-pl-inspectors'));
+      }
+    }
+    rerenderPage();
+  } catch(ex){
+    console.error('Error saving welder:', ex);
+    alert('Error saving welder: ' + ex.message);
+  } finally {
+    setButtonLoading(submitBtn, false);
+  }
+}
+
+async function openWelderModal(id=null, returnToWeld=false){
+  if(!DB.wpsProcesses || !DB.wpsProcesses.length){
+    DB.wpsProcesses = [...DEFAULT_WPS_PROCESSES];
+  }
+  loadWpsProcessesFromApi();
   welderReturnToWeld=!!returnToWeld; editingWelderId=(typeof id==='number')?id:null; document.getElementById('welder-form').reset();
   _welderSignatureFile = null;
   _welderSignatureRemoved = false;
@@ -1600,11 +1725,26 @@ function showWelderCertSection(){
 }
 function addWelderCertRow(){
   _wCertIdx++;
+  const wpsOpts = getDistinctWpsNos();
+  const wpsOptionsHtml = wpsOpts.map(w => `<option value="${escapeHtml(w)}">${escapeHtml(w)}</option>`).join('');
   const html=`<div class="w-cert-row" style="border:1px solid var(--border);border-radius:4px;padding:12px;margin-bottom:10px;background:#F9FAFB;">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;">
-      <label class="field"><span class="lbl">${t('cert_no','Certificate number')} <span class="req">*</span></span><input type="text" id="wc-certno-${_wCertIdx}" placeholder="e.g. Q-PZ-26-0141"></label>
+      <div class="field">
+        <span class="lbl">${t('wps_no','WPS No.')} <span class="req">*</span></span>
+        <select id="wc-wps-${_wCertIdx}" onchange="onWpsSelectChange('${_wCertIdx}')">
+          <option value="">—</option>
+          ${wpsOptionsHtml}
+          <option value="__other__">${t('new_wps_no','+ New WPS No. (type it)…')}</option>
+        </select>
+        <input type="text" id="wc-wps-new-${_wCertIdx}" class="select-other-text" style="display:none;margin-top:4px;" placeholder="${t('wps_no_placeholder','e.g. SP2/VP14')}" oninput="onWpsNewInput('${_wCertIdx}')">
+      </div>
       <div class="field"><span class="lbl">${t('th_standard','Standard')} <span class="req">*</span></span><select id="wc-std-${_wCertIdx}" onchange="toggleSelectOther('wc-std-${_wCertIdx}','wc-std-new-${_wCertIdx}')"><option value="">—</option><option value="EN ISO 9606-1">EN ISO 9606-1</option><option value="EN ISO 14732">EN ISO 14732</option><option value="__other__">+ Other (type it)…</option></select><input type="text" id="wc-std-new-${_wCertIdx}" class="select-other-text" style="display:none" placeholder="Type standard…"></div>
-      <label class="field"><span class="lbl">${t('qualified_processes','Qualified processes')} <span class="req">*</span></span><input type="text" id="wc-procs-${_wCertIdx}" placeholder="e.g. 141 / 142"></label>
+      <div class="field">
+        <span class="lbl">${t('qualified_processes','Qualified processes')} <span class="req">*</span></span>
+        <div id="wc-procwrap-${_wCertIdx}">
+          <input type="text" id="wc-procs-${_wCertIdx}" placeholder="e.g. 141 / 142">
+        </div>
+      </div>
       <label class="field"><span class="lbl">${t('th_valid_until','Valid until')} <span class="req">*</span></span><input type="date" id="wc-valid-${_wCertIdx}"></label>
       <label class="field"><span class="lbl">${t('th_renewal_due','Renewal due')} <span class="req">*</span></span><input type="date" id="wc-renewal-${_wCertIdx}"></label>
       <label class="field"><span class="lbl">${t('cert_pdf_sp','Certificate PDF (→ SharePoint)')} <span class="req">*</span></span><input type="file" id="wc-file-${_wCertIdx}" accept="application/pdf"></label>
@@ -1613,28 +1753,98 @@ function addWelderCertRow(){
   </div>`;
   document.getElementById('w-cert-rows').insertAdjacentHTML('beforeend',html);
 }
+
+function onWpsSelectChange(idx){
+  const sel = document.getElementById(`wc-wps-${idx}`);
+  const inpNew = document.getElementById(`wc-wps-new-${idx}`);
+  if(!sel) return;
+  const isOther = sel.value === '__other__';
+  if(inpNew){
+    inpNew.style.display = isOther ? '' : 'none';
+    if(isOther) inpNew.focus();
+  }
+  const wpsVal = isOther ? (inpNew ? inpNew.value.trim() : '') : sel.value;
+  updateProcFieldForWps(idx, wpsVal);
+}
+
+function onWpsNewInput(idx){
+  const inpNew = document.getElementById(`wc-wps-new-${idx}`);
+  const wpsVal = inpNew ? inpNew.value.trim() : '';
+  updateProcFieldForWps(idx, wpsVal);
+}
+
+function updateProcFieldForWps(idx, wpsVal){
+  const wrap = document.getElementById(`wc-procwrap-${idx}`);
+  if(!wrap) return;
+  const procs = getProcessesForWps(wpsVal);
+  if(procs.length > 1){
+    wrap.innerHTML = `<select id="wc-proc-sel-${idx}" onchange="toggleSelectOther('wc-proc-sel-${idx}','wc-procs-${idx}')">
+      ${procs.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('')}
+      <option value="__other__">${t('other_custom','+ Other (type it)…')}</option>
+    </select>
+    <input type="text" id="wc-procs-${idx}" class="select-other-text" style="display:none;margin-top:4px;" placeholder="e.g. 141 / 142">`;
+  } else if(procs.length === 1){
+    wrap.innerHTML = `<input type="text" id="wc-procs-${idx}" value="${escapeHtml(procs[0])}" placeholder="e.g. 141 / 142">`;
+  } else {
+    wrap.innerHTML = `<input type="text" id="wc-procs-${idx}" value="" placeholder="e.g. 141 / 142">`;
+  }
+}
+
 function getWelderCertRows(){
   const rows=document.querySelectorAll('#w-cert-rows .w-cert-row');
   const certs=[];
   let validationError='';
   rows.forEach((row,idx)=>{
-    const certNo=(row.querySelector('[id^="wc-certno-"]')||{}).value?.trim()||'';
-    const stdSel=row.querySelector('[id^="wc-std-"]');
-    const stdNew=row.querySelector('[id^="wc-std-new-"]');
-    const std=stdSel&&stdNew?readSelectOther(stdSel.id,stdNew.id):'';
-    const procs=(row.querySelector('[id^="wc-procs-"]')||{}).value?.trim()||'';
+    const wpsSel = row.querySelector('select[id^="wc-wps-"]');
+    const wpsNew = row.querySelector('input[id^="wc-wps-new-"]');
+    let certNo = '';
+    if(wpsSel && wpsNew && wpsSel.offsetParent !== null){
+      certNo = readSelectOther(wpsSel.id, wpsNew.id);
+    } else if(wpsSel){
+      certNo = wpsSel.value ? wpsSel.value.trim() : '';
+    } else if(wpsNew){
+      certNo = wpsNew.value ? wpsNew.value.trim() : '';
+    } else {
+      certNo = (row.querySelector('[id^="wc-certno-"]')||{}).value?.trim()||'';
+    }
+
+    const stdSel=row.querySelector('select[id^="wc-std-"]');
+    const stdNew=row.querySelector('input[id^="wc-std-new-"]');
+    let std = '';
+    if(stdSel && stdNew && stdSel.offsetParent !== null){
+      std = readSelectOther(stdSel.id, stdNew.id);
+    } else if(stdSel){
+      std = stdSel.value ? stdSel.value.trim() : '';
+    } else if(stdNew){
+      std = stdNew.value ? stdNew.value.trim() : '';
+    }
+
+    const procSel = row.querySelector('select[id^="wc-proc-sel-"]');
+    const procInp = row.querySelector('input[id^="wc-procs-"]');
+    let procs = '';
+    if(procSel && procInp && procSel.offsetParent !== null){
+      procs = readSelectOther(procSel.id, procInp.id);
+    } else if(procInp){
+      procs = procInp.value ? procInp.value.trim() : '';
+    } else if(procSel){
+      procs = procSel.value ? procSel.value.trim() : '';
+    }
+
     const valid=(row.querySelector('[id^="wc-valid-"]')||{}).value||'';
     const renewal=(row.querySelector('[id^="wc-renewal-"]')||{}).value||'';
     const fileInput=row.querySelector('[id^="wc-file-"]');
     const fileName=fileInput&&fileInput.files&&fileInput.files[0]?fileInput.files[0].name:'';
-    /* validate all fields are filled */
-    if(!certNo) validationError='Certificate number is required.';
+
+    const hasAny = certNo || std || procs || valid || renewal || fileName;
+    if(!hasAny) return;
+
+    /* validate required fields for non-empty cert row */
+    if(!certNo) validationError=t('wps_no_required','WPS number is required.');
     else if(!std) validationError='Standard is required.';
     else if(!procs) validationError='Qualified processes is required.';
     else if(!valid) validationError='Valid until date is required.';
-    else if(!renewal) validationError='Renewal due date is required.';
-    else if(!fileName) validationError='Certificate PDF is required.';
-    if(certNo||std||procs||valid||renewal||fileName) certs.push({certNo,process:procs.split(/\s*\/\s*/)[0]||'',standard:std,procs,validUntil:valid,renewalDue:renewal,fileName});
+
+    certs.push({certNo, process: procs, standard: std, procs, validUntil: valid, renewalDue: renewal, fileName});
   });
   certs._validationError=validationError;
   return certs;
@@ -1981,7 +2191,6 @@ function openMaterialModal(id=null, returnToWeld=false){
   openModal('modal-material'); document.getElementById('input-mat-piece').focus();
 }
 
-/* ================================================================ RENEW ================================================================ */
 function openRenewModal(certId){
   renewingCertId=certId; const c=DB.certificates.find(x=>x.id===certId), p=getPerson(c.personId);
   const certHtml=`<strong>${escapeHtml(c.certNo)}</strong>`;
@@ -1989,18 +2198,97 @@ function openRenewModal(certId){
   const procHtml=escapeHtml(c.process||'');
   const stdHtml=escapeHtml(c.standard||'');
   document.getElementById('renew-text').innerHTML=t('renew_cert_subtitle','Renew certificate {cert} for {name} (process {process}, {standard}).').replace('{cert}',certHtml).replace('{name}',nameHtml).replace('{process}',procHtml).replace('{standard}',stdHtml);
-  setV('renew-certno',c.certNo); setV('renew-valid',c.validUntil||''); setV('renew-renewal',c.renewalDue||''); document.getElementById('renew-file').value='';
+  
+  // Populate renew WPS dropdown
+  const wpsOpts = getDistinctWpsNos();
+  const sel = document.getElementById('renew-wps-sel');
+  const inpNew = document.getElementById('renew-wps-new');
+  if(sel){
+    const hasCurrent = wpsOpts.some(w => w.toLowerCase() === (c.certNo || '').toLowerCase());
+    let optsHtml = '<option value="">—</option>' + wpsOpts.map(w => `<option value="${escapeHtml(w)}" ${w.toLowerCase() === (c.certNo||'').toLowerCase() ? 'selected' : ''}>${escapeHtml(w)}</option>`).join('');
+    optsHtml += `<option value="__other__" ${!hasCurrent && c.certNo ? 'selected' : ''}>${t('new_wps_no','+ New WPS No. (type it)…')}</option>`;
+    sel.innerHTML = optsHtml;
+    if(!hasCurrent && c.certNo){
+      if(inpNew){ inpNew.style.display = ''; inpNew.value = c.certNo; }
+    } else {
+      if(inpNew){ inpNew.style.display = 'none'; inpNew.value = ''; }
+    }
+  }
+
+  updateRenewProcField(c.certNo, c.process);
+
+  setV('renew-valid',c.validUntil||''); setV('renew-renewal',c.renewalDue||''); document.getElementById('renew-file').value='';
   openModal('modal-renew');
 }
+
+function onRenewWpsChange(){
+  const sel = document.getElementById('renew-wps-sel');
+  const inpNew = document.getElementById('renew-wps-new');
+  if(!sel) return;
+  const isOther = sel.value === '__other__';
+  if(inpNew){
+    inpNew.style.display = isOther ? '' : 'none';
+    if(isOther) inpNew.focus();
+  }
+  const wpsVal = isOther ? (inpNew ? inpNew.value.trim() : '') : sel.value;
+  updateRenewProcField(wpsVal);
+}
+
+function onRenewWpsNewInput(){
+  const inpNew = document.getElementById('renew-wps-new');
+  const wpsVal = inpNew ? inpNew.value.trim() : '';
+  updateRenewProcField(wpsVal);
+}
+
+function updateRenewProcField(wpsVal, prefillProc){
+  const wrap = document.getElementById('renew-procs-wrap');
+  if(!wrap) return;
+  const procs = getProcessesForWps(wpsVal);
+  if(procs.length > 1){
+    const currentVal = prefillProc || procs[0];
+    const isOther = !procs.includes(currentVal) && !!currentVal;
+    wrap.innerHTML = `<select id="renew-proc-sel" onchange="toggleSelectOther('renew-proc-sel','renew-procs')">
+      ${procs.map(p => `<option value="${escapeHtml(p)}" ${p === currentVal ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+      <option value="__other__" ${isOther ? 'selected' : ''}>${t('other_custom','+ Other (type it)…')}</option>
+    </select>
+    <input type="text" id="renew-procs" class="select-other-text" style="${isOther ? '' : 'display:none;'}margin-top:4px;" value="${escapeHtml(currentVal||'')}" placeholder="e.g. 141 / 142">`;
+  } else if(procs.length === 1){
+    wrap.innerHTML = `<input type="text" id="renew-procs" value="${escapeHtml(prefillProc || procs[0])}" placeholder="e.g. 141 / 142">`;
+  } else {
+    wrap.innerHTML = `<input type="text" id="renew-procs" value="${escapeHtml(prefillProc || '')}" placeholder="e.g. 141 / 142">`;
+  }
+}
+
 async function confirmRenew(){
   const oldCert=DB.certificates.find(x=>x.id===renewingCertId);
   if(!oldCert) return;
-  const cn=val('renew-certno');
+  const wpsSel = document.getElementById('renew-wps-sel');
+  const wpsNew = document.getElementById('renew-wps-new');
+  let cn = '';
+  if(wpsSel && wpsNew){
+    cn = readSelectOther('renew-wps-sel', 'renew-wps-new');
+  } else {
+    cn = val('renew-certno');
+  }
+
+  const procSel = document.getElementById('renew-proc-sel');
+  const procInp = document.getElementById('renew-procs');
+  let procVal = '';
+  if(procSel && procInp && procSel.offsetParent !== null){
+    procVal = readSelectOther('renew-proc-sel', 'renew-procs');
+  } else if(procInp){
+    procVal = procInp.value.trim();
+  } else if(procSel){
+    procVal = procSel.value.trim();
+  }
+  if(!procVal) procVal = oldCert.process;
+
   const vu=val('renew-valid');
   const rd=val('renew-renewal');
   const f=document.getElementById('renew-file').files[0];
   /* Validate all fields */
-  if(!cn){ alert('Certificate number is required.'); return; }
+  if(!cn){ alert(t('wps_no_required','WPS number is required.')); return; }
+  if(!procVal){ alert('Qualified processes is required.'); return; }
   if(!vu){ alert('Valid until date is required.'); return; }
   if(!rd){ alert('Renewal due date is required.'); return; }
   if(!f){ alert('Renewal attachment PDF is required.'); return; }
@@ -2010,7 +2298,7 @@ async function confirmRenew(){
     /* Archive old certificate */
     await apiPost(`/welders/certificates/${oldCert.id}`, {archived:true});
     /* Create new certificate */
-    const newCert=await apiPost(`/welders/${oldCert.personId}/certificates`, {certNo:cn, process:oldCert.process, standard:oldCert.standard, validUntil:vu, renewalDue:rd});
+    const newCert=await apiPost(`/welders/${oldCert.personId}/certificates`, {certNo:cn, process:procVal, standard:oldCert.standard, validUntil:vu, renewalDue:rd});
     /* Upload PDF */
     const formData=new FormData();
     formData.append('file', f);
@@ -2337,13 +2625,26 @@ function renderClientDetail(){
 
 /* ================================================================ PROJECTS PAGE ================================================================ */
 let projectFilters={location:'',clientId:'',status:''};
+function updateProjectsCrumb(){
+  let crumb=t('projects','Projects');
+  if(projectFilters.clientId){
+    const c=getClient(Number(projectFilters.clientId));
+    if(c) crumb=`<a href="index.html">${t('clients','Clients')}</a> / ${escapeHtml(c.name)} / ${t('projects','Projects')}`;
+  }
+  return crumb;
+}
 async function initProjectsPage(){
   PAGE.name='projects'; initDB();
   const clientParam=qp('client');
-  let crumb=t('projects','Projects');
-  if(clientParam){ const c=getClient(Number(clientParam)); if(c){ projectFilters.clientId=clientParam; setSharedClientFilter(clientParam); crumb=`<a href="index.html">${t('clients','Clients')}</a> / ${escapeHtml(c.name)} / ${t('projects','Projects')}`; } }
-  else { const saved=getSharedClientFilter(); if(saved) projectFilters.clientId=saved; }
-  renderChrome('projects',crumb); mountModals(); wireModalDismiss();
+  if(clientParam){
+    projectFilters.clientId=clientParam;
+    setSharedClientFilter(clientParam);
+  } else {
+    const saved=getSharedClientFilter();
+    if(saved) projectFilters.clientId=saved;
+  }
+  PAGE.clientId = projectFilters.clientId ? Number(projectFilters.clientId) : null;
+  renderChrome('projects',updateProjectsCrumb()); mountModals(); wireModalDismiss();
   buildProjectFilters(); renderProjectsPage();
 
   try {
@@ -2351,6 +2652,7 @@ async function initProjectsPage(){
     DB.clients=data.clients||[];
     DB.pipelines=data.pipelines||[];
     DB.projects=normalizeProjects(data.projects||[]);
+    renderChrome('projects',updateProjectsCrumb());
     buildProjectFilters(); renderProjectsPage();
   } catch(e){ console.error('API error:', e); }
 }
@@ -2360,8 +2662,25 @@ function buildProjectFilters(){
   cliSel.innerHTML='<option value="">All clients</option>'+clients().map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
   locSel.value=projectFilters.location; cliSel.value=projectFilters.clientId; stSel.value=projectFilters.status;
 }
-function onProjectFilterChange(){ projectFilters.location=document.getElementById('filter-location').value; projectFilters.clientId=document.getElementById('filter-client').value; projectFilters.status=document.getElementById('filter-status').value; setSharedClientFilter(projectFilters.clientId); setSharedProjectFilter(''); renderProjectsPage(); }
-function clearProjectFilters(){ projectFilters={location:'',clientId:'',status:''}; setSharedClientFilter(''); setSharedProjectFilter(''); buildProjectFilters(); renderProjectsPage(); }
+function onProjectFilterChange(){
+  projectFilters.location=document.getElementById('filter-location').value;
+  projectFilters.clientId=document.getElementById('filter-client').value;
+  projectFilters.status=document.getElementById('filter-status').value;
+  PAGE.clientId = projectFilters.clientId ? Number(projectFilters.clientId) : null;
+  setSharedClientFilter(projectFilters.clientId);
+  setSharedProjectFilter('');
+  renderChrome('projects',updateProjectsCrumb());
+  renderProjectsPage();
+}
+function clearProjectFilters(){
+  projectFilters={location:'',clientId:'',status:''};
+  PAGE.clientId = null;
+  setSharedClientFilter('');
+  setSharedProjectFilter('');
+  renderChrome('projects',t('projects','Projects'));
+  buildProjectFilters();
+  renderProjectsPage();
+}
 function renderProjectsPage(){
   const by=s=>projects().filter(p=>p.status===s).length;
   document.getElementById('projects-stats').innerHTML=tile(projects().length,t('total_projects','Total projects'),'')+tile(by('not-started'),t('status_not_started','Not started'),'t-neutral')+tile(by('ongoing'),t('status_ongoing','Ongoing'),'t-copper')+tile(by('completed'),t('status_completed','Completed'),'t-success');
@@ -2383,24 +2702,48 @@ function renderProjectsPage(){
 /* ================================================================ PIPELINES PAGE ================================================================ */
 let pipeFilter=null;
 let pipeFilters={clientId:'',projectId:'',welderId:'',inspectorId:'',status:'',procedure:'',plant:'',search:''};
+function updatePipelinesCrumb(){
+  let crumb=t('pipelines','Pipelines');
+  if(pipeFilters.projectId){
+    const p=getProject(Number(pipeFilters.projectId));
+    if(p) crumb=`<a href="projects.html">${t('projects','Projects')}</a> / ${escapeHtml(p.title)} / ${t('pipelines','Pipelines')}`;
+  } else if(pipeFilters.clientId){
+    const c=getClient(Number(pipeFilters.clientId));
+    if(c) crumb=`<a href="index.html">${t('clients','Clients')}</a> / ${escapeHtml(c.name)} / ${t('pipelines','Pipelines')}`;
+  }
+  return crumb;
+}
 async function initPipelinesPage(){
   PAGE.name='pipelines'; initDB();
   const projectParam=qp('project'), clientParam=qp('client');
-  let crumb=t('pipelines','Pipelines');
-  if(projectParam){ const p=getProject(Number(projectParam)); if(p){ pipeFilters.projectId=projectParam; pipeFilters.clientId=String(p.clientId); setSharedProjectFilter(projectParam); setSharedClientFilter(String(p.clientId)); crumb=`<a href="projects.html">${t('projects','Projects')}</a> / ${escapeHtml(p.title)} / ${t('pipelines','Pipelines')}`; } }
-  else if(clientParam){ const c=getClient(Number(clientParam)); if(c){ pipeFilters.clientId=clientParam; setSharedClientFilter(clientParam); setSharedProjectFilter(''); crumb=`<a href="index.html">${t('clients','Clients')}</a> / ${escapeHtml(c.name)} / ${t('pipelines','Pipelines')}`; } }
-  else {
+  if(projectParam){
+    pipeFilters.projectId=projectParam;
+    setSharedProjectFilter(projectParam);
+    const p=getProject(Number(projectParam));
+    if(p){
+      pipeFilters.clientId=String(p.clientId);
+      setSharedClientFilter(String(p.clientId));
+    }
+  } else {
     const savedProject=getSharedProjectFilter();
-    const savedClient=getSharedClientFilter();
-    if(savedProject){ pipeFilters.projectId=savedProject; const p=getProject(Number(savedProject)); if(p) pipeFilters.clientId=String(p.clientId); }
-    else if(savedClient){ pipeFilters.clientId=savedClient; }
+    if(savedProject) pipeFilters.projectId=savedProject;
   }
+  if(clientParam){
+    pipeFilters.clientId=clientParam;
+    setSharedClientFilter(clientParam);
+  } else if(!pipeFilters.clientId){
+    const savedClient=getSharedClientFilter();
+    if(savedClient) pipeFilters.clientId=savedClient;
+  }
+  PAGE.clientId = pipeFilters.clientId ? Number(pipeFilters.clientId) : null;
+  PAGE.projectId = pipeFilters.projectId ? Number(pipeFilters.projectId) : null;
   pipeFilter=null;
-  renderChrome('pipelines',crumb); mountModals(); wireModalDismiss(); buildPipeFilters(); renderPipelinesPage();
+  renderChrome('pipelines',updatePipelinesCrumb()); mountModals(); wireModalDismiss(); buildPipeFilters(); renderPipelinesPage();
 
   try {
     const data = await apiGet('/page/pipelines');
     DB.clients=data.clients||[]; DB.projects=normalizeProjects(data.projects||[]); DB.pipelines=data.pipelines||[];
+    renderChrome('pipelines',updatePipelinesCrumb());
     buildPipeFilters(); renderPipelinesPage();
   } catch(e){ console.error('API error:', e); }
 }
@@ -2431,13 +2774,26 @@ function onPipeFilterChange(){
     const prjList=pipeFilters.clientId?projects().filter(p=>p.clientId===Number(pipeFilters.clientId)):projects();
     prjSel.innerHTML='<option value="">'+t('all_projects','All projects')+'</option>'+prjList.map(p=>`<option value="${p.id}">${escapeHtml(p.title)}</option>`).join('');
   } else if(prjSel){ pipeFilters.projectId=prjSel.value; }
+  PAGE.clientId = pipeFilters.clientId ? Number(pipeFilters.clientId) : null;
+  PAGE.projectId = pipeFilters.projectId ? Number(pipeFilters.projectId) : null;
   setSharedClientFilter(pipeFilters.clientId);
   setSharedProjectFilter(pipeFilters.projectId);
   pipeFilter=null;
+  renderChrome('pipelines',updatePipelinesCrumb());
   renderPipelinesPage();
 }
 function onPipeSearchInput(v){ pipeFilters.search=v; renderPipelinesPage(); }
-function clearPipeFilters(){ pipeFilters={clientId:'',projectId:'',welderId:'',inspectorId:'',status:'',procedure:'',plant:'',search:''}; pipeFilter=null; setSharedClientFilter(''); setSharedProjectFilter(''); buildPipeFilters(); renderPipelinesPage(); }
+function clearPipeFilters(){
+  pipeFilters={clientId:'',projectId:'',welderId:'',inspectorId:'',status:'',procedure:'',plant:'',search:''};
+  pipeFilter=null;
+  PAGE.clientId = null;
+  PAGE.projectId = null;
+  setSharedClientFilter('');
+  setSharedProjectFilter('');
+  renderChrome('pipelines',t('pipelines','Pipelines'));
+  buildPipeFilters();
+  renderPipelinesPage();
+}
 function renderPipelinesPage(){
   const by=s=>pipelines().filter(p=>p.status===s).length;
   const expiring=certificates().filter(c=>certStatus(c)==='expiring').length;
@@ -3003,7 +3359,19 @@ function weldPersonCell(w, pl, role){
   const idVal=role==='welder'?(w.welderId||0):(w.inspectorId||0);
   const id=`ipd-${w.id}-${role}`;
   const ppl=people();
-  let items=ppl.map(p=>`<label class="ipd-item"><input type="radio" name="${id}-radio" value="${p.id}" ${p.id===idVal?'checked':''} onchange="onInlinePersonChange(${w.id},'${role}','${id}')">${escapeHtml(p.name)} · No. ${escapeHtml(p.no)}</label>`).join('');
+  let items=ppl.map(p=>{
+    const certs = personCerts(p.id);
+    const rank = personCertRank(p.id);
+    let badge = '';
+    if(certs.length === 0){
+      badge = ` <span class="cpill cpill-expired" style="font-size:0.7rem;padding:1px 5px;">⚠️ ${t('no_cert_on_file','No cert')}</span>`;
+    } else if(rank === 'expired'){
+      badge = ` <span class="cpill cpill-expired" style="font-size:0.7rem;padding:1px 5px;">⚠️ ${t('cert_expired','Expired')}</span>`;
+    } else if(rank === 'expiring'){
+      badge = ` <span class="cpill cpill-expiring" style="font-size:0.7rem;padding:1px 5px;">⏳ ${t('cert_expiring','Expiring')}</span>`;
+    }
+    return `<label class="ipd-item"><input type="radio" name="${id}-radio" value="${p.id}" ${p.id===idVal?'checked':''} onchange="onInlinePersonChange(${w.id},'${role}','${id}')">${escapeHtml(p.name)} · No. ${escapeHtml(p.no)}${badge}</label>`;
+  }).join('');
   items=`<label class="ipd-item"><input type="radio" name="${id}-radio" value="" ${!idVal?'checked':''} onchange="onInlinePersonChange(${w.id},'${role}','${id}')"><span class="muted">— None —</span></label>`+items;
   if(!idVal){
     const nameFallback = role==='welder' ? w.welder : w.inspector;
@@ -3013,8 +3381,18 @@ function weldPersonCell(w, pl, role){
     return `<div class="ipd-wrap" id="${id}"><button type="button" class="ipd-btn" onclick="toggleIpd('${id}')">${t('select_opt','Select…')}</button><div class="ipd-panel">${items}</div></div>`;
   }
   const person=ppl.find(p=>p.id===idVal);
+  let statusIcon = '';
+  if(person){
+    const certs = personCerts(person.id);
+    const rank = personCertRank(person.id);
+    if(certs.length === 0 || rank === 'expired'){
+      statusIcon = ` <span title="${t('cert_expired','Expired certificate')}" style="color:var(--danger,#e53e3e);cursor:help;font-weight:bold;margin-left:4px;">⚠️</span>`;
+    } else if(rank === 'expiring'){
+      statusIcon = ` <span title="${t('cert_expiring','Certificate expiring soon')}" style="color:var(--copper,#d97706);cursor:help;margin-left:4px;">⏳</span>`;
+    }
+  }
   const nameFallback = role==='welder' ? w.welder : w.inspector;
-  const displayText = person ? `${escapeHtml(person.name)} · No. ${escapeHtml(person.no)}` : (nameFallback ? escapeHtml(nameFallback) : '—');
+  const displayText = person ? `${escapeHtml(person.name)} · No. ${escapeHtml(person.no)}${statusIcon}` : (nameFallback ? escapeHtml(nameFallback) : '—');
   return `<div class="ipd-wrap" id="${id}"><span>${displayText}</span><button class="btn-link btn-edit-inline" onclick="event.stopPropagation();toggleIpd('${id}')" title="Change">✎</button><div class="ipd-panel">${items}</div></div>`;
 }
 function toggleIpd(id){
@@ -3057,6 +3435,20 @@ function showWaz(matId){
     window.open(targetUrl, '_blank', 'noopener');
   } else {
     alert(t('no_file_uploaded', 'No file uploaded yet'));
+  }
+}
+function toggleWazMore(btn, containerId, count){
+  const container = document.getElementById(containerId);
+  if(!container) return;
+  const isHidden = container.style.display === 'none' || !container.style.display;
+  if(isHidden){
+    container.style.display = 'inline-flex';
+    btn.textContent = '−';
+    btn.title = t('show_less', 'Show less');
+  } else {
+    container.style.display = 'none';
+    btn.textContent = `+${count}`;
+    btn.title = `${t('show_more', 'Show')} ${count} ${t('more', 'more')}`;
   }
 }
 let wazMaterialId=null;
@@ -3373,8 +3765,11 @@ function renderMaterialDetail(){
 async function initMaterialUsagePage(){
   PAGE.name='material-usage'; initDB();
   try {
-    const bulk = await apiBulk(['clients','projects','pipelines','pipelineMaterials']);
-    DB.clients=bulk.clients||[]; DB.projects=normalizeProjects(bulk.projects||[]); DB.pipelines=bulk.pipelines||[]; DB.materials=normalizeMaterials(bulk.pipelineMaterials||[]);
+    const data = await apiGet('/page/material-usage' + (window.location.search || ''));
+    DB.clients=data.clients||[];
+    DB.projects=normalizeProjects(data.projects||[]);
+    DB.pipelines=data.pipelines||[];
+    DB.materials=normalizeMaterials(data.materials||[]);
   } catch(e){ console.error('API error:', e); }
   renderChrome('materials',`<a href="materials.html">${t('materials','Materials')}</a> / ${t('usage','Usage')}`); mountModals(); wireModalDismiss();
   renderMaterialUsagePage();
@@ -3382,6 +3777,37 @@ async function initMaterialUsagePage(){
 function getMaterialUsageParams(){
   return { piece:qp('piece')||'', desc:qp('desc')||'', dn:qp('dn')||'', dien:qp('dien')||'', dia:qp('dia')||'', thk:qp('thk')||'', code:qp('code')||'' };
 }
+let muWazFilters = { wazNo:'', cert:'', heatNo:'', pipeline:'', project:'' };
+let muUsageFilters = { pipeline:'', project:'', client:'', pos:'', wazNo:'', cert:'', heatNo:'' };
+
+function setMuWazFilter(key, val){
+  muWazFilters[key] = val;
+  document.querySelectorAll('.col-filter.open').forEach(el=>el.classList.remove('open'));
+  renderMaterialUsagePage();
+}
+
+function setMuUsageFilter(key, val){
+  muUsageFilters[key] = val;
+  document.querySelectorAll('.col-filter.open').forEach(el=>el.classList.remove('open'));
+  renderMaterialUsagePage();
+}
+
+function muWazColFilter(label, filterKey, options, curVal){
+  const isActive = !!curVal;
+  const badge = isActive ? '1' : '';
+  let optsHtml = `<button class="cf-clear" onclick="setMuWazFilter('${filterKey}','')">${t('clear_filter','Clear filter')}</button>`;
+  optsHtml += options.map(o => `<div class="cf-opt ${curVal===o?'selected':''}" onclick="setMuWazFilter('${filterKey}','${escapeHtml(o).replace(/'/g,"\\'")}');">${escapeHtml(o)}</div>`).join('');
+  return `<th class="col-filter ${isActive?'active':''}" onclick="toggleColFilter(this,event)"><span class="col-filter-btn">${label}${badge?' <span style=\"display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:var(--copper);color:#fff;font-size:0.6rem;font-weight:700;\">'+badge+'</span>':''}</span><div class="col-filter-panel">${optsHtml}</div></th>`;
+}
+
+function muUsageColFilter(label, filterKey, options, curVal){
+  const isActive = !!curVal;
+  const badge = isActive ? '1' : '';
+  let optsHtml = `<button class="cf-clear" onclick="setMuUsageFilter('${filterKey}','')">${t('clear_filter','Clear filter')}</button>`;
+  optsHtml += options.map(o => `<div class="cf-opt ${curVal===o?'selected':''}" onclick="setMuUsageFilter('${filterKey}','${escapeHtml(o).replace(/'/g,"\\'")}');">${escapeHtml(o)}</div>`).join('');
+  return `<th class="col-filter ${isActive?'active':''}" onclick="toggleColFilter(this,event)"><span class="col-filter-btn">${label}${badge?' <span style=\"display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:var(--copper);color:#fff;font-size:0.6rem;font-weight:700;\">'+badge+'</span>':''}</span><div class="col-filter-panel">${optsHtml}</div></th>`;
+}
+
 function renderMaterialUsagePage(){
   const p=getMaterialUsageParams();
   /* find all materials matching this combination */
@@ -3418,9 +3844,120 @@ function renderMaterialUsagePage(){
   const uniqueClients=[...new Set(uniqueProjects.map(prid=>{const pr=getProject(prid);return pr?pr.clientId:0;}).filter(Boolean))];
   const uniqueWazNos=[...new Set(matching.map(m=>m.wazNo).filter(Boolean))];
   document.getElementById('mu-stats').innerHTML=tile(matching.length,t('total_used','Total used'),'')+tile(uniquePipelines.length,t('total_pipelines','Pipelines'),'t-neutral')+tile(uniqueProjects.length,t('total_projects','Projects'),'t-copper')+tile(uniqueClients.length,t('total_clients','Clients'),'t-neutral')+tile(uniqueWazNos.length,t('total_waz','WAZ documents'),'t-success');
+
+  /* WAZ documents table */
+  const wazGroups={};
+  matching.filter(m=>m.wazNo).forEach(m=>{
+    if(!wazGroups[m.wazNo]){
+      wazGroups[m.wazNo]={ wazNo:m.wazNo, certs:new Set(), heats:new Set(), pipelineIds:new Set(), projectIds:new Set(), matId:m.id };
+    }
+    const wg=wazGroups[m.wazNo];
+    if(m.certificate) wg.certs.add(m.certificate);
+    if(m.heatNo) wg.heats.add(m.heatNo);
+    if(m.pipelineId){
+      wg.pipelineIds.add(m.pipelineId);
+      const pl=getPipeline(m.pipelineId);
+      if(pl&&pl.projectId) wg.projectIds.add(pl.projectId);
+    }
+  });
+  const allWazKeys=Object.keys(wazGroups).sort((a, b) => {
+    const numA = (a.match(/(\d+)/) || [])[1];
+    const numB = (b.match(/(\d+)/) || [])[1];
+    if(numA && numB && Number(numA) !== Number(numB)) {
+      return Number(numB) - Number(numA);
+    }
+    const idA = wazGroups[a].matId || 0;
+    const idB = wazGroups[b].matId || 0;
+    if(idB !== idA) return idB - idA;
+    return b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' });
+  });
+
+  /* filter WAZ documents */
+  const filteredWazKeys = allWazKeys.filter(k => {
+    const wg = wazGroups[k];
+    const pls = [...wg.pipelineIds].map(getPipeline).filter(Boolean);
+    const prs = [...wg.projectIds].map(getProject).filter(Boolean);
+    if(muWazFilters.wazNo && wg.wazNo !== muWazFilters.wazNo) return false;
+    if(muWazFilters.cert && !wg.certs.has(muWazFilters.cert)) return false;
+    if(muWazFilters.heatNo && !wg.heats.has(muWazFilters.heatNo)) return false;
+    if(muWazFilters.pipeline && !pls.some(p => p.no === muWazFilters.pipeline)) return false;
+    if(muWazFilters.project && !prs.some(p => p.title === muWazFilters.project)) return false;
+    return true;
+  });
+
+  const wazThead=document.getElementById('mu-waz-thead');
+  if(wazThead){
+    const optWaz = allWazKeys;
+    const optCert = [...new Set(allWazKeys.flatMap(k => [...wazGroups[k].certs]))].sort();
+    const optHeat = [...new Set(allWazKeys.flatMap(k => [...wazGroups[k].heats]))].sort();
+    const optPipe = [...new Set(allWazKeys.flatMap(k => [...wazGroups[k].pipelineIds].map(id => (getPipeline(id)||{}).no).filter(Boolean)))].sort();
+    const optProj = [...new Set(allWazKeys.flatMap(k => [...wazGroups[k].projectIds].map(id => (getProject(id)||{}).title).filter(Boolean)))].sort();
+
+    let hdr = muWazColFilter(t('th_waz_no','WAZ No.'), 'wazNo', optWaz, muWazFilters.wazNo);
+    hdr += muWazColFilter(t('th_certificate','Certificate'), 'cert', optCert, muWazFilters.cert);
+    hdr += muWazColFilter(t('th_heat_no','Heat / Melt No.'), 'heatNo', optHeat, muWazFilters.heatNo);
+    hdr += muWazColFilter(t('th_pipeline_no','Pipeline'), 'pipeline', optPipe, muWazFilters.pipeline);
+    hdr += muWazColFilter(t('th_project','Project'), 'project', optProj, muWazFilters.project);
+    hdr += `<th>${t('th_pdf','PDF')}</th>`;
+    wazThead.innerHTML = hdr;
+  }
+
+  const wazTbody=document.getElementById('mu-waz-tbody');
+  if(wazTbody){
+    wazTbody.innerHTML=filteredWazKeys.length ? filteredWazKeys.map(k=>{
+      const wg=wazGroups[k];
+      const pls=[...wg.pipelineIds].map(getPipeline).filter(Boolean);
+      const prs=[...wg.projectIds].map(getProject).filter(Boolean);
+      return `<tr>
+        <td><button class="doc-chip doc-weld" onclick="showWaz(${wg.matId})" title="${t('view_document','View WAZ PDF')}">${escapeHtml(wg.wazNo)}</button></td>
+        <td>${escapeHtml([...wg.certs].join(', '))||'<span class="muted">—</span>'}</td>
+        <td class="col-mono">${escapeHtml([...wg.heats].join(', '))||'<span class="muted">—</span>'}</td>
+        <td>${pls.map(p=>`<a class="cell-link" href="pipeline-detail.html?id=${p.id}">${escapeHtml(p.no)}</a>`).join(', ')||'<span class="muted">—</span>'}</td>
+        <td>${prs.map(p=>`<a class="cell-link" href="project-detail.html?id=${p.id}">${escapeHtml(p.title)}</a>`).join(', ')||'<span class="muted">—</span>'}</td>
+        <td><button class="doc-chip doc-iso" onclick="showWaz(${wg.matId})">PDF</button></td>
+      </tr>`;
+    }).join('') : `<tr class="empty-row"><td colspan="6">${t('no_waz_documents_for_material','No WAZ documents match these filters.')}</td></tr>`;
+  }
+
+  /* filter usage table */
+  const filteredUsage = matching.filter(m => {
+    const pl = getPipeline(m.pipelineId);
+    const pr = pl ? getProject(pl.projectId) : null;
+    const cli = pr ? getClient(pr.clientId) : null;
+    if(muUsageFilters.pipeline && (!pl || pl.no !== muUsageFilters.pipeline)) return false;
+    if(muUsageFilters.project && (!pr || pr.title !== muUsageFilters.project)) return false;
+    if(muUsageFilters.client && (!cli || cli.name !== muUsageFilters.client)) return false;
+    if(muUsageFilters.pos && posLetter(m.position) !== muUsageFilters.pos) return false;
+    if(muUsageFilters.wazNo && m.wazNo !== muUsageFilters.wazNo) return false;
+    if(muUsageFilters.cert && m.certificate !== muUsageFilters.cert) return false;
+    if(muUsageFilters.heatNo && m.heatNo !== muUsageFilters.heatNo) return false;
+    return true;
+  });
+
+  const usageThead=document.getElementById('mu-usage-thead');
+  if(usageThead){
+    const optPipe = [...new Set(matching.map(m => (getPipeline(m.pipelineId)||{}).no).filter(Boolean))].sort();
+    const optProj = [...new Set(matching.map(m => { const pl=getPipeline(m.pipelineId); return pl?(getProject(pl.projectId)||{}).title:''; }).filter(Boolean))].sort();
+    const optClient = [...new Set(matching.map(m => { const pl=getPipeline(m.pipelineId); const pr=pl?getProject(pl.projectId):null; return pr?(getClient(pr.clientId)||{}).name:''; }).filter(Boolean))].sort();
+    const optPos = [...new Set(matching.map(m => posLetter(m.position)).filter(Boolean))].sort();
+    const optWaz = [...new Set(matching.map(m => m.wazNo).filter(Boolean))].sort();
+    const optCert = [...new Set(matching.map(m => m.certificate).filter(Boolean))].sort();
+    const optHeat = [...new Set(matching.map(m => m.heatNo).filter(Boolean))].sort();
+
+    let hdr = muUsageColFilter(t('th_pipeline_no','Pipeline No.'), 'pipeline', optPipe, muUsageFilters.pipeline);
+    hdr += muUsageColFilter(t('th_project','Project'), 'project', optProj, muUsageFilters.project);
+    hdr += muUsageColFilter(t('th_client','Client'), 'client', optClient, muUsageFilters.client);
+    hdr += muUsageColFilter(t('th_pos','Pos.'), 'pos', optPos, muUsageFilters.pos);
+    hdr += muUsageColFilter(t('th_waz_no','WAZ No.'), 'wazNo', optWaz, muUsageFilters.wazNo);
+    hdr += muUsageColFilter(t('th_certificate','Certificate'), 'cert', optCert, muUsageFilters.cert);
+    hdr += muUsageColFilter(t('th_heat_no','Heat / Melt No.'), 'heatNo', optHeat, muUsageFilters.heatNo);
+    hdr += `<th></th>`;
+    usageThead.innerHTML = hdr;
+  }
+
   /* usage table */
   const tbody=document.getElementById('mu-usage-tbody');
-  tbody.innerHTML=matching.length? matching.map(m=>{
+  tbody.innerHTML=filteredUsage.length? filteredUsage.map(m=>{
     const pl=getPipeline(m.pipelineId);
     const pr=pl?getProject(pl.projectId):null;
     const cli=pr?getClient(pr.clientId):null;
@@ -3454,9 +3991,22 @@ function openMuEdit(){
 /* ================================================================ WELDERS PAGE ================================================================ */
 let welderFilters={welder:'',process:'',status:''};
 let welderTab='active';
+async function loadWpsProcessesFromApi(){
+  try {
+    const list = await apiGet('/wps-processes');
+    if(list && list.length) DB.wpsProcesses = list;
+  } catch(e){
+    console.error('Failed to load WPS processes:', e);
+  }
+}
+
 async function loadWeldersFromApi(){
   try {
-    const welders=await apiGet('/welders');
+    const [welders, wpsList] = await Promise.all([
+      apiGet('/welders'),
+      apiGet('/wps-processes').catch(()=>[])
+    ]);
+    if(wpsList && wpsList.length) DB.wpsProcesses = wpsList;
     DB.people=welders.map(w=>({id:w.id, name:w.name, no:w.no, signatureUrl:w.signatureUrl||'', procs:w.procs, archived:w.archived}));
     DB.certificates=[];
     welders.forEach(w=>{
@@ -3744,7 +4294,17 @@ function wazMaterialsFiltered(){
 function renderWazPage(){
   const mats=wazMaterialsFiltered();
   const groups={}; mats.forEach(m=>{ (groups[m.wazNo]=groups[m.wazNo]||[]).push(m); });
-  const keys=Object.keys(groups).sort();
+  const keys=Object.keys(groups).sort((a, b) => {
+    const numA = (a.match(/(\d+)/) || [])[1];
+    const numB = (b.match(/(\d+)/) || [])[1];
+    if(numA && numB && Number(numA) !== Number(numB)) {
+      return Number(numB) - Number(numA);
+    }
+    const idA = Math.max(...groups[a].map(m => m.id || 0));
+    const idB = Math.max(...groups[b].map(m => m.id || 0));
+    if(idB !== idA) return idB - idA;
+    return b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' });
+  });
   document.getElementById('waz-stats').innerHTML=tile(keys.length,t('total_waz','WAZ documents'),'')+tile(mats.length,t('materials_covered','Materials covered'),'t-neutral')+tile(new Set(mats.map(m=>{const pl=getPipeline(m.pipelineId);return pl?pl.projectId:0;})).size,t('total_projects','Projects'),'t-copper');
   const tbody=document.getElementById('waz-tbody');
   tbody.innerHTML=keys.length? keys.map(waz=>{
@@ -3764,8 +4324,19 @@ function renderWazPage(){
 }
 
 /* ================================================================ MATERIALS PAGE (all pipelines) ================================================================ */
-let matFilters={clientId:'',projectId:'',piece:'',dn:'',dien:'',diameter:'',thickness:'',code:''};
-async function initMaterialsPage(){ PAGE.name='materials'; initDB();
+let matFilters={clientId:'',projectId:'',piece:'',dn:'',dien:'',diameter:'',thickness:'',code:'',waz:''};
+function updateMaterialsCrumb(){
+  return t('materials','Materials');
+}
+async function initMaterialsPage(){
+  PAGE.name='materials'; initDB();
+  const clientParam=qp('client'), projectParam=qp('project');
+  if(clientParam) matFilters.clientId=clientParam;
+  if(projectParam) matFilters.projectId=projectParam;
+  PAGE.clientId = null;
+  PAGE.projectId = null;
+  renderChrome('materials',t('materials','Materials')); mountModals(); wireModalDismiss(); buildMatClientProjectFilters(); renderMaterialsPage();
+
   try {
     const data = await apiGet('/page/materials');
     DB.clients=data.clients||[];
@@ -3773,13 +4344,18 @@ async function initMaterialsPage(){ PAGE.name='materials'; initDB();
     DB.pipelines=data.pipelines||[];
     DB.materials=normalizeMaterials(data.materials||[]);
     DB.globalMaterialCount=DB.materials.length;
+    renderChrome('materials',t('materials','Materials'));
+    buildMatClientProjectFilters();
+    renderMaterialsPage();
   } catch(e){ console.error('API error:', e); }
-  renderChrome('materials',t('materials','Materials')); mountModals(); wireModalDismiss(); buildMatClientProjectFilters(); renderMaterialsPage();
 }
 function buildMatClientProjectFilters(){
   const cliSel=document.getElementById('mat-filter-client'), prSel=document.getElementById('mat-filter-project');
   if(cliSel) cliSel.innerHTML='<option value="">'+t('all_clients','All clients')+'</option>'+clients().map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
-  if(prSel) prSel.innerHTML='<option value="">'+t('all_projects','All projects')+'</option>'+projects().map(p=>`<option value="${p.id}">${escapeHtml(p.title)}</option>`).join('');
+  if(prSel){
+    const prjList=matFilters.clientId?projects().filter(p=>p.clientId===Number(matFilters.clientId)):projects();
+    prSel.innerHTML='<option value="">'+t('all_projects','All projects')+'</option>'+prjList.map(p=>`<option value="${p.id}">${escapeHtml(p.title)}</option>`).join('');
+  }
   if(cliSel) cliSel.value=matFilters.clientId;
   if(prSel) prSel.value=matFilters.projectId;
 }
@@ -3815,62 +4391,182 @@ function setMatFilter(key,val){
 document.addEventListener('click',e=>{ if(!e.target.closest('.col-filter')) document.querySelectorAll('.col-filter.open').forEach(el=>el.classList.remove('open')); });
 function onMaterialsFilterChange(){
   const el=id=>document.getElementById(id);
-  if(el('mat-filter-client')) matFilters.clientId=el('mat-filter-client').value;
-  if(el('mat-filter-project')) matFilters.projectId=el('mat-filter-project').value;
+  const cliEl=el('mat-filter-client');
+  const prjEl=el('mat-filter-project');
+  if(cliEl){
+    const clientChanged=cliEl.value!==matFilters.clientId;
+    matFilters.clientId=cliEl.value;
+    if(clientChanged){
+      matFilters.projectId='';
+    }
+  }
+  if(prjEl){
+    matFilters.projectId=prjEl.value;
+  }
+  buildMatClientProjectFilters();
+  renderChrome('materials',t('materials','Materials'));
   renderMaterialsPage();
 }
-function clearMaterialsFilters(){ matFilters={clientId:'',projectId:'',piece:'',dn:'',dien:'',diameter:'',thickness:'',code:''}; renderMaterialsPage(); }
+function clearMaterialsFilters(){
+  matFilters={clientId:'',projectId:'',piece:'',dn:'',dien:'',diameter:'',thickness:'',code:'',waz:''};
+  PAGE.clientId = null;
+  PAGE.projectId = null;
+  renderChrome('materials',t('materials','Materials'));
+  buildMatClientProjectFilters();
+  renderMaterialsPage();
+}
+function matSpecKey(m){
+  let k = `${m.piece||''}|${m.itemDescription||m.piece||''}|${m.dimension||''}|${m.dienNo||''}|${m.diameter||''}|${m.thickness||''}|${m.surface||''}|${m.materialCode||''}`;
+  for(let i=2; i<=6; i++){
+    k += `|${m['dimension'+i]||m['dn'+i]||''}`;
+  }
+  return k;
+}
 function renderMaterialsPage(){
-  const allMats=materials().filter(m=>{
-    if(matFilters.piece && m.piece!==matFilters.piece) return false;
-    if(matFilters.dn && m.dimension!==matFilters.dn) return false;
-    if(matFilters.dien && (m.dienNo||'')!==matFilters.dien) return false;
-    if(matFilters.diameter && (m.diameter||'')!==matFilters.diameter) return false;
-    if(matFilters.thickness && (m.thickness||'')!==matFilters.thickness) return false;
-    if(matFilters.code && m.materialCode!==matFilters.code) return false;
-    return true; });
-  const mats=allMats;
-  document.getElementById('materials-stats').innerHTML=tile(mats.length,t('total_materials','Materials'),'');
-  /* find max DN count */
-  let maxDn=1;
-  mats.forEach(m=>{ for(let i=2;i<=6;i++){ if(m[`dimension${i}`]||m[`dn${i}`]) maxDn=Math.max(maxDn,i); } });
-  const tbody=document.getElementById('materials-page-tbody');
-  tbody.innerHTML=mats.length? mats.map(m=>{
-    let extraDnCells='';
-    for(let i=2;i<=maxDn;i++) extraDnCells+=`<td class="col-mono">${m[`dimension${i}`]?escapeHtml(m[`dimension${i}`]):'<span class="muted">—</span>'}</td>`;
+  // 1. Filter raw materials by Client and Project filters (from top filter-bar)
+  const scopedMats = materials().filter(m => {
+    const pl = getPipeline(m.pipelineId);
+    if(matFilters.projectId && (!pl || pl.projectId !== Number(matFilters.projectId))) return false;
+    if(matFilters.clientId){
+      if(!pl) return false;
+      const pr = getProject(pl.projectId);
+      if(!pr || pr.clientId !== Number(matFilters.clientId)) return false;
+    }
+    return true;
+  });
+
+  // 2. Group materials by unique specification
+  const groupMap = new Map();
+  scopedMats.forEach(m => {
+    const k = matSpecKey(m);
+    if(!groupMap.has(k)){
+      groupMap.set(k, {
+        id: m.id,
+        piece: m.piece,
+        itemDescription: m.itemDescription || m.piece,
+        dimension: m.dimension,
+        dimension2: m.dimension2||m.dn2||'',
+        dimension3: m.dimension3||m.dn3||'',
+        dimension4: m.dimension4||m.dn4||'',
+        dimension5: m.dimension5||m.dn5||'',
+        dimension6: m.dimension6||m.dn6||'',
+        dienNo: m.dienNo||'',
+        diameter: m.diameter||'',
+        thickness: m.thickness||'',
+        surface: m.surface||'',
+        materialCode: m.materialCode||'',
+        allIds: [m.id],
+        wazEntries: [],
+        totalCount: 0
+      });
+    }
+    const g = groupMap.get(k);
+    g.totalCount++;
+    if(m.id && !g.allIds.includes(m.id)) g.allIds.push(m.id);
+    if(m.wazNo && !g.wazEntries.some(w => w.wazNo === m.wazNo)){
+      g.wazEntries.push({ wazNo: m.wazNo, matId: m.id, wazPdfUrl: m.wazPdfUrl || m.wazPackageUrl || '' });
+    }
+  });
+
+  const allGroups = Array.from(groupMap.values());
+  // Sort WAZ entries for each material group so latest uploaded / highest WAZ number comes first
+  allGroups.forEach(g => {
+    g.wazEntries.sort((a, b) => {
+      const numA = (a.wazNo.match(/(\d+)/) || [])[1];
+      const numB = (b.wazNo.match(/(\d+)/) || [])[1];
+      if(numA && numB && Number(numA) !== Number(numB)) {
+        return Number(numB) - Number(numA);
+      }
+      if((b.matId || 0) !== (a.matId || 0)) {
+        return (b.matId || 0) - (a.matId || 0);
+      }
+      return b.wazNo.localeCompare(a.wazNo, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  });
+
+  // 3. Apply column-level filters (Category, DN, DIN EN, Diameter, Thickness, Code, WAZ)
+  const filteredGroups = allGroups.filter(g => {
+    if(matFilters.piece && g.piece !== matFilters.piece) return false;
+    if(matFilters.dn && g.dimension !== matFilters.dn) return false;
+    if(matFilters.dien && (g.dienNo||'') !== matFilters.dien) return false;
+    if(matFilters.diameter && (g.diameter||'') !== matFilters.diameter) return false;
+    if(matFilters.thickness && (g.thickness||'') !== matFilters.thickness) return false;
+    if(matFilters.code && g.materialCode !== matFilters.code) return false;
+    if(matFilters.waz && !g.wazEntries.some(w => w.wazNo === matFilters.waz)) return false;
+    return true;
+  });
+
+  // 4. Stats
+  const totalUsages = filteredGroups.reduce((acc, g) => acc + g.totalCount, 0);
+  const totalWazSet = new Set();
+  filteredGroups.forEach(g => g.wazEntries.forEach(w => totalWazSet.add(w.wazNo)));
+  document.getElementById('materials-stats').innerHTML =
+    tile(filteredGroups.length, t('unique_materials', 'Unique materials'), '') +
+    tile(totalUsages, t('total_used', 'Total used'), 't-neutral') +
+    tile(totalWazSet.size, t('total_waz', 'WAZ documents'), 't-success');
+
+  // 5. Max DN for multi-DN pieces
+  let maxDn = 1;
+  filteredGroups.forEach(g => { for(let i=2; i<=6; i++){ if(g[`dimension${i}`]) maxDn = Math.max(maxDn, i); } });
+
+  // 6. Render table rows
+  const tbody = document.getElementById('materials-page-tbody');
+  tbody.innerHTML = filteredGroups.length ? filteredGroups.map((g, idx) => {
+    let extraDnCells = '';
+    for(let i=2; i<=maxDn; i++) extraDnCells += `<td class="col-mono">${g[`dimension${i}`] ? escapeHtml(g[`dimension${i}`]) : '<span class="muted">—</span>'}</td>`;
+
+    let wazChips = '<span class="muted">—</span>';
+    if(g.wazEntries.length){
+      const maxVisible = 3;
+      const visibleWaz = g.wazEntries.slice(0, maxVisible);
+      const hiddenWaz = g.wazEntries.slice(maxVisible);
+      const visibleHtml = visibleWaz.map(w => `<button class="doc-chip doc-weld" onclick="showWaz(${w.matId})" title="${t('view_document','View WAZ PDF')}">${escapeHtml(w.wazNo)}</button>`).join('');
+      let hiddenHtml = '';
+      if(hiddenWaz.length){
+        const hiddenChips = hiddenWaz.map(w => `<button class="doc-chip doc-weld" onclick="showWaz(${w.matId})" title="${t('view_document','View WAZ PDF')}">${escapeHtml(w.wazNo)}</button>`).join('');
+        hiddenHtml = `<span class="waz-extra-chips" id="waz-extra-${idx}" style="display:none;">${hiddenChips}</span>` +
+          `<button type="button" class="doc-chip doc-more" onclick="toggleWazMore(this, 'waz-extra-${idx}', ${hiddenWaz.length})" title="${t('show_more', 'Show')} ${hiddenWaz.length} ${t('more', 'more')}">+${hiddenWaz.length}</button>`;
+      }
+      wazChips = `<div class="waz-chip-group">${visibleHtml}${hiddenHtml}</div>`;
+    }
+
     return `<tr>
-      <td>${escapeHtml(m.piece)}</td>
-      <td><a class="cell-link" href="material-usage.html?piece=${encodeURIComponent(m.piece)}&desc=${encodeURIComponent(m.itemDescription)}&dn=${encodeURIComponent(m.dimension)}&dien=${encodeURIComponent(m.dienNo||'')}&dia=${encodeURIComponent(m.diameter||'')}&thk=${encodeURIComponent(m.thickness||'')}&code=${encodeURIComponent(m.materialCode)}">${escapeHtml(m.itemDescription)}</a></td>
-      <td class="col-mono">${escapeHtml(m.dimension)}</td>${extraDnCells}
-      <td class="col-mono">${escapeHtml(m.dienNo||'')}</td>
-      <td class="col-mono">${m.diameter?fmtDia(m.diameter):''}</td>
-      <td class="col-mono">${escapeHtml(m.thickness||'')}</td>
-      <td class="col-mono">${escapeHtml(m.surface||'')}</td>
-      <td class="col-mono">${escapeHtml(m.materialCode)}</td>
-      <td class="col-actions"><button class="btn-link" onclick="openMaterialsPageEdit(${m.id})">${t('edit','Edit')}</button></td>
+      <td>${escapeHtml(g.piece)}</td>
+      <td class="td-mat-desc"><a class="cell-link text-truncate-desc" href="material-usage.html?piece=${encodeURIComponent(g.piece)}&desc=${encodeURIComponent(g.itemDescription)}&dn=${encodeURIComponent(g.dimension)}&dien=${encodeURIComponent(g.dienNo||'')}&dia=${encodeURIComponent(g.diameter||'')}&thk=${encodeURIComponent(g.thickness||'')}&code=${encodeURIComponent(g.materialCode)}" title="${escapeHtml(g.itemDescription)}">${escapeHtml(g.itemDescription)}</a></td>
+      <td class="col-mono">${escapeHtml(g.dimension)}</td>${extraDnCells}
+      <td class="col-mono">${escapeHtml(g.dienNo||'')}</td>
+      <td class="col-mono">${g.diameter ? fmtDia(g.diameter) : ''}</td>
+      <td class="col-mono">${escapeHtml(g.thickness||'')}</td>
+      <td class="col-mono">${escapeHtml(g.surface||'')}</td>
+      <td class="col-mono">${escapeHtml(g.materialCode)}</td>
+      <td class="td-waz-cell">${wazChips}</td>
+      <td class="col-actions"><button class="btn-link" onclick="openMaterialsPageEdit(${g.id})">${t('edit','Edit')}</button></td>
     </tr>`;
-  }).join('') : `<tr class="empty-row"><td colspan="${9+(maxDn-1)}">${t('no_materials_match','No materials match these filters.')}</td></tr>`;
-  /* update table header with clickable column filter dropdowns */
-  const allMatsAll=materials();
-  const allPieces=[...new Set(allMatsAll.map(m=>m.piece).filter(Boolean))].sort();
-  const allDnOpts=[...new Set(allMatsAll.map(m=>m.dimension).filter(Boolean))].sort();
-  const allDienOpts=[...new Set(allMatsAll.map(m=>m.dienNo).filter(Boolean))].sort();
-  const allDiaOpts=[...new Set(allMatsAll.map(m=>m.diameter).filter(Boolean))].sort();
-  const allThkOpts=[...new Set(allMatsAll.map(m=>m.thickness).filter(Boolean))].sort();
-  const allCodeOpts=[...new Set(allMatsAll.map(m=>m.materialCode).filter(Boolean))].sort();
-  const thead=document.getElementById('mat-thead');
+  }).join('') : `<tr class="empty-row"><td colspan="${10+(maxDn-1)}">${t('no_materials_match','No materials match these filters.')}</td></tr>`;
+
+  // 7. Update column filter headers
+  const allPieces = [...new Set(allGroups.map(g => g.piece).filter(Boolean))].sort();
+  const allDnOpts = [...new Set(allGroups.map(g => g.dimension).filter(Boolean))].sort();
+  const allDienOpts = [...new Set(allGroups.map(g => g.dienNo).filter(Boolean))].sort();
+  const allDiaOpts = [...new Set(allGroups.map(g => g.diameter).filter(Boolean))].sort();
+  const allThkOpts = [...new Set(allGroups.map(g => g.thickness).filter(Boolean))].sort();
+  const allCodeOpts = [...new Set(allGroups.map(g => g.materialCode).filter(Boolean))].sort();
+  const allWazOpts = [...new Set(allGroups.flatMap(g => g.wazEntries.map(w => w.wazNo)).filter(Boolean))].sort();
+
+  const thead = document.getElementById('mat-thead');
   if(thead){
-    let hdr=colFilterTh(t('th_category','Category'),'piece',allPieces,matFilters.piece);
-    hdr+=`<th>${t('th_item_description','Item description')}</th>`;
-    hdr+=colFilterTh(maxDn>1?'DN 1':'DN','dn',allDnOpts,matFilters.dn);
-    for(let i=2;i<=maxDn;i++) hdr+=`<th>DN ${i}</th>`;
-    hdr+=colFilterTh(t('th_din_en_no','DIN EN No.'),'dien',allDienOpts,matFilters.dien);
-    hdr+=colFilterTh(t('th_diameter','Diameter'),'diameter',allDiaOpts,matFilters.diameter);
-    hdr+=colFilterTh(t('th_thickness','Thickness'),'thickness',allThkOpts,matFilters.thickness);
-    hdr+=`<th>${t('th_surface','Surface')}</th>`;
-    hdr+=colFilterTh(t('th_material','Material'),'code',allCodeOpts,matFilters.code);
-    hdr+=`<th></th>`;
-    thead.innerHTML=hdr;
+    let hdr = colFilterTh(t('th_category','Category'), 'piece', allPieces, matFilters.piece);
+    hdr += `<th>${t('th_item_description','Item description')}</th>`;
+    hdr += colFilterTh(maxDn>1?'DN 1':'DN', 'dn', allDnOpts, matFilters.dn);
+    for(let i=2; i<=maxDn; i++) hdr += `<th>DN ${i}</th>`;
+    hdr += colFilterTh(t('th_din_en_no','DIN EN No.'), 'dien', allDienOpts, matFilters.dien);
+    hdr += colFilterTh(t('th_diameter','Diameter'), 'diameter', allDiaOpts, matFilters.diameter);
+    hdr += colFilterTh(t('th_thickness','Thickness'), 'thickness', allThkOpts, matFilters.thickness);
+    hdr += `<th>${t('th_surface','Surface')}</th>`;
+    hdr += colFilterTh(t('th_material','Material'), 'code', allCodeOpts, matFilters.code);
+    hdr += colFilterTh(t('th_waz_no','WAZ No.'), 'waz', allWazOpts, matFilters.waz);
+    hdr += `<th></th>`;
+    thead.innerHTML = hdr;
   }
 }
 /* Edit from materials page — separate simple modal (no connections/position) */
@@ -3998,9 +4694,9 @@ async function initProjectDetailPage(){
     DB.projectMaterials=data.projectMaterials||[];
   } catch(e){ console.error('API error:', e); }
   const pr=getProject(PAGE.projectId);
-  if(!pr){ renderChrome('projects',t('projects','Projects')); return; }
+  if(!pr){ renderChrome('pipelines',t('projects','Projects')); return; }
   PAGE.clientId=pr.clientId;
-  renderChrome('projects',`<a href="projects.html">${t('projects','Projects')}</a> / ${escapeHtml(pr.title)}`); mountModals(); wireModalDismiss(); renderProjectDetail();
+  renderChrome('pipelines',`<a href="projects.html">${t('projects','Projects')}</a> / ${escapeHtml(pr.title)}`); mountModals(); wireModalDismiss(); renderProjectDetail();
 }
 function switchProject(id){ if(id&&Number(id)!==PAGE.projectId) location.href='project-detail.html?id='+id; }
 function renderProjectDetail(){

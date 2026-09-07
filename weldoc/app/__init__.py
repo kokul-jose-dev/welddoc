@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, send_from_directory, session, redirect, request
+from flask import Flask, jsonify, send_from_directory, session, redirect, request, current_app
 from flask_cors import CORS
 from app.database import db
 from app.routes import register_routes
@@ -77,9 +77,12 @@ def create_app():
         # Allow static assets like fonts, images
         if path.endswith(('.css', '.js', '.png', '.jpg', '.svg', '.ico', '.woff', '.woff2')):
             return
-        # If not logged in, redirect to login page
+        # If not logged in, redirect to login page (or auto-login dev in local debug)
         if 'user' not in session:
-            return redirect('/')
+            if app.debug:
+                session['user'] = {'email': 'jeny@istinox.ch', 'name': 'Jeny M Jerry', 'role': 'office'}
+            else:
+                return redirect('/')
 
     @app.route("/")
     def serve_index():
@@ -182,10 +185,51 @@ def create_app():
 
         if "pipelineMaterials" in include:
             t1 = time.time()
-            q = PipelineMaterial.query.filter_by(archived=archived)
             if pipeline_id:
-                q = q.filter_by(pipeline_id=pipeline_id)
-            result["pipelineMaterials"] = [ser_plmat(r) for r in q.order_by(PipelineMaterial.position).all()]
+                mat_rows = db.session.execute(db.text("""
+                    SELECT pm.id, pm.pipeline_id, pm.project_material_id, pm.position, pm.waz_no,
+                           pm.waz_package_url, pm.start_of_plumbing, pm.end_of_plumbing, pm.archived,
+                           prm.certificate, prm.heat_no, prm.waz_pdf_url,
+                           gm.category, gm.item_description, gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6,
+                           gm.diameter, gm.thickness, gm.surface, gm.material_code, gm.dien_no
+                    FROM weldoc_pipeline_materials pm
+                    LEFT JOIN weldoc_project_materials prm ON pm.project_material_id = prm.id
+                    LEFT JOIN weldoc_global_materials gm ON prm.global_material_id = gm.id
+                    WHERE pm.pipeline_id = :pid AND pm.archived = :archived
+                    ORDER BY pm.position
+                """), {"pid": pipeline_id, "archived": 1 if archived else 0}).fetchall()
+            else:
+                mat_rows = db.session.execute(db.text("""
+                    SELECT pm.id, pm.pipeline_id, pm.project_material_id, pm.position, pm.waz_no,
+                           pm.waz_package_url, pm.start_of_plumbing, pm.end_of_plumbing, pm.archived,
+                           prm.certificate, prm.heat_no, prm.waz_pdf_url,
+                           gm.category, gm.item_description, gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6,
+                           gm.diameter, gm.thickness, gm.surface, gm.material_code, gm.dien_no
+                    FROM weldoc_pipeline_materials pm
+                    LEFT JOIN weldoc_project_materials prm ON pm.project_material_id = prm.id
+                    LEFT JOIN weldoc_global_materials gm ON prm.global_material_id = gm.id
+                    WHERE pm.archived = :archived
+                    ORDER BY pm.position
+                """), {"archived": 1 if archived else 0}).fetchall()
+
+            result["pipelineMaterials"] = [{
+                "id": r.id, "pipelineId": r.pipeline_id, "projectMaterialId": r.project_material_id,
+                "position": r.position, "wazNo": r.waz_no, "wazPackageUrl": r.waz_package_url or "",
+                "startOfPlumbing": bool(r.start_of_plumbing), "endOfPlumbing": bool(r.end_of_plumbing),
+                "connections": [],
+                "certificate": r.certificate or "", "heatNo": r.heat_no or "", "wazPdfUrl": r.waz_pdf_url or "",
+                "category": r.category or "", "piece": r.category or "",
+                "itemDescription": r.item_description or "",
+                "dn1": r.dn1 or "", "dimension": r.dn1 or "",
+                "dn2": r.dn2 or "", "dimension2": r.dn2 or "",
+                "dn3": r.dn3 or "", "dimension3": r.dn3 or "",
+                "dn4": r.dn4 or "", "dimension4": r.dn4 or "",
+                "dn5": r.dn5 or "", "dimension5": r.dn5 or "",
+                "dn6": r.dn6 or "", "dimension6": r.dn6 or "",
+                "diameter": r.diameter or "", "thickness": r.thickness or "",
+                "surface": r.surface or "", "materialCode": r.material_code or "",
+                "dienNo": r.dien_no or ""
+            } for r in mat_rows]
             app.logger.info(f"  pipelineMaterials: {time.time()-t1:.3f}s")
 
         if "projectMaterials" in include:

@@ -7,9 +7,11 @@
     <button class="btn btn-ghost" id="mu-edit-btn" onclick="openMuEdit()" data-i18n="edit_material">Edit material</button></div>
   <div class="info-panel"><div class="info-grid" id="mu-info"></div></div>
   <div class="stat-grid" id="mu-stats"></div>
-  <div class="section-label" data-i18n="usage_across_pipelines">Usage across pipelines</div>
-  <div class="table-card"><table class="table-wide"><thead><tr><th data-i18n="th_pipeline_no">Pipeline</th><th data-i18n="th_project">Project</th><th data-i18n="th_client">Client</th><th data-i18n="th_pos">Pos.</th><th data-i18n="th_waz_no">WAZ&nbsp;No.</th><th data-i18n="th_certificate">Certificate</th><th data-i18n="th_heat_no">Heat / Melt&nbsp;No.</th><th></th></tr></thead><tbody id="mu-usage-tbody"></tbody></table></div>
+  <div class="section-label" data-i18n="waz_documents_for_material" style="margin-top:20px;">WAZ Documents</div>
+  <div class="table-card"><table class="table-wide"><thead><tr id="mu-waz-thead"></tr></thead><tbody id="mu-waz-tbody"></tbody></table></div>
+  <div class="section-label" data-i18n="usage_across_pipelines" style="margin-top:24px;">Usage across pipelines</div>
+  <div class="table-card"><table class="table-wide"><thead><tr id="mu-usage-thead"></tr></thead><tbody id="mu-usage-tbody"></tbody></table></div>
 </main>
 <div id="modal-root"></div>
-<script src="i18n.js"></script><script src="app.js"></script><script>initMaterialUsagePage();</script>
+<script src="i18n.js?v=13"></script><script src="app.js?v=13"></script><script>initMaterialUsagePage();</script>
 </body></html>

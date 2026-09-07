@@ -10,6 +10,7 @@ from app.routes.builder_doc import builder_doc_bp
 from app.routes.export_final import export_bp
 from app.routes.auth import auth_bp
 from app.routes.welders import welders_bp
+from app.routes.wps_processes import wps_processes_bp
 from app.routes.pipeline_detail import pipeline_detail_bp
 from app.routes.page_views import page_views_bp
 
@@ -26,6 +27,7 @@ def register_routes(app):
     app.register_blueprint(builder_doc_bp, url_prefix="/api/pipelines")
     app.register_blueprint(export_bp, url_prefix="/api/pipelines")
     app.register_blueprint(welders_bp, url_prefix="/api/welders")
+    app.register_blueprint(wps_processes_bp, url_prefix="/api/wps-processes")
     app.register_blueprint(pipeline_detail_bp, url_prefix="/api/pipeline-detail")
     app.register_blueprint(page_views_bp, url_prefix="/api/page")
     app.register_blueprint(auth_bp)

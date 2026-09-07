@@ -62,7 +62,7 @@ def create_or_update_weld():
 
 @welds_bp.route("/<int:weld_id>/upload-files", methods=["POST"])
 def upload_weld_files(weld_id):
-    """Upload endo video and/or image to SharePoint in pipeline/Welds/ folder."""
+    """Upload endo video and/or image to SharePoint in pipeline 03 Bilddokumentation folder."""
     from app.models.pipeline import Pipeline
     from app.models.project import Project
     from app.sharepoint import upload_to_pipeline_subfolder
@@ -81,7 +81,7 @@ def upload_weld_files(weld_id):
         name = f"Naht_{weld_label}.{ext}"
         url = upload_to_pipeline_subfolder(
             project.sharepoint_drive_id, project.sharepoint_folder_id,
-            pipeline.no, "Welds", name, f.read(), f.content_type or "video/mp4"
+            pipeline.no, "03 Bilddokumentation", name, f.read(), f.content_type or "video/mp4"
         )
         if url:
             w.endoscopy_video_url = url
@@ -92,7 +92,7 @@ def upload_weld_files(weld_id):
         name = f"Naht_{weld_label}.{ext}"
         url = upload_to_pipeline_subfolder(
             project.sharepoint_drive_id, project.sharepoint_folder_id,
-            pipeline.no, "Welds", name, f.read(), f.content_type or "image/jpeg"
+            pipeline.no, "03 Bilddokumentation", name, f.read(), f.content_type or "image/jpeg"
         )
         if url:
             w.endoscopy_image_url = url
@@ -149,11 +149,11 @@ def _serialize(w):
 
 
 def _copy_welder_certs_to_pipeline(weld_id):
-    """Copy welder/inspector certificates to {pipeline}/Welders/ if not already there."""
+    """Copy welder/inspector certificates to {pipeline}/06 Schweisserprüfung-VT2/ if not already there."""
     from app.models.pipeline import Pipeline
     from app.models.project import Project
     from app.models.welder import Welder, Certificate
-    from app.sharepoint import upload_to_pipeline_subfolder, _download_sharepoint_file_content
+    from app.sharepoint import upload_to_pipeline_subfolder, _download_sharepoint_file_content, _sanitize_name
     import logging
 
     w = Weld.query.get(weld_id)
@@ -192,7 +192,14 @@ def _copy_welder_certs_to_pipeline(weld_id):
                 content = _download_sharepoint_file_content(c.pdf_url)
                 if not content:
                     continue
-                file_name = f"{welder.no}_{c.cert_no}.pdf"
+                safe_proc = _sanitize_name(c.process or "General").replace(" ", "_")
+                safe_name = _sanitize_name(welder.name or "Welder").replace(" ", "_")
+                safe_no = _sanitize_name(str(welder.no or "").strip()).replace(" ", "_")
+                if safe_no:
+                    file_name = f"WPQ_{safe_name}_{safe_no}_{safe_proc}.pdf"
+                else:
+                    file_name = f"WPQ_{safe_name}_{safe_proc}.pdf"
+
                 upload_to_pipeline_subfolder(
                     project.sharepoint_drive_id, project.sharepoint_folder_id,
                     pipeline.no, folder_name, file_name, content, "application/pdf"
@@ -200,5 +207,5 @@ def _copy_welder_certs_to_pipeline(weld_id):
             except Exception as e:
                 logging.getLogger(__name__).error(f"Failed to copy cert to {folder_name}: {e}")
 
-    _copy_certs(w.welder_id, "Welders", already_in_welders)
-    _copy_certs(w.inspector_id, "Inspectors", already_in_inspectors)
+    _copy_certs(w.welder_id, "06 Schweisserprüfung-VT2", already_in_welders)
+    _copy_certs(w.inspector_id, "06 Schweisserprüfung-VT2", already_in_inspectors)

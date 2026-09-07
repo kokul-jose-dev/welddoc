@@ -8,9 +8,13 @@ import urllib.request
 import urllib.parse
 import ssl
 import certifi
+import time
 from flask import current_app
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+
+_token_cache = {"token": None, "expires_at": 0}
+_drive_id_cache = {"drive_id": None, "site_path": None}
 
 
 def _ssl_context():
@@ -18,7 +22,11 @@ def _ssl_context():
 
 
 def _get_app_token():
-    """Get an app-only access token using client credentials flow."""
+    """Get an app-only access token using client credentials flow (cached in memory)."""
+    now = time.time()
+    if _token_cache["token"] and now < (_token_cache["expires_at"] - 60):
+        return _token_cache["token"]
+
     cfg = current_app.config
     tenant_id = cfg["AZURE_TENANT_ID"]
     client_id = cfg["AZURE_CLIENT_ID"]
@@ -37,7 +45,12 @@ def _get_app_token():
 
     with urllib.request.urlopen(req, context=_ssl_context()) as resp:
         result = json.loads(resp.read())
-    return result["access_token"]
+
+    token = result["access_token"]
+    expires_in = int(result.get("expires_in", 3600))
+    _token_cache["token"] = token
+    _token_cache["expires_at"] = now + expires_in
+    return token
 
 
 def _sanitize_name(name):
@@ -48,14 +61,62 @@ def _sanitize_name(name):
     return name.strip().strip('.')
 
 
-def upload_waz_to_project_folder(drive_id, folder_id, heat_no, certificate_no, file_content, content_type="application/pdf"):
+def format_waz_filename(item_desc="", dn="", diameter="", thickness="", material_code="", surface="", heat_no="", waz_no=None):
+    """Format WAZ filename according to specification:
+    Project level: Item description, DN, Outer diameter x Thickness, Material code, Surface, Heat number.pdf
+    Pipeline level: {WAZ_No}, Item description, DN, Outer diameter x Thickness, Material code, Surface, Heat number.pdf
+    Example:
+    Bogen 3D, DN25, Ø33.7x2.0, 1.4304, Ra 0.8, 123456.pdf
+    Z001, Bogen 3D, DN25, Ø33.7x2.0, 1.4304, Ra 0.8, 123456.pdf
+    """
+    parts = []
+    if waz_no:
+        parts.append(str(waz_no).strip())
+    if item_desc:
+        parts.append(str(item_desc).strip())
+    if dn:
+        dn_str = str(dn).strip()
+        if not dn_str.upper().startswith("DN") and dn_str.replace(".", "").isdigit():
+            dn_str = f"DN{dn_str}"
+        parts.append(dn_str)
+
+    dia_str = str(diameter or "").strip().replace("Ø", "").replace("mm", "").strip()
+    thk_str = str(thickness or "").strip().replace("mm", "").strip()
+    if dia_str and thk_str:
+        parts.append(f"Ø{dia_str}x{thk_str}")
+    elif dia_str:
+        parts.append(f"Ø{dia_str}")
+    elif thk_str:
+        parts.append(f"{thk_str}mm")
+
+    if material_code:
+        parts.append(str(material_code).strip())
+    if surface:
+        parts.append(str(surface).strip())
+    if heat_no:
+        parts.append(str(heat_no).strip())
+
+    base_name = ", ".join([p for p in parts if p])
+    if not base_name:
+        base_name = "WAZ"
+    safe_name = _sanitize_name(base_name)
+    if not safe_name.lower().endswith(".pdf"):
+        safe_name = f"{safe_name}.pdf"
+    return safe_name
+
+
+def upload_waz_to_project_folder(drive_id, folder_id, file_name, file_content, content_type="application/pdf"):
     """Upload a WAZ document to the project's SharePoint folder /WAZ/ subfolder.
     Uses the project's saved driveId and folderId.
     Returns the SharePoint file URL or None on failure.
     """
     try:
         token = _get_app_token()
-        file_name = _sanitize_name(f"{heat_no}_{certificate_no}") + ".pdf"
+        if not file_name.lower().endswith(".pdf"):
+            safe_file_name = _sanitize_name(file_name) + ".pdf"
+        else:
+            base = file_name[:-4]
+            safe_file_name = _sanitize_name(base) + ".pdf"
 
         # First ensure WAZ subfolder exists
         create_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}/children"
@@ -84,7 +145,7 @@ def upload_waz_to_project_folder(drive_id, folder_id, heat_no, certificate_no, f
                 raise
 
         # Upload file to WAZ folder
-        upload_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{waz_folder_id}:/{urllib.parse.quote(file_name)}:/content"
+        upload_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{waz_folder_id}:/{urllib.parse.quote(safe_file_name)}:/content"
         req = urllib.request.Request(upload_url, data=file_content, method="PUT")
         req.add_header("Authorization", f"Bearer {token}")
         req.add_header("Content-Type", content_type)
@@ -92,7 +153,7 @@ def upload_waz_to_project_folder(drive_id, folder_id, heat_no, certificate_no, f
             result = json.loads(resp.read())
 
         web_url = result.get("webUrl", "")
-        current_app.logger.info(f"SharePoint: Uploaded WAZ document '{file_name}'")
+        current_app.logger.info(f"SharePoint: Uploaded WAZ document '{safe_file_name}' to WAZ/")
         return web_url
     except Exception as e:
         current_app.logger.error(f"SharePoint: Failed to upload WAZ document: {e}")
@@ -100,39 +161,181 @@ def upload_waz_to_project_folder(drive_id, folder_id, heat_no, certificate_no, f
 
 
 def _get_weldoc_site_drive():
-    """Get the drive ID for the weldoc site's default document library."""
+    """Get the drive ID for the weldoc site's default document library (cached in memory)."""
     cfg = current_app.config
     host = cfg.get("SHAREPOINT_HOST", "")
     site_path = cfg.get("SHAREPOINT_SITE_PATH", "/sites/Tutorial")
+    key = f"{host}:{site_path}"
+    if _drive_id_cache.get("site_path") == key and _drive_id_cache.get("drive_id"):
+        return _drive_id_cache["drive_id"]
+
     token = _get_app_token()
     url = f"{GRAPH_BASE}/sites/{host}:{site_path}:/drive"
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, context=_ssl_context()) as resp:
-        return json.loads(resp.read())["id"]
+        drive_id = json.loads(resp.read())["id"]
+        _drive_id_cache["drive_id"] = drive_id
+        _drive_id_cache["site_path"] = key
+        return drive_id
 
 
-def upload_welder_cert(file_name, file_content, content_type="application/pdf"):
-    """Upload a welder certificate PDF to SharePoint /weldoc/welder/ folder."""
+def _ensure_sharepoint_folder_path(drive_id, folder_path, token):
+    """Ensure a multi-level folder path exists on the drive and return the target folder ID."""
+    clean_path = folder_path.strip("/")
+    encoded_path = urllib.parse.quote(clean_path)
+    get_url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{encoded_path}"
+    req = urllib.request.Request(get_url)
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            folder = json.loads(resp.read())
+            return folder["id"]
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+
+    # Traverse or create segment by segment starting from root
+    segments = [s.strip() for s in clean_path.split("/") if s.strip()]
+    root_url = f"{GRAPH_BASE}/drives/{drive_id}/root"
+    req_root = urllib.request.Request(root_url)
+    req_root.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(req_root, context=_ssl_context()) as resp_root:
+        current_parent_id = json.loads(resp_root.read())["id"]
+
+    path_accum = ""
+    for seg in segments:
+        path_accum = f"{path_accum}/{seg}" if path_accum else seg
+        enc_accum = urllib.parse.quote(path_accum)
+        check_url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{enc_accum}"
+        req_check = urllib.request.Request(check_url)
+        req_check.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req_check, context=_ssl_context()) as resp_chk:
+                current_parent_id = json.loads(resp_chk.read())["id"]
+        except urllib.error.HTTPError as he:
+            if he.code == 404:
+                create_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{current_parent_id}/children"
+                body = json.dumps({
+                    "name": seg,
+                    "folder": {},
+                    "@microsoft.graph.conflictBehavior": "fail"
+                }).encode("utf-8")
+                req_create = urllib.request.Request(create_url, data=body, method="POST")
+                req_create.add_header("Authorization", f"Bearer {token}")
+                req_create.add_header("Content-Type", "application/json")
+                try:
+                    with urllib.request.urlopen(req_create, context=_ssl_context()) as resp_cr:
+                        current_parent_id = json.loads(resp_cr.read())["id"]
+                except urllib.error.HTTPError as err_cr:
+                    if err_cr.code == 409:
+                        with urllib.request.urlopen(req_check, context=_ssl_context()) as resp_chk2:
+                            current_parent_id = json.loads(resp_chk2.read())["id"]
+                    else:
+                        raise
+            else:
+                raise
+
+    return current_parent_id
+
+
+def upload_welder_cert(process, welder_name, welder_no, file_content, content_type="application/pdf"):
+    """Upload a welder certificate PDF to SharePoint:
+    3.2_Personal & Ausbildung/Schweissprüfungen/{process}/WPQ_{name}_{no}_{process}.pdf
+    """
     try:
         token = _get_app_token()
         drive_id = _get_weldoc_site_drive()
-        safe_name = _sanitize_name(file_name)
 
-        # Upload to /weldoc/welder/{file_name} (auto-creates path)
-        upload_path = f"weldoc/welder/{safe_name}"
-        upload_url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{urllib.parse.quote(upload_path)}:/content"
-        req = urllib.request.Request(upload_url, data=file_content, method="PUT")
-        req.add_header("Authorization", f"Bearer {token}")
-        req.add_header("Content-Type", content_type)
-        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
-            result = json.loads(resp.read())
+        safe_proc = _sanitize_name(process or "General").replace(" ", "_")
+        safe_name = _sanitize_name(welder_name or "Welder").replace(" ", "_")
+        safe_no = _sanitize_name(str(welder_no or "").strip()).replace(" ", "_")
 
-        web_url = result.get("webUrl", "")
-        current_app.logger.info(f"SharePoint: Uploaded welder cert '{safe_name}'")
+        if safe_no:
+            file_name = f"WPQ_{safe_name}_{safe_no}_{safe_proc}.pdf"
+        else:
+            file_name = f"WPQ_{safe_name}_{safe_proc}.pdf"
+
+        upload_path = f"3.2_Personal & Ausbildung/Schweissprüfungen/{safe_proc}/{file_name}"
+
+        if len(file_content) > 4 * 1024 * 1024:
+            folder_path = f"3.2_Personal & Ausbildung/Schweissprüfungen/{safe_proc}"
+            folder_id = _ensure_sharepoint_folder_path(drive_id, folder_path, token)
+            web_url = _upload_large_file(drive_id, folder_id, file_name, file_content, content_type)
+        else:
+            upload_url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{urllib.parse.quote(upload_path)}:/content"
+            req = urllib.request.Request(upload_url, data=file_content, method="PUT")
+            req.add_header("Authorization", f"Bearer {token}")
+            req.add_header("Content-Type", content_type)
+            with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+                result = json.loads(resp.read())
+            web_url = result.get("webUrl", "")
+
+        current_app.logger.info(f"SharePoint: Uploaded welder cert '{file_name}' to {upload_path}")
         return web_url
     except Exception as e:
         current_app.logger.error(f"SharePoint: Failed to upload welder cert: {e}")
+        return None
+
+
+def archive_welder_cert(pdf_url, process, welder_name, welder_no, valid_until):
+    """Move an expired/archived certificate PDF to:
+    3.2_Personal & Ausbildung/Schweissprüfungen/{process}/_Archive/WPQ_{name}_{no}_{process}_{date}.pdf
+    """
+    if not pdf_url:
+        return None
+    try:
+        import base64
+        token = _get_app_token()
+        drive_id = _get_weldoc_site_drive()
+
+        safe_proc = _sanitize_name(process or "General").replace(" ", "_")
+        safe_name = _sanitize_name(welder_name or "Welder").replace(" ", "_")
+        safe_no = _sanitize_name(str(welder_no or "").strip()).replace(" ", "_")
+        safe_date = _sanitize_name(str(valid_until or "").strip()).replace(" ", "_").replace("/", "_").replace(":", "_")
+
+        if safe_no and safe_date:
+            archive_file_name = f"WPQ_{safe_name}_{safe_no}_{safe_proc}_{safe_date}.pdf"
+        elif safe_no:
+            archive_file_name = f"WPQ_{safe_name}_{safe_no}_{safe_proc}.pdf"
+        elif safe_date:
+            archive_file_name = f"WPQ_{safe_name}_{safe_proc}_{safe_date}.pdf"
+        else:
+            archive_file_name = f"WPQ_{safe_name}_{safe_proc}.pdf"
+
+        # Resolve the drive item ID from pdf_url sharing URL
+        clean_url = pdf_url.split("?")[0]
+        encoded_url = base64.urlsafe_b64encode(clean_url.encode()).decode().rstrip("=")
+        share_id = "u!" + encoded_url
+
+        item_url = f"{GRAPH_BASE}/shares/{share_id}/driveItem"
+        req = urllib.request.Request(item_url)
+        req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            item = json.loads(resp.read())
+        item_id = item["id"]
+
+        # Ensure archive folder exists
+        archive_path = f"3.2_Personal & Ausbildung/Schweissprüfungen/{safe_proc}/_Archive"
+        archive_folder_id = _ensure_sharepoint_folder_path(drive_id, archive_path, token)
+
+        # Move and rename file
+        move_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}"
+        move_body = json.dumps({
+            "parentReference": {"id": archive_folder_id},
+            "name": archive_file_name
+        }).encode("utf-8")
+        req = urllib.request.Request(move_url, data=move_body, method="PATCH")
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            result = json.loads(resp.read())
+
+        new_url = result.get("webUrl", "")
+        current_app.logger.info(f"SharePoint: Moved cert to '{archive_path}/{archive_file_name}'")
+        return new_url
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: Failed to archive welder cert: {e}")
         return None
 
 
@@ -260,40 +463,19 @@ def _upload_large_file(drive_id, folder_id, relative_path, file_content, content
 
 
 def upload_to_pipeline_waz_folder(drive_id, folder_id, pipeline_no, file_name, file_content, content_type="application/pdf"):
-    """Upload a file to project_folder/{pipeline_no}/WAZ/{file_name}.
+    """Upload a file to project_folder/Rohrleitungen/{pipeline_no}/04 Materialzertifikat 3.1/{file_name}.
     Creates the folder structure if needed. Returns the SharePoint file URL or None.
     """
-    try:
-        safe_pipeline = _sanitize_name(pipeline_no)
-        safe_file = _sanitize_name(file_name)
-        upload_path = f"{safe_pipeline}/WAZ/{safe_file}"
-
-        if len(file_content) > 4 * 1024 * 1024:
-            web_url = _upload_large_file(drive_id, folder_id, upload_path, file_content, content_type)
-        else:
-            token = _get_app_token()
-            upload_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/{urllib.parse.quote(upload_path)}:/content"
-            req = urllib.request.Request(upload_url, data=file_content, method="PUT")
-            req.add_header("Authorization", f"Bearer {token}")
-            req.add_header("Content-Type", content_type)
-            with urllib.request.urlopen(req, context=_ssl_context()) as resp:
-                result = json.loads(resp.read())
-            web_url = result.get("webUrl", "")
-
-        current_app.logger.info(f"SharePoint: Uploaded '{safe_file}' to {safe_pipeline}/WAZ/")
-        return web_url
-    except Exception as e:
-        current_app.logger.error(f"SharePoint: Failed to upload to pipeline WAZ folder: {e}")
-        return None
+    return upload_to_pipeline_subfolder(drive_id, folder_id, pipeline_no, "04 Materialzertifikat 3.1", file_name, file_content, content_type)
 
 
 def upload_to_pipeline_subfolder(drive_id, folder_id, pipeline_no, subfolder, file_name, file_content, content_type):
-    """Upload a file to project_folder/{pipeline_no}/{subfolder}/{file_name}."""
+    """Upload a file to project_folder/Rohrleitungen/{pipeline_no}/{subfolder}/{file_name}."""
     try:
         safe_pipeline = _sanitize_name(pipeline_no)
         safe_sub = _sanitize_name(subfolder)
         safe_file = _sanitize_name(file_name)
-        upload_path = f"{safe_pipeline}/{safe_sub}/{safe_file}"
+        upload_path = f"Rohrleitungen/{safe_pipeline}/{safe_sub}/{safe_file}"
 
         if len(file_content) > 4 * 1024 * 1024:
             web_url = _upload_large_file(drive_id, folder_id, upload_path, file_content, content_type)
@@ -307,10 +489,10 @@ def upload_to_pipeline_subfolder(drive_id, folder_id, pipeline_no, subfolder, fi
                 result = json.loads(resp.read())
             web_url = result.get("webUrl", "")
 
-        current_app.logger.info(f"SharePoint: Uploaded '{safe_file}' to {safe_pipeline}/{safe_sub}/")
+        current_app.logger.info(f"SharePoint: Uploaded '{safe_file}' to Rohrleitungen/{safe_pipeline}/{safe_sub}/")
         return web_url
     except Exception as e:
-        current_app.logger.error(f"SharePoint: Failed to upload to {safe_pipeline}/{subfolder}: {e}")
+        current_app.logger.error(f"SharePoint: Failed to upload to Rohrleitungen/{safe_pipeline}/{subfolder}: {e}")
         return None
 
 

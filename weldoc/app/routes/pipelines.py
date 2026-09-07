@@ -96,7 +96,7 @@ def upload_iso(pipeline_id):
             project.sharepoint_drive_id,
             project.sharepoint_folder_id,
             p.no,
-            "ISO",
+            "01 Isometrie & Stückliste",
             file.filename,
             file_content,
             content_type

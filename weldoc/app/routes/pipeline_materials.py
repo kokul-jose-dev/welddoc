@@ -243,15 +243,26 @@ def upload_waz_for_pipeline_material(pm_id):
     if not project.sharepoint_drive_id or not project.sharepoint_folder_id:
         return jsonify({"error": "No SharePoint folder configured for this project."}), 400
 
-    file_content = file.read()
-    content_type = file.content_type or "application/pdf"
+    from app.sharepoint import upload_waz_to_project_folder, upload_to_pipeline_waz_folder, format_waz_filename
 
-    # 1. Upload to project-level WAZ folder (existing behavior)
+    gm = pm.global_material
+    proj_waz_name = format_waz_filename(
+        item_desc=gm.item_description if gm else "",
+        dn=gm.dn1 if gm else "",
+        diameter=gm.diameter if gm else "",
+        thickness=gm.thickness if gm else "",
+        material_code=gm.material_code if gm else "",
+        surface=gm.surface if gm else "",
+        heat_no=pm.heat_no or "",
+    )
+
+    # 1. Upload to project-level WAZ folder
     url = upload_waz_to_project_folder(
         project.sharepoint_drive_id,
         project.sharepoint_folder_id,
-        pm.heat_no or "unknown", pm.certificate or "unknown",
-        file_content, content_type
+        proj_waz_name,
+        file_content,
+        content_type,
     )
 
     if not url:
@@ -523,7 +534,17 @@ def _build_and_save_waz_package_with_bytes(m, file_content=None):
     # 3. Upload combined package to SharePoint
     pkg_url = None
     if project.sharepoint_drive_id and project.sharepoint_folder_id:
-        pkg_name = f"WAZ_{m.waz_no or 'WAZ'}_{pm.heat_no or 'unknown'}.pdf"
+        from app.sharepoint import format_waz_filename
+        pkg_name = format_waz_filename(
+            item_desc=gm.item_description if gm else "",
+            dn=gm.dn1 if gm else "",
+            diameter=gm.diameter if gm else "",
+            thickness=gm.thickness if gm else "",
+            material_code=gm.material_code if gm else "",
+            surface=gm.surface if gm else "",
+            heat_no=pm.heat_no or "",
+            waz_no=m.waz_no or "WAZ",
+        )
         pkg_url = upload_to_pipeline_waz_folder(
             project.sharepoint_drive_id, project.sharepoint_folder_id,
             pipeline.no, pkg_name, merged_pdf_bytes, "application/pdf"

@@ -447,3 +447,48 @@ tr.drag-over td{border-top:2px solid var(--copper)!important;}
   color: var(--copper);
 }
 
+/* Materials table column & chip styling */
+.td-mat-desc {
+  max-width: 160px;
+}
+.td-mat-desc .cell-link,
+.text-truncate-desc {
+  display: block;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.td-waz-cell {
+  white-space: normal;
+  min-width: 130px;
+}
+.waz-chip-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.waz-extra-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.doc-more {
+  background: var(--surface, #ffffff);
+  color: var(--copper-ink, #A0522D);
+  border-color: #E3C4AE;
+  font-weight: 700;
+  font-size: 0.72rem;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.doc-more:hover {
+  background: var(--copper-soft, #FAF3EB);
+  color: var(--copper, #C26D2B);
+  border-color: var(--copper, #C26D2B);
+}
+
