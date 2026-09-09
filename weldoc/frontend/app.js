@@ -1685,6 +1685,8 @@ async function submitWelderModal(e){
         if(fileInput && fileInput.files && fileInput.files[0]){
           const formData = new FormData();
           formData.append('file', fileInput.files[0]);
+          if(c.certNo) formData.append('wpsNo', c.certNo);
+          if(c.process) formData.append('process', c.process);
           uploadTasks.push(
             fetch(`/api/welders/certificates/${savedCert.id}/upload`, {method: 'POST', body: formData})
           );
@@ -2343,6 +2345,8 @@ async function confirmRenew(){
     /* Upload PDF */
     const formData=new FormData();
     formData.append('file', f);
+    if(cn) formData.append('wpsNo', cn);
+    if(procVal) formData.append('process', procVal);
     await fetch(`${API_BASE}/welders/certificates/${newCert.id}/upload`,{method:'POST',body:formData});
     await loadWeldersFromApi();
     closeModal('modal-renew'); rerenderPage();
@@ -2519,6 +2523,7 @@ async function submitCertEdit(event){
     if(file){
       const fd = new FormData();
       fd.append('file', file);
+      if(wpsVal) fd.append('wpsNo', wpsVal);
       if(procVal) fd.append('process', procVal);
       const uploadRes = await apiUpload(`/welders/certificates/${c.id}/upload`, fd);
       if(uploadRes && (uploadRes.pdfUrl || uploadRes.url)){

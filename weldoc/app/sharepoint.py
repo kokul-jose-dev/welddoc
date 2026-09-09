@@ -247,25 +247,25 @@ def _get_welder_folder_base():
     ).strip("/")
 
 
-def upload_welder_cert(process, welder_name, welder_no, file_content, content_type="application/pdf"):
+def upload_welder_cert(wps_no, welder_name, welder_no, file_content, content_type="application/pdf"):
     """Upload a welder certificate PDF to SharePoint:
-    {SHAREPOINT_WELDER_FOLDER}/{process}/WPQ_{name}_{no}_{process}.pdf
+    {SHAREPOINT_WELDER_FOLDER}/{wps_no}/WPQ_{name}_{no}_{wps_no}.pdf
     """
     try:
         token = _get_app_token()
         drive_id = _get_weldoc_site_drive()
 
-        safe_proc = _sanitize_name(process or "General").replace(" ", "_")
+        safe_wps = _sanitize_name(wps_no or "General").replace(" ", "_")
         safe_name = _sanitize_name(welder_name or "Welder").replace(" ", "_")
         safe_no = _sanitize_name(str(welder_no or "").strip()).replace(" ", "_")
 
         if safe_no:
-            file_name = f"WPQ_{safe_name}_{safe_no}_{safe_proc}.pdf"
+            file_name = f"WPQ_{safe_name}_{safe_no}_{safe_wps}.pdf"
         else:
-            file_name = f"WPQ_{safe_name}_{safe_proc}.pdf"
+            file_name = f"WPQ_{safe_name}_{safe_wps}.pdf"
 
         base_folder = _get_welder_folder_base()
-        folder_path = f"{base_folder}/{safe_proc}"
+        folder_path = f"{base_folder}/{safe_wps}"
         folder_id = _ensure_sharepoint_folder_path(drive_id, folder_path, token)
 
         if len(file_content) > 4 * 1024 * 1024:
@@ -286,9 +286,9 @@ def upload_welder_cert(process, welder_name, welder_no, file_content, content_ty
         return None
 
 
-def archive_welder_cert(pdf_url, process, welder_name, welder_no, valid_until):
+def archive_welder_cert(pdf_url, wps_no, welder_name, welder_no, valid_until):
     """Move an expired/archived certificate PDF to:
-    {SHAREPOINT_WELDER_FOLDER}/{process}/_Archive/WPQ_{name}_{no}_{process}_{date}.pdf
+    {SHAREPOINT_WELDER_FOLDER}/{wps_no}/_Archive/WPQ_{name}_{no}_{wps_no}_{date}.pdf
     """
     if not pdf_url:
         return None
@@ -297,19 +297,19 @@ def archive_welder_cert(pdf_url, process, welder_name, welder_no, valid_until):
         token = _get_app_token()
         drive_id = _get_weldoc_site_drive()
 
-        safe_proc = _sanitize_name(process or "General").replace(" ", "_")
+        safe_wps = _sanitize_name(wps_no or "General").replace(" ", "_")
         safe_name = _sanitize_name(welder_name or "Welder").replace(" ", "_")
         safe_no = _sanitize_name(str(welder_no or "").strip()).replace(" ", "_")
-        safe_date = _sanitize_name(str(valid_until or "").strip()).replace(" ", "_").replace("/", "_").replace(":", "_")
+        safe_date = _sanitize_name(str(valid_until or "").strip()).replace(" ", "_").replace("/", "_").replace(":", "_").replace(".", "_")
 
         if safe_no and safe_date:
-            archive_file_name = f"WPQ_{safe_name}_{safe_no}_{safe_proc}_{safe_date}.pdf"
+            archive_file_name = f"WPQ_{safe_name}_{safe_no}_{safe_wps}_{safe_date}.pdf"
         elif safe_no:
-            archive_file_name = f"WPQ_{safe_name}_{safe_no}_{safe_proc}.pdf"
+            archive_file_name = f"WPQ_{safe_name}_{safe_no}_{safe_wps}.pdf"
         elif safe_date:
-            archive_file_name = f"WPQ_{safe_name}_{safe_proc}_{safe_date}.pdf"
+            archive_file_name = f"WPQ_{safe_name}_{safe_wps}_{safe_date}.pdf"
         else:
-            archive_file_name = f"WPQ_{safe_name}_{safe_proc}.pdf"
+            archive_file_name = f"WPQ_{safe_name}_{safe_wps}.pdf"
 
         # Resolve the drive item ID from pdf_url sharing URL
         clean_url = pdf_url.split("?")[0]
@@ -325,7 +325,7 @@ def archive_welder_cert(pdf_url, process, welder_name, welder_no, valid_until):
 
         # Ensure archive folder exists
         base_folder = _get_welder_folder_base()
-        archive_path = f"{base_folder}/{safe_proc}/_Archive"
+        archive_path = f"{base_folder}/{safe_wps}/_Archive"
         archive_folder_id = _ensure_sharepoint_folder_path(drive_id, archive_path, token)
 
         # Move and rename file
@@ -346,6 +346,63 @@ def archive_welder_cert(pdf_url, process, welder_name, welder_no, valid_until):
     except Exception as e:
         current_app.logger.error(f"SharePoint: Failed to archive welder cert: {e}")
         return None
+
+
+def move_welder_cert(pdf_url, new_wps_no, welder_name, welder_no):
+    """Move and rename an existing certificate PDF to the new WPS folder on SharePoint:
+    {SHAREPOINT_WELDER_FOLDER}/{new_wps_no}/WPQ_{name}_{no}_{new_wps_no}.pdf
+    """
+    if not pdf_url or not new_wps_no:
+        return pdf_url
+    try:
+        import base64
+        token = _get_app_token()
+        drive_id = _get_weldoc_site_drive()
+
+        safe_wps = _sanitize_name(new_wps_no or "General").replace(" ", "_")
+        safe_name = _sanitize_name(welder_name or "Welder").replace(" ", "_")
+        safe_no = _sanitize_name(str(welder_no or "").strip()).replace(" ", "_")
+
+        if safe_no:
+            new_file_name = f"WPQ_{safe_name}_{safe_no}_{safe_wps}.pdf"
+        else:
+            new_file_name = f"WPQ_{safe_name}_{safe_wps}.pdf"
+
+        # Resolve the drive item ID from pdf_url sharing URL
+        clean_url = pdf_url.split("?")[0]
+        encoded_url = base64.urlsafe_b64encode(clean_url.encode()).decode().rstrip("=")
+        share_id = "u!" + encoded_url
+
+        item_url = f"{GRAPH_BASE}/shares/{share_id}/driveItem"
+        req = urllib.request.Request(item_url)
+        req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            item = json.loads(resp.read())
+        item_id = item["id"]
+
+        # Ensure target process folder exists
+        base_folder = _get_welder_folder_base()
+        folder_path = f"{base_folder}/{safe_wps}"
+        target_folder_id = _ensure_sharepoint_folder_path(drive_id, folder_path, token)
+
+        # Move and rename file
+        move_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}"
+        move_body = json.dumps({
+            "parentReference": {"id": target_folder_id},
+            "name": new_file_name
+        }).encode("utf-8")
+        req = urllib.request.Request(move_url, data=move_body, method="PATCH")
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            result = json.loads(resp.read())
+
+        new_url = result.get("webUrl", "")
+        current_app.logger.info(f"SharePoint: Moved and renamed cert to '{folder_path}/{new_file_name}'")
+        return new_url or pdf_url
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: Failed to move welder cert: {e}")
+        return pdf_url
 
 
 def upload_welder_signature(file_name, file_content, content_type="image/png"):

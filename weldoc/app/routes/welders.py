@@ -184,6 +184,7 @@ def create_certificate(wid):
 def update_certificate(cid):
     c = Certificate.query.get_or_404(cid)
     data = request.get_json()
+    old_wps = c.cert_no
     if "certNo" in data:
         c.cert_no = data["certNo"]
     if "process" in data:
@@ -204,6 +205,13 @@ def update_certificate(cid):
             except Exception as e:
                 current_app.logger.warning(f"Could not delete old cert PDF {old_pdf_url}: {e}")
         c.pdf_url = new_pdf_url
+    elif old_wps and c.cert_no and old_wps != c.cert_no and c.pdf_url and not data.get("archived"):
+        from app.sharepoint import move_welder_cert
+        w = Welder.query.get(c.welder_id)
+        if w:
+            new_url = move_welder_cert(c.pdf_url, c.cert_no, w.name, w.no)
+            if new_url:
+                c.pdf_url = new_url
     if "archived" in data:
         c.archived = data["archived"]
         if data["archived"] and c.pdf_url:
@@ -225,7 +233,7 @@ def update_certificate(cid):
 
 @welders_bp.route("/certificates/<int:cid>/upload", methods=["POST"])
 def upload_certificate_pdf(cid):
-    """Upload certificate PDF to SharePoint process folder."""
+    """Upload certificate PDF to SharePoint WPS folder."""
     from app.sharepoint import upload_welder_cert, delete_sharepoint_file
 
     c = Certificate.query.get_or_404(cid)
@@ -241,11 +249,11 @@ def upload_certificate_pdf(cid):
     file_content = file.read()
     content_type = file.content_type or "application/pdf"
 
-    process = request.form.get("process") or c.process
+    wps_no = request.form.get("wpsNo") or request.form.get("certNo") or c.cert_no
     old_pdf_url = c.pdf_url
 
     url = upload_welder_cert(
-        process=process,
+        wps_no=wps_no,
         welder_name=w.name,
         welder_no=w.no,
         file_content=file_content,
@@ -293,7 +301,7 @@ def _serialize_cert(c):
 
 
 def _move_cert_to_archive(cert_id):
-    """Move an archived certificate PDF to 3.2_Personal & Ausbildung/Schweissprüfungen/{process}/_Archive/ in SharePoint."""
+    """Move an archived certificate PDF to {SHAREPOINT_WELDER_FOLDER}/{wps_no}/_Archive/ in SharePoint."""
     from app.sharepoint import archive_welder_cert
     import logging
 
@@ -305,7 +313,7 @@ def _move_cert_to_archive(cert_id):
     try:
         new_url = archive_welder_cert(
             pdf_url=c.pdf_url,
-            process=c.process,
+            wps_no=c.cert_no,
             welder_name=w.name if w else "Welder",
             welder_no=w.no if w else "",
             valid_until=c.valid_until,
