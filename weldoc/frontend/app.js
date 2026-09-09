@@ -5260,17 +5260,82 @@ function saveMaterialProps(e){
   document.getElementById('modal-apply-all-piece').textContent=`${m.piece} · ${m.itemDescription} · ${m.dimension}`;
   openModal('modal-apply-all');
 }
-let _pendingGlobalEdit=null;
-function confirmGlobalEdit(){
+async function confirmGlobalEdit(){
   const m=getMaterial(_materialsPageEditId); if(!m) return;
-  saveDB();
-  /* Sync edit to global materials API */
+  const submitBtn = document.querySelector('#modal-apply-all .btn-primary');
+  if(submitBtn) setButtonLoading(submitBtn, true, t('saving', 'Saving…'));
   try {
-    apiPost('/global-materials/'+m.id, {category:m.piece, itemDescription:m.itemDescription, dn1:m.dimension,
-      dn2:m.dimension2||'', dn3:m.dimension3||'', dn4:m.dimension4||'', dn5:m.dimension5||'', dn6:m.dimension6||'',
-      dienNo:m.dienNo, materialCode:m.materialCode, diameter:m.diameter, thickness:m.thickness, surface:m.surface||''});
-  } catch(e){ console.error('Edit global material API error:', e); }
-  closeModal('modal-apply-all'); _materialsPageEditId=null; _mpOriginal=null; rerenderPage();
+    const payload = {
+      category: m.piece,
+      itemDescription: m.itemDescription,
+      dn1: m.dimension,
+      dn2: m.dimension2 || '',
+      dn3: m.dimension3 || '',
+      dn4: m.dimension4 || '',
+      dn5: m.dimension5 || '',
+      dn6: m.dimension6 || '',
+      dienNo: m.dienNo,
+      materialCode: m.materialCode,
+      diameter: m.diameter,
+      thickness: m.thickness,
+      surface: m.surface || ''
+    };
+
+    let gmId = m.globalMaterialId;
+    if(!gmId && _mpOriginal){
+      const gms = DB.globalMaterials || [];
+      const hit = gms.find(g => 
+        (g.category||'').toLowerCase() === (_mpOriginal.piece||'').toLowerCase() &&
+        (g.itemDescription||g.category||'').toLowerCase() === (_mpOriginal.itemDescription||_mpOriginal.piece||'').toLowerCase() &&
+        (g.dn1||'') === (_mpOriginal.dimension||'') &&
+        (g.materialCode||'') === (_mpOriginal.materialCode||'')
+      );
+      if(hit) gmId = hit.id;
+    }
+
+    if(gmId){
+      await apiPost('/global-materials/' + gmId, payload);
+    } else {
+      await apiPost('/global-materials', payload);
+    }
+
+    /* Update matching materials in local DB.materials array */
+    if(_mpOriginal){
+      (DB.materials||[]).forEach(mat=>{
+        const isMatch = mat.piece === _mpOriginal.piece &&
+          (mat.itemDescription||mat.piece) === (_mpOriginal.itemDescription||_mpOriginal.piece) &&
+          mat.dimension === _mpOriginal.dimension &&
+          (mat.dienNo||'') === (_mpOriginal.dienNo||'') &&
+          mat.materialCode === _mpOriginal.materialCode &&
+          (mat.diameter||'') === (_mpOriginal.diameter||'') &&
+          (mat.thickness||'') === (_mpOriginal.thickness||'') &&
+          (mat.surface||'') === (_mpOriginal.surface||'');
+        if(isMatch || (gmId && mat.globalMaterialId === gmId)){
+          mat.piece = m.piece;
+          mat.itemDescription = m.itemDescription;
+          mat.dimension = m.dimension;
+          for(let i=2;i<=6;i++) mat[`dimension${i}`] = m[`dimension${i}`] || '';
+          mat.dienNo = m.dienNo;
+          mat.materialCode = m.materialCode;
+          mat.diameter = m.diameter;
+          mat.thickness = m.thickness;
+          mat.surface = m.surface;
+        }
+      });
+    }
+  } catch(e){
+    console.error('Edit global material API error:', e);
+  } finally {
+    if(submitBtn) setButtonLoading(submitBtn, false);
+    closeModal('modal-apply-all');
+    _materialsPageEditId=null;
+    _mpOriginal=null;
+    try {
+      const data = await apiGet('/page/materials');
+      if(data && data.materials) DB.materials = normalizeMaterials(data.materials);
+    } catch(e){}
+    renderMaterialsPage();
+  }
 }
 function cancelGlobalEdit(){
   /* Revert local changes */
@@ -5282,7 +5347,7 @@ function cancelGlobalEdit(){
     m.thickness=_mpOriginal.thickness; m.surface=_mpOriginal.surface||'';
     for(let i=2;i<=6;i++) m[`dimension${i}`]=_mpOriginal[`dimension${i}`]||'';
   }
-  closeModal('modal-apply-all'); _materialsPageEditId=null; _mpOriginal=null; rerenderPage();
+  closeModal('modal-apply-all'); _materialsPageEditId=null; _mpOriginal=null; renderMaterialsPage();
 }
 
 /* ================================================================ PROJECT DETAIL PAGE ================================================================ */

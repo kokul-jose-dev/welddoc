@@ -411,6 +411,7 @@ def get_materials_page():
     mat_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.pipeline_id, pm.position, pm.waz_no, pm.waz_package_url,
                pm.start_of_plumbing, pm.end_of_plumbing, pm.archived,
+               proj.global_material_id,
                gm.category, gm.item_description,
                gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6, gm.diameter,
                gm.thickness, gm.surface, gm.material_code, gm.dien_no,
@@ -428,6 +429,7 @@ def get_materials_page():
         "pipelines": [_ser_pipeline(r) for r in pl_rows],
         "materials": [{
             "id": r.id, "pipelineId": r.pipeline_id, "position": r.position,
+            "globalMaterialId": r.global_material_id,
             "piece": r.category or "", "dimension": r.dn1 or "",
             "dimension2": r.dn2 or "", "dimension3": r.dn3 or "",
             "dimension4": r.dn4 or "", "dimension5": r.dn5 or "",
