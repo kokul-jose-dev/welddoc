@@ -114,10 +114,8 @@ def upload_iso(pipeline_id):
 def regenerate_pipeline_waz(pipeline_id):
     """Regenerate all WAZ cover sheets and merged packages with current details for this pipeline,
     and remove any old, obsolete, or duplicate WAZ files from SharePoint."""
-    from app.models.pipeline_material import PipelineMaterial
     from app.models.project import Project
-    from app.routes.pipeline_materials import _sync_pipeline_waz_nos, _build_and_save_waz_package_with_bytes
-    from app.sharepoint import format_waz_filename, clean_pipeline_waz_folder
+    from app.routes.pipeline_materials import _resequence_pipeline_waz_numbers_and_regenerate
 
     p = Pipeline.query.get_or_404(pipeline_id)
     project = Project.query.get_or_404(p.project_id)
@@ -125,56 +123,11 @@ def regenerate_pipeline_waz(pipeline_id):
     if not project.sharepoint_drive_id or not project.sharepoint_folder_id:
         return jsonify({"error": "No SharePoint folder configured for this project."}), 400
 
-    _sync_pipeline_waz_nos(p.id)
-
-    active_mats = PipelineMaterial.query.filter_by(pipeline_id=p.id, archived=False).all()
-    waz_groups = {}
-    for m in active_mats:
-        pm = m.project_material
-        if pm and pm.waz_pdf_url and m.waz_no:
-            waz_key = m.waz_no.strip().upper()
-            if waz_key not in waz_groups:
-                waz_groups[waz_key] = []
-            waz_groups[waz_key].append(m)
-
-    valid_filenames = set()
-    total_waz_regenerated = 0
-
-    for waz_key, mats_for_waz in waz_groups.items():
-        primary_m = mats_for_waz[0]
-        pm = primary_m.project_material
-        gm = pm.global_material if pm else None
-
-        pkg_name = format_waz_filename(
-            item_desc=gm.item_description if gm else "",
-            dn=gm.dn1 if gm else "",
-            diameter=gm.diameter if gm else "",
-            thickness=gm.thickness if gm else "",
-            material_code=gm.material_code if gm else "",
-            surface=gm.surface if gm else "",
-            heat_no=pm.heat_no or "",
-            waz_no=primary_m.waz_no or "WAZ",
-        )
-        valid_filenames.add(pkg_name)
-
-        pkg_url, merged_bytes = _build_and_save_waz_package_with_bytes(primary_m, file_content=None)
-        if pkg_url:
-            total_waz_regenerated += 1
-            for m in mats_for_waz:
-                m.waz_package_url = pkg_url
-            db.session.commit()
-
-    # Clean up all obsolete/duplicate files in the pipeline WAZ folder on SharePoint
-    deleted_old = clean_pipeline_waz_folder(
-        project.sharepoint_drive_id,
-        project.sharepoint_folder_id,
-        p.no,
-        keep_filenames=valid_filenames
-    )
+    regen_count, deleted_old = _resequence_pipeline_waz_numbers_and_regenerate(p.id, force_regenerate_all=True)
 
     return jsonify({
         "ok": True,
-        "count": total_waz_regenerated,
+        "count": regen_count,
         "cleaned": deleted_old,
-        "message": f"Successfully regenerated {total_waz_regenerated} WAZ document(s) and removed {deleted_old} obsolete file(s) for pipeline {p.no}."
+        "message": f"Successfully regenerated {regen_count} WAZ document(s) and removed {deleted_old} obsolete file(s) for pipeline {p.no}."
     }), 200

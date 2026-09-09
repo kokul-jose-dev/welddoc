@@ -348,6 +348,7 @@ def restore_pipeline_material(pm_id):
 
     heat_no = request.form.get("heatNo", "").strip() or pm.heat_no or ""
     certificate = request.form.get("certificate", "").strip() or pm.certificate or ""
+    existing_pdf_url = request.form.get("existingPdfUrl", "").strip()
 
     if heat_no != (pm.heat_no or "") or certificate != (pm.certificate or ""):
         existing_pm = ProjectMaterial.query.filter_by(
@@ -373,6 +374,18 @@ def restore_pipeline_material(pm_id):
     else:
         pm.heat_no = heat_no
         pm.certificate = certificate
+
+    if not pm.waz_pdf_url:
+        if existing_pdf_url:
+            pm.waz_pdf_url = existing_pdf_url
+        elif heat_no:
+            matched_pm = ProjectMaterial.query.filter(
+                ProjectMaterial.heat_no == heat_no,
+                ProjectMaterial.waz_pdf_url.isnot(None),
+                ProjectMaterial.waz_pdf_url != "",
+            ).first()
+            if matched_pm:
+                pm.waz_pdf_url = matched_pm.waz_pdf_url
 
     if file_content and project.sharepoint_drive_id and project.sharepoint_folder_id:
         gm = pm.global_material
@@ -556,13 +569,7 @@ def _delete_pipeline_waz_file_for_material(m, waz_no, waz_pkg_url=None):
     """Delete the WAZ PDF for this material from the pipeline WAZ folder on SharePoint."""
     from app.models.project import Project
     from app.models.pipeline import Pipeline
-    from app.sharepoint import format_waz_filename, delete_pipeline_waz_file, delete_sharepoint_file_by_url
-
-    if waz_pkg_url:
-        try:
-            delete_sharepoint_file_by_url(waz_pkg_url)
-        except Exception:
-            pass
+    from app.sharepoint import format_waz_filename, delete_pipeline_waz_file
 
     try:
         pipeline = Pipeline.query.get(m.pipeline_id)
@@ -592,18 +599,18 @@ def _delete_pipeline_waz_file_for_material(m, waz_no, waz_pkg_url=None):
         current_app.logger.error(f"Error deleting WAZ file for material: {e}")
 
 
-def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id):
+def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id, force_regenerate_all=False):
     """Resequence all active WAZ numbers in the pipeline to be strictly consecutive (Z001, Z002, Z003...),
     delete old SharePoint files for changed WAZ numbers, regenerate updated WAZ packages with new cover sheets,
-    and update database records."""
+    clean obsolete files from SharePoint, and update database records."""
     import re
     from app.models.pipeline import Pipeline
     from app.models.project import Project
-    from app.sharepoint import format_waz_filename, delete_pipeline_waz_file, delete_sharepoint_file_by_url
+    from app.sharepoint import format_waz_filename, delete_pipeline_waz_file, delete_sharepoint_file_by_url, clean_pipeline_waz_folder
 
     pipeline = Pipeline.query.get(pipeline_id)
     if not pipeline:
-        return
+        return 0, 0
 
     active_mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
@@ -642,6 +649,9 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id):
 
     heat_groups.sort(key=_waz_sort_key)
 
+    regen_count = 0
+    valid_filenames = set()
+
     for idx, grp in enumerate(heat_groups, 1):
         target_waz = f"Z{idx:03d}"
         old_waz = grp["old_waz"]
@@ -651,6 +661,19 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id):
         pm = primary_m.project_material
         gm = pm.global_material if pm else None
         project = Project.query.get(pm.project_id) if pm else None
+
+        # Build target filename
+        target_fname = format_waz_filename(
+            item_desc=gm.item_description if gm else "",
+            dn=gm.dn1 if gm else "",
+            diameter=gm.diameter if gm else "",
+            thickness=gm.thickness if gm else "",
+            material_code=gm.material_code if gm else "",
+            surface=gm.surface if gm else "",
+            heat_no=pm.heat_no or "",
+            waz_no=target_waz,
+        )
+        valid_filenames.add(target_fname)
 
         if waz_changed and old_waz:
             if project and project.sharepoint_drive_id and project.sharepoint_folder_id:
@@ -670,51 +693,32 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id):
                     pipeline.no,
                     old_pkg_name
                 )
-            if primary_m.waz_package_url:
-                delete_sharepoint_file_by_url(primary_m.waz_package_url)
 
         for m in grp["mats"]:
             m.waz_no = target_waz
         db.session.commit()
 
-        if waz_changed or not primary_m.waz_package_url:
+        if force_regenerate_all or waz_changed or not primary_m.waz_package_url:
             pkg_url, _ = _build_and_save_waz_package_with_bytes(primary_m, file_content=None)
             if pkg_url:
+                regen_count += 1
                 for m in grp["mats"]:
                     m.waz_package_url = pkg_url
                 db.session.commit()
 
-    # Collect valid filenames and clean any leftover/obsolete SharePoint files
-    if heat_groups:
-        valid_filenames = set()
-        for grp in heat_groups:
-            primary_m = grp["mats"][0]
-            pm = primary_m.project_material
-            gm = pm.global_material if pm else None
-            valid_filenames.add(format_waz_filename(
-                item_desc=gm.item_description if gm else "",
-                dn=gm.dn1 if gm else "",
-                diameter=gm.diameter if gm else "",
-                thickness=gm.thickness if gm else "",
-                material_code=gm.material_code if gm else "",
-                surface=gm.surface if gm else "",
-                heat_no=pm.heat_no or "",
-                waz_no=primary_m.waz_no or "WAZ",
-            ))
-
-        first_pm = heat_groups[0]["mats"][0].project_material
-        if first_pm:
-            first_proj = Project.query.get(first_pm.project_id)
-            if first_proj and first_proj.sharepoint_drive_id and first_proj.sharepoint_folder_id:
-                from app.sharepoint import clean_pipeline_waz_folder
-                clean_pipeline_waz_folder(
-                    first_proj.sharepoint_drive_id,
-                    first_proj.sharepoint_folder_id,
-                    pipeline.no,
-                    keep_filenames=valid_filenames
-                )
+    # Clean obsolete / duplicate files in SharePoint folder
+    deleted_old = 0
+    project = Project.query.get(pipeline.project_id)
+    if project and project.sharepoint_drive_id and project.sharepoint_folder_id:
+        deleted_old = clean_pipeline_waz_folder(
+            project.sharepoint_drive_id,
+            project.sharepoint_folder_id,
+            pipeline.no,
+            keep_filenames=valid_filenames
+        )
 
     db.session.commit()
+    return regen_count, deleted_old
 
 
 def _assign_waz_no(pipeline_id, project_material_id):

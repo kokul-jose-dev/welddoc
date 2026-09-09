@@ -1092,18 +1092,19 @@ function mountModals(){
   </div></div>
 
   <div class="modal-overlay" id="modal-restore-material"><div class="modal modal-wide">
-    <button class="modal-close" onclick="closeModal('modal-restore-material')">&times;</button><h2 id="modal-restore-mat-title" data-i18n="restore_material_title">Restore Material — Upload WAZ PDF</h2>
+    <button class="modal-close" onclick="closeModal('modal-restore-material')">&times;</button><h2 id="modal-restore-mat-title" data-i18n="restore_material_title">Restore Material — WAZ PDF</h2>
     <div id="restore-mat-summary" style="margin-bottom:16px;padding:12px;background:var(--card-bg, rgba(255,255,255,0.05));border-radius:6px;"></div>
+    <div id="restore-mat-existing-doc"></div>
     <div class="form-grid">
-      <div class="field"><span class="lbl" data-i18n="heat_melt_no">Heat / melt No.</span><input type="text" id="restore-mat-heat" placeholder="Type heat/melt No.…" data-i18n-placeholder="type_heat_no"></div>
+      <div class="field"><span class="lbl" data-i18n="heat_melt_no">Heat / melt No.</span><input type="text" id="restore-mat-heat" oninput="onRestoreHeatInput()" placeholder="Type heat/melt No.…" data-i18n-placeholder="type_heat_no"></div>
       <div class="field"><span class="lbl" data-i18n="cert_no">Certificate No.</span><input type="text" id="restore-mat-cert" placeholder="Type certificate No.…" data-i18n-placeholder="type_cert_no"></div>
-      <div class="field wide"><span class="lbl"><span data-i18n="waz_doc_sp">WAZ document (PDF)</span> *</span>
+      <div class="field wide"><span class="lbl" id="restore-mat-file-label"><span data-i18n="waz_doc_sp">WAZ document (PDF)</span> *</span>
         <input type="file" id="restore-mat-file" accept="application/pdf">
-        <p class="field-hint" style="margin-top:6px;" data-i18n="restore_mat_pdf_help">Please select the WAZ PDF document to restore this material.</p>
+        <p class="field-hint" id="restore-mat-file-hint" style="margin-top:6px;" data-i18n="restore_mat_pdf_help">Please select the WAZ PDF document to restore this material.</p>
       </div>
       <div class="modal-err" id="restore-mat-err"></div>
     </div>
-    <div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-restore-material')" data-i18n="cancel">Cancel</button><button type="button" id="restore-mat-submit-btn" class="btn btn-primary" onclick="submitRestoreMaterial()"><span data-i18n="restore_and_upload">Restore & Upload</span></button></div>
+    <div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-restore-material')" data-i18n="cancel">Cancel</button><button type="button" id="restore-mat-submit-btn" class="btn btn-primary" onclick="submitRestoreMaterial()"><span id="restore-mat-btn-text" data-i18n="restore_and_upload">Restore & Upload</span></button></div>
   </div></div>`;
   if(typeof translatePage==='function') translatePage();
   attachFormHandlers();
@@ -3028,6 +3029,7 @@ async function initArchivePage(){
     DB.pipelines = data.pipelines || [];
     DB.materials = normalizeMaterials(data.materials || []);
     DB.welds = normalizeWelds(data.welds || []);
+    if(data.projectMaterials && Array.isArray(data.projectMaterials)) DB.projectMaterials = data.projectMaterials;
     rebuildRelationships();
   } catch(e){ console.error('API error:', e); }
   renderChrome('clients',`<a href="index.html">${t('clients','Clients')}</a> / ${t('archive','Archive')}`);
@@ -3132,6 +3134,71 @@ async function restoreProject(id){
   saveDB(); renderArchivePage();
 }
 let _restoringMaterialId = null;
+let _restoringExistingPdfUrl = '';
+
+function findExistingWazPdfUrl(heatNo, material){
+  if(material && material.wazPdfUrl) return material.wazPdfUrl;
+  const h = (heatNo || (material ? material.heatNo : '') || '').trim().toLowerCase();
+  if(!h) return '';
+
+  // 1. Check in DB.projectMaterials
+  if(DB.projectMaterials && DB.projectMaterials.length){
+    const pmMatch = DB.projectMaterials.find(pm => pm.heatNo && pm.heatNo.trim().toLowerCase() === h && pm.wazPdfUrl);
+    if(pmMatch) return pmMatch.wazPdfUrl;
+  }
+
+  // 2. Check in DB.materials
+  if(DB.materials && DB.materials.length){
+    const mMatch = DB.materials.find(m => m.heatNo && m.heatNo.trim().toLowerCase() === h && m.wazPdfUrl);
+    if(mMatch) return mMatch.wazPdfUrl;
+  }
+
+  return '';
+}
+
+function renderRestoreExistingPdfNotice(url){
+  _restoringExistingPdfUrl = url || '';
+  const container = document.getElementById('restore-mat-existing-doc');
+  const labelEl = document.getElementById('restore-mat-file-label');
+  const hintEl = document.getElementById('restore-mat-file-hint');
+  const btnText = document.getElementById('restore-mat-btn-text');
+
+  if(url){
+    if(container){
+      container.innerHTML = `
+        <div style="background:rgba(46,125,50,0.08);border:1px solid rgba(46,125,50,0.25);border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+          <div>
+            <div style="font-weight:600;color:var(--text-bright);font-size:0.875rem;display:flex;align-items:center;gap:6px;">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              ${t('existing_waz_pdf_found', 'Existing Project WAZ PDF Found')}
+            </div>
+            <div class="muted small" style="margin-top:2px;">${t('existing_pdf_help', 'An existing certificate PDF is attached to this heat number in project materials. You can reuse it or upload a new file below to replace it.')}</div>
+          </div>
+          <a href="${escapeHtml(url)}" target="_blank" class="btn btn-secondary btn-sm" style="white-space:nowrap;">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            ${t('view_pdf', 'View PDF')}
+          </a>
+        </div>
+      `;
+    }
+    if(labelEl) labelEl.innerHTML = `${t('waz_doc_sp','WAZ document (PDF)')} <span class="muted" style="font-weight:normal;font-size:0.8rem;">(${t('optional_replace','Optional — leave blank to reuse existing')})</span>`;
+    if(hintEl) hintEl.textContent = t('optional_replace','Optional — leave blank to reuse existing PDF');
+    if(btnText) btnText.textContent = t('restore_material_btn', 'Restore Material');
+  } else {
+    if(container) container.innerHTML = '';
+    if(labelEl) labelEl.innerHTML = `${t('waz_doc_sp','WAZ document (PDF)')} *`;
+    if(hintEl) hintEl.textContent = t('restore_mat_pdf_help','Please select the WAZ PDF document to restore this material.');
+    if(btnText) btnText.textContent = t('restore_and_upload', 'Restore & Upload');
+  }
+}
+
+function onRestoreHeatInput(){
+  const heatVal = (document.getElementById('restore-mat-heat')?.value || '').trim();
+  const m = DB.materials.find(x=>x.id===_restoringMaterialId);
+  const existingUrl = findExistingWazPdfUrl(heatVal, m);
+  renderRestoreExistingPdfNotice(existingUrl);
+}
+
 function openRestoreMaterialModal(id){
   _restoringMaterialId = id;
   const m = DB.materials.find(x=>x.id===id);
@@ -3166,10 +3233,10 @@ function openRestoreMaterialModal(id){
   if(errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
 
   const btn = document.getElementById('restore-mat-submit-btn');
-  if(btn){
-    btn.disabled = false;
-    btn.innerHTML = `${RESTORE_ICON} <span>${t('restore_and_upload', 'Restore & Upload')}</span>`;
-  }
+  if(btn) btn.disabled = false;
+
+  const existingUrl = findExistingWazPdfUrl(m.heatNo, m);
+  renderRestoreExistingPdfNotice(existingUrl);
 
   openModal('modal-restore-material');
 }
@@ -3179,15 +3246,16 @@ async function submitRestoreMaterial(){
   const id = _restoringMaterialId;
   const fileInput = document.getElementById('restore-mat-file');
   const errEl = document.getElementById('restore-mat-err');
+  const hasFile = fileInput && fileInput.files && fileInput.files.length > 0;
 
-  if(!fileInput || !fileInput.files || fileInput.files.length === 0){
+  if(!hasFile && !_restoringExistingPdfUrl){
     const msg = t('upload_required', 'Please select a WAZ PDF file to restore this material.');
     if(errEl){ errEl.textContent = msg; errEl.style.display = 'block'; }
     else alert(msg);
     return;
   }
 
-  const file = fileInput.files[0];
+  const file = hasFile ? fileInput.files[0] : null;
   const heatNo = (document.getElementById('restore-mat-heat')?.value || '').trim();
   const cert = (document.getElementById('restore-mat-cert')?.value || '').trim();
 
@@ -3198,9 +3266,10 @@ async function submitRestoreMaterial(){
   }
 
   const formData = new FormData();
-  formData.append('file', file);
+  if(file) formData.append('file', file);
   formData.append('heatNo', heatNo);
   formData.append('certificate', cert);
+  if(_restoringExistingPdfUrl) formData.append('existingPdfUrl', _restoringExistingPdfUrl);
 
   try {
     const res = await fetch('/api/pipeline-materials/' + id + '/restore', {
@@ -3214,7 +3283,7 @@ async function submitRestoreMaterial(){
       else alert(errTxt);
       if(btn){
         btn.disabled = false;
-        btn.innerHTML = `${RESTORE_ICON} <span>${t('restore_and_upload', 'Restore & Upload')}</span>`;
+        renderRestoreExistingPdfNotice(_restoringExistingPdfUrl);
       }
       return;
     }
@@ -3227,7 +3296,7 @@ async function submitRestoreMaterial(){
     else alert(errTxt);
     if(btn){
       btn.disabled = false;
-      btn.innerHTML = `${RESTORE_ICON} <span>${t('restore_and_upload', 'Restore & Upload')}</span>`;
+      renderRestoreExistingPdfNotice(_restoringExistingPdfUrl);
     }
   }
 }

@@ -466,12 +466,23 @@ def get_archive_page():
         FROM weldoc_pipelines ORDER BY id DESC
     """)).fetchall()
 
+    pm_rows = db.session.execute(db.text("""
+        SELECT pm.id, pm.project_id, pm.global_material_id, pm.certificate,
+               pm.heat_no, pm.waz_pdf_url, pm.archived,
+               gm.category, gm.item_description, gm.dn1, gm.dn2, gm.dn3,
+               gm.dn4, gm.dn5, gm.dn6, gm.diameter, gm.thickness,
+               gm.surface, gm.material_code, gm.dien_no
+        FROM weldoc_project_materials pm
+        LEFT JOIN weldoc_global_materials gm ON pm.global_material_id = gm.id
+        ORDER BY pm.id DESC
+    """)).fetchall()
+
     mat_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.pipeline_id, pm.position, pm.waz_no, pm.start_of_plumbing,
                pm.end_of_plumbing, pm.archived, gm.category, gm.item_description,
                gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6, gm.diameter,
                gm.thickness, gm.surface, gm.material_code, gm.dien_no,
-               proj.certificate, proj.heat_no, proj.waz_pdf_url
+               proj.id as project_material_id, proj.project_id, proj.certificate, proj.heat_no, proj.waz_pdf_url
         FROM weldoc_pipeline_materials pm
         LEFT JOIN weldoc_project_materials proj ON pm.project_material_id = proj.id
         LEFT JOIN weldoc_global_materials gm ON proj.global_material_id = gm.id
@@ -492,8 +503,21 @@ def get_archive_page():
         "clients": [_ser_client(r) for r in c_rows],
         "projects": [_ser_project(r) for r in pr_rows],
         "pipelines": [_ser_pipeline(r) for r in pl_rows],
+        "projectMaterials": [{
+            "id": r.id, "projectId": r.project_id,
+            "globalMaterialId": r.global_material_id,
+            "certificate": r.certificate, "heatNo": r.heat_no,
+            "wazPdfUrl": r.waz_pdf_url, "archived": bool(r.archived),
+            "category": r.category, "itemDescription": r.item_description,
+            "dn1": r.dn1, "dn2": r.dn2, "dn3": r.dn3,
+            "dn4": r.dn4, "dn5": r.dn5, "dn6": r.dn6,
+            "diameter": r.diameter, "thickness": r.thickness,
+            "surface": r.surface, "materialCode": r.material_code,
+            "dienNo": r.dien_no,
+        } for r in pm_rows],
         "materials": [{
             "id": r.id, "pipelineId": r.pipeline_id, "position": r.position,
+            "projectMaterialId": r.project_material_id, "projectId": r.project_id,
             "piece": r.category or "", "dimension": r.dn1 or "",
             "dimension2": r.dn2 or "", "dimension3": r.dn3 or "",
             "dimension4": r.dn4 or "", "dimension5": r.dn5 or "",
