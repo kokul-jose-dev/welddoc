@@ -2264,6 +2264,15 @@ function onMatCertificateChange(){
     }
   }
 }
+function formatWazDocName(url){
+  if(!url) return 'WAZ Document';
+  try {
+    const raw=url.split('/').pop().split('?')[0];
+    return decodeURIComponent(raw);
+  } catch(e){
+    return url.split('/').pop().split('?')[0];
+  }
+}
 let _matWazDocRemoved=false;
 let _matAttachedWazPdfUrl='';
 function _renderMatWazDoc(){
@@ -2272,10 +2281,10 @@ function _renderMatWazDoc(){
   if(!docDiv || !fileEl) return;
   if(_matAttachedWazPdfUrl && !_matWazDocRemoved){
     fileEl.style.display='none';
-    const fileName=_matAttachedWazPdfUrl.split('/').pop().split('?')[0];
-    docDiv.innerHTML=`<div class="waz-doc-current" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-      <a class="doc-chip doc-iso" href="${escapeHtml(_matAttachedWazPdfUrl)}" target="_blank" rel="noopener">${escapeHtml(fileName||'WAZ Document')}</a>
-      <button type="button" class="btn-link waz-doc-remove" onclick="_removeMatCurrentWazDoc()" style="color:var(--danger,#e53e3e);font-size:12px;">Remove</button>
+    const fileName=formatWazDocName(_matAttachedWazPdfUrl);
+    docDiv.innerHTML=`<div class="waz-doc-current">
+      <a class="doc-chip doc-iso" href="${escapeHtml(_matAttachedWazPdfUrl)}" target="_blank" rel="noopener" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</a>
+      <button type="button" class="btn-link waz-doc-remove" onclick="_removeMatCurrentWazDoc()">Remove</button>
     </div>`;
   } else {
     fileEl.style.display='';
@@ -3989,10 +3998,12 @@ function toggleWazFileVisibility(){
   const docDiv=document.getElementById('waz-current-doc');
   if(existingWithDoc && !wazDocRemoved){
     fileEl.style.display='none';
-    docDiv.innerHTML=`<div class="waz-doc-current"><a class="doc-chip doc-iso" href="${escapeHtml(existingWithDoc.wazPdfUrl)}" target="_blank" rel="noopener">${escapeHtml(existingWithDoc.wazPdfUrl.split('/').pop())}</a><button type="button" class="btn-link waz-doc-remove" onclick="removeWazCurrentDoc()">Remove</button></div>`;
+    const fileName=formatWazDocName(existingWithDoc.wazPdfUrl);
+    docDiv.innerHTML=`<div class="waz-doc-current"><a class="doc-chip doc-iso" href="${escapeHtml(existingWithDoc.wazPdfUrl)}" target="_blank" rel="noopener" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</a><button type="button" class="btn-link waz-doc-remove" onclick="removeWazCurrentDoc()">Remove</button></div>`;
   } else if(_wazProjectPdfUrl && !wazDocRemoved){
     fileEl.style.display='none';
-    docDiv.innerHTML=`<div class="waz-doc-current"><a class="doc-chip doc-iso" href="${escapeHtml(_wazProjectPdfUrl)}" target="_blank" rel="noopener">${escapeHtml(_wazProjectPdfUrl.split('/').pop())}</a> <span class="muted">(from project)</span><button type="button" class="btn-link waz-doc-remove" onclick="removeWazCurrentDoc()">Remove</button></div>`;
+    const fileName=formatWazDocName(_wazProjectPdfUrl);
+    docDiv.innerHTML=`<div class="waz-doc-current"><a class="doc-chip doc-iso" href="${escapeHtml(_wazProjectPdfUrl)}" target="_blank" rel="noopener" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</a> <span class="muted">(from project)</span><button type="button" class="btn-link waz-doc-remove" onclick="removeWazCurrentDoc()">Remove</button></div>`;
   } else if(!wazDocRemoved){
     fileEl.style.display='';
     docDiv.innerHTML='';
