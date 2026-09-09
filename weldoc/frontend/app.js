@@ -2035,7 +2035,7 @@ function onCategoryChange(){
   updateConnHint();
 
   const projMats=DB.projectMaterials||[];
-  const catProjMats=piece?projMats.filter(pm=>(pm.category||'').toLowerCase()===piece.toLowerCase()):projMats;
+  const catProjMats=piece?projMats.filter(pm=>(pm.category||'').toLowerCase()===piece.toLowerCase()):[];
   const filtered=piece?matSource().filter(i=>i.piece.toLowerCase()===piece.toLowerCase()):matSource();
 
   const descs=[...new Set(filtered.map(i=>i.description).filter(Boolean))];
@@ -2141,18 +2141,67 @@ function toggleWireFields(piece){
 function onItemDescChange(){
   toggleSelectOther('input-mat-desc','input-mat-desc-new');
   const desc=readSelectOther('input-mat-desc','input-mat-desc-new');
+  let piece=readSelectOther('input-mat-piece','input-mat-piece-new');
   if(desc && desc!=='__other__'){
     const hit=matSource().find(i=>i.description===desc);
-    if(hit){
-      const curPiece = readSelectOther('input-mat-piece','input-mat-piece-new');
-      if(!curPiece){
-        buildSelectSimple('input-mat-piece',PIECE_OPTIONS,hit.piece);
-        toggleDnFields(hit.piece);
-        toggleDiameterThicknessFields(hit.piece);
-      }
+    if(hit && !piece){
+      piece=hit.piece;
+      buildSelectSimple('input-mat-piece',PIECE_OPTIONS,piece);
+      toggleWireFields(piece);
+      toggleDnFields(piece);
+      toggleDiameterThicknessFields(piece);
     }
   }
   updateConnHint();
+
+  /* Filter project materials by category AND item description */
+  const projMats=DB.projectMaterials||[];
+  let matchedProjMats=projMats.filter(pm=>
+    (!piece || (pm.category||'').toLowerCase()===piece.toLowerCase()) &&
+    (!desc || desc==='__other__' || (pm.itemDescription||'').toLowerCase()===desc.toLowerCase())
+  );
+  if(!matchedProjMats.length && piece){
+    matchedProjMats=projMats.filter(pm=>(pm.category||'').toLowerCase()===piece.toLowerCase());
+  }
+
+  const certs=[...new Set(matchedProjMats.map(pm=>pm.certificate).filter(Boolean))];
+  const heats=[...new Set(matchedProjMats.map(pm=>pm.heatNo).filter(Boolean))];
+
+  if(matchedProjMats.length===1){
+    const single=matchedProjMats[0];
+    if(single.dn1) buildSelectOther('input-mat-dimension','input-mat-dimension-new',DIMENSION_OPTIONS,single.dn1||'',true);
+    const dnCount=requiredDns(piece||single.category);
+    for(let i=2;i<=dnCount;i++){
+      const sel=document.getElementById(`input-mat-dimension${i}`);
+      if(sel) buildSelectOther(`input-mat-dimension${i}`,`input-mat-dimension${i}-new`,DIMENSION_OPTIONS,single[`dn${i}`]||'',true);
+    }
+    const filtered=piece?matSource().filter(i=>i.piece.toLowerCase()===piece.toLowerCase()):matSource();
+    const diens=[...new Set(filtered.map(i=>i.dien).filter(Boolean))];
+    if(single.dienNo) buildSelectOther('input-mat-dien','input-mat-dien-new',diens,single.dienNo||'');
+    const codes=[...new Set(filtered.map(i=>i.code).filter(Boolean))];
+    if(single.materialCode) buildSelectOther('input-mat-code','input-mat-code-new',codes,single.materialCode||'');
+    const diameters=[...new Set(filtered.map(i=>i.diameter).filter(Boolean))];
+    if(single.diameter) buildSelectOther('input-mat-diameter','input-mat-diameter-new',diameters,single.diameter||'');
+    const thicknesses=[...new Set(filtered.map(i=>i.thickness).filter(Boolean))];
+    if(single.thickness) buildSelectOther('input-mat-thickness','input-mat-thickness-new',thicknesses,single.thickness||'');
+    const surfaces=[...new Set(filtered.map(i=>i.surface).filter(Boolean))];
+    if(single.surface) buildSelectOther('input-mat-surface','input-mat-surface-new',surfaces,single.surface||'');
+    buildSelectOther('input-mat-certificate','input-mat-certificate-new',certs,single.certificate||'');
+    buildSelectOther('input-mat-heat','input-mat-heat-new',heats,single.heatNo||'');
+
+    _matAttachedWazPdfUrl=single.wazPdfUrl||'';
+    _matWazDocRemoved=false;
+    _renderMatWazDoc();
+  } else {
+    const curCert=readSelectOther('input-mat-certificate','input-mat-certificate-new');
+    const curHeat=readSelectOther('input-mat-heat','input-mat-heat-new');
+    buildSelectOther('input-mat-certificate','input-mat-certificate-new',certs,certs.includes(curCert)?curCert:(certs.length===1?certs[0]:''));
+    buildSelectOther('input-mat-heat','input-mat-heat-new',heats,heats.includes(curHeat)?curHeat:(heats.length===1?heats[0]:''));
+    if(heats.length===1 && (!curHeat || curHeat===heats[0])){
+      onMatHeatChange();
+    }
+  }
+
   cascadeFromDesc();
 }
 function cascadeFromDesc(){
@@ -2208,19 +2257,32 @@ function onMatHeatChange(){
     _renderMatWazDoc();
     return;
   }
+  const curPiece=readSelectOther('input-mat-piece','input-mat-piece-new');
+  const curDesc=readSelectOther('input-mat-desc','input-mat-desc-new');
   const projMats=DB.projectMaterials||[];
-  const hit=projMats.find(pm=>(pm.heatNo||'').trim().toLowerCase()===heatNo.trim().toLowerCase());
+  const hit=projMats.find(pm=>
+    (!curPiece||(pm.category||'').toLowerCase()===curPiece.toLowerCase()) &&
+    (!curDesc||curDesc==='__other__'||(pm.itemDescription||'').toLowerCase()===curDesc.toLowerCase()) &&
+    (pm.heatNo||'').trim().toLowerCase()===heatNo.trim().toLowerCase()
+  ) || projMats.find(pm=>
+    (!curPiece||(pm.category||'').toLowerCase()===curPiece.toLowerCase()) &&
+    (pm.heatNo||'').trim().toLowerCase()===heatNo.trim().toLowerCase()
+  ) || projMats.find(pm=>(pm.heatNo||'').trim().toLowerCase()===heatNo.trim().toLowerCase());
+
   if(hit){
-    const piece=hit.category||'';
-    if(piece){
-      const curPiece=readSelectOther('input-mat-piece','input-mat-piece-new');
-      if(curPiece!==piece){
-        buildSelectSimple('input-mat-piece',PIECE_OPTIONS,piece);
-        toggleWireFields(piece);
-        toggleDnFields(piece);
-        toggleDiameterThicknessFields(piece);
-      }
+    const piece=hit.category||curPiece||'';
+    if(piece && piece!==curPiece){
+      buildSelectSimple('input-mat-piece',PIECE_OPTIONS,piece);
+      toggleWireFields(piece);
+      toggleDnFields(piece);
+      toggleDiameterThicknessFields(piece);
     }
+    const desc=hit.itemDescription||curDesc||'';
+    const catProjMats=projMats.filter(pm=>
+      (!piece || (pm.category||'').toLowerCase()===piece.toLowerCase()) &&
+      (!desc || desc==='__other__' || (pm.itemDescription||'').toLowerCase()===desc.toLowerCase())
+    );
+    const matchedMats=catProjMats.length?catProjMats:projMats.filter(pm=>!piece||(pm.category||'').toLowerCase()===piece.toLowerCase());
     const filtered=piece?matSource().filter(i=>i.piece.toLowerCase()===piece.toLowerCase()):matSource();
     const descs=[...new Set(filtered.map(i=>i.description).filter(Boolean))];
     const diens=[...new Set(filtered.map(i=>i.dien).filter(Boolean))];
@@ -2228,7 +2290,8 @@ function onMatHeatChange(){
     const diameters=[...new Set(filtered.map(i=>i.diameter).filter(Boolean))];
     const thicknesses=[...new Set(filtered.map(i=>i.thickness).filter(Boolean))];
     const surfaces=[...new Set(filtered.map(i=>i.surface).filter(Boolean))];
-    const certs=[...new Set(projMats.filter(pm=>!piece||(pm.category||'').toLowerCase()===piece.toLowerCase()).map(pm=>pm.certificate).filter(Boolean))];
+    const certs=[...new Set(matchedMats.map(pm=>pm.certificate).filter(Boolean))];
+    const heats=[...new Set(matchedMats.map(pm=>pm.heatNo).filter(Boolean))];
 
     if(hit.itemDescription) buildSelectOther('input-mat-desc','input-mat-desc-new',descs,hit.itemDescription);
     if(hit.dn1) buildSelectOther('input-mat-dimension','input-mat-dimension-new',DIMENSION_OPTIONS,hit.dn1,true);
@@ -2243,6 +2306,7 @@ function onMatHeatChange(){
     if(hit.thickness) buildSelectOther('input-mat-thickness','input-mat-thickness-new',thicknesses,hit.thickness);
     if(hit.surface) buildSelectOther('input-mat-surface','input-mat-surface-new',surfaces,hit.surface);
     if(hit.certificate) buildSelectOther('input-mat-certificate','input-mat-certificate-new',certs,hit.certificate);
+    buildSelectOther('input-mat-heat','input-mat-heat-new',heats,hit.heatNo||heatNo);
 
     _matAttachedWazPdfUrl=hit.wazPdfUrl||'';
     _matWazDocRemoved=false;
@@ -2253,15 +2317,26 @@ function onMatCertificateChange(){
   toggleSelectOther('input-mat-certificate','input-mat-certificate-new');
   const cert=readSelectOther('input-mat-certificate','input-mat-certificate-new');
   if(!cert || cert==='__other__') return;
+  const piece=readSelectOther('input-mat-piece','input-mat-piece-new');
+  const desc=readSelectOther('input-mat-desc','input-mat-desc-new');
   const projMats=DB.projectMaterials||[];
-  const matchingHeats=[...new Set(projMats.filter(pm=>(pm.certificate||'').trim()===cert.trim()).map(pm=>pm.heatNo).filter(Boolean))];
+  let catProjMats=projMats.filter(pm=>
+    (!piece || (pm.category||'').toLowerCase()===piece.toLowerCase()) &&
+    (!desc || desc==='__other__' || (pm.itemDescription||'').toLowerCase()===desc.toLowerCase())
+  );
+  if(!catProjMats.length && piece){
+    catProjMats=projMats.filter(pm=>(pm.category||'').toLowerCase()===piece.toLowerCase());
+  }
+  const matchingHeats=[...new Set(catProjMats.filter(pm=>(pm.certificate||'').trim()===cert.trim()).map(pm=>pm.heatNo).filter(Boolean))];
+  const catHeats=[...new Set(catProjMats.map(pm=>pm.heatNo).filter(Boolean))];
   if(matchingHeats.length===1){
     const curHeat=readSelectOther('input-mat-heat','input-mat-heat-new');
     if(!curHeat || curHeat!==matchingHeats[0]){
-      const allHeats=[...new Set(projMats.map(pm=>pm.heatNo).filter(Boolean))];
-      buildSelectOther('input-mat-heat','input-mat-heat-new',allHeats,matchingHeats[0]);
+      buildSelectOther('input-mat-heat','input-mat-heat-new',catHeats,matchingHeats[0]);
       onMatHeatChange();
     }
+  } else {
+    buildSelectOther('input-mat-heat','input-mat-heat-new',catHeats,readSelectOther('input-mat-heat','input-mat-heat-new')||'');
   }
 }
 function formatWazDocName(url){
@@ -2349,8 +2424,6 @@ function openMaterialModal(id=null, returnToWeld=false){
   const allCodes=[...new Set(src.map(i=>i.code).filter(Boolean))];
   const allDiameters=[...new Set(src.map(i=>i.diameter).filter(Boolean))];
   const allThicknesses=[...new Set(src.map(i=>i.thickness).filter(Boolean))];
-  const allCerts=[...new Set((DB.projectMaterials||[]).map(pm=>pm.certificate).filter(Boolean))];
-  const allHeats=[...new Set((DB.projectMaterials||[]).map(pm=>pm.heatNo).filter(Boolean))];
   buildSelectSimple('input-mat-piece',allPieces,'');
   buildSelectOther('input-mat-desc','input-mat-desc-new',allDescs,'');
   buildSelectOther('input-mat-dimension','input-mat-dimension-new',DIMENSION_OPTIONS,'',true);
@@ -2358,8 +2431,8 @@ function openMaterialModal(id=null, returnToWeld=false){
   buildSelectOther('input-mat-code','input-mat-code-new',allCodes,'');
   buildSelectOther('input-mat-diameter','input-mat-diameter-new',allDiameters,'');
   buildSelectOther('input-mat-thickness','input-mat-thickness-new',allThicknesses,'');
-  buildSelectOther('input-mat-certificate','input-mat-certificate-new',allCerts,'');
-  buildSelectOther('input-mat-heat','input-mat-heat-new',allHeats,'');
+  buildSelectOther('input-mat-certificate','input-mat-certificate-new',[],'');
+  buildSelectOther('input-mat-heat','input-mat-heat-new',[],'');
   const fileInput=document.getElementById('input-mat-waz-file');
   if(fileInput) fileInput.value='';
   _matWazDocRemoved=false;
@@ -2378,6 +2451,18 @@ function openMaterialModal(id=null, returnToWeld=false){
     toggleWireFields(m.piece);
     toggleDnFields(m.piece);
     toggleDiameterThicknessFields(m.piece);
+    const projMats=DB.projectMaterials||[];
+    let curCatProjMats=projMats.filter(pm=>
+      (pm.category||'').toLowerCase()===(m.piece||'').toLowerCase() &&
+      (!m.itemDescription || (pm.itemDescription||'').toLowerCase()===(m.itemDescription||'').toLowerCase())
+    );
+    if(!curCatProjMats.length){
+      curCatProjMats=projMats.filter(pm=>(pm.category||'').toLowerCase()===(m.piece||'').toLowerCase());
+    }
+    let catCerts=[...new Set(curCatProjMats.map(pm=>pm.certificate).filter(Boolean))];
+    let catHeats=[...new Set(curCatProjMats.map(pm=>pm.heatNo).filter(Boolean))];
+    if(m.certificate && !catCerts.includes(m.certificate)) catCerts.push(m.certificate);
+    if(m.heatNo && !catHeats.includes(m.heatNo)) catHeats.push(m.heatNo);
     buildSelectOther('input-mat-desc','input-mat-desc-new',allDescs,m.itemDescription);
     buildSelectOther('input-mat-dimension','input-mat-dimension-new',DIMENSION_OPTIONS,m.dimension,true);
     /* populate extra DN fields with saved values */
@@ -2392,8 +2477,8 @@ function openMaterialModal(id=null, returnToWeld=false){
     buildSelectOther('input-mat-diameter','input-mat-diameter-new',allDiameters,m.diameter||'');
     buildSelectOther('input-mat-thickness','input-mat-thickness-new',allThicknesses,m.thickness||'');
     {const allSurfaces=[...new Set((DB.globalMaterials||[]).map(g=>g.surface).filter(Boolean))]; buildSelectOther('input-mat-surface','input-mat-surface-new',allSurfaces,m.surface||'');}
-    buildSelectOther('input-mat-certificate','input-mat-certificate-new',allCerts,m.certificate||'');
-    buildSelectOther('input-mat-heat','input-mat-heat-new',allHeats,m.heatNo||'');
+    buildSelectOther('input-mat-certificate','input-mat-certificate-new',catCerts,m.certificate||'');
+    buildSelectOther('input-mat-heat','input-mat-heat-new',catHeats,m.heatNo||'');
     _matAttachedWazPdfUrl=m.wazPdfUrl||m.wazPackageUrl||'';
     _matWazDocRemoved=false;
     _renderMatWazDoc();
