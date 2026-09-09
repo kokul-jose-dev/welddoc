@@ -1052,7 +1052,7 @@ function mountModals(){
     <div class="form-grid">
       <div class="field"><span class="lbl" data-i18n="waz_no">WAZ No.</span><select id="input-waz-no" onchange="onWazNoChange()"></select></div>
       <div class="field"><span class="lbl" data-i18n="cert_no">Certificate No.</span><input type="text" id="input-waz-cert-edit" placeholder="Type certificate No.…" data-i18n-placeholder="type_cert_no"></div>
-      <div class="field"><span class="lbl" data-i18n="heat_melt_no">Heat / melt No.</span><input type="text" id="input-waz-heat-edit" placeholder="Type heat/melt No.…" data-i18n-placeholder="type_heat_no"></div>
+      <div class="field"><span class="lbl" data-i18n="heat_melt_no">Heat / melt No.</span><input type="text" id="input-waz-heat-edit" oninput="onWazHeatEditInput()" placeholder="Type heat/melt No.…" data-i18n-placeholder="type_heat_no"></div>
       <div class="modal-note" id="waz-shared-warning" style="display:none;color:var(--copper);grid-column:1/-1;" data-i18n="waz_shared_warning">⚠ Any changes here will apply to every combination of heat number and certificate number under this project.</div>
       <div class="field wide"><span class="lbl"><span data-i18n="waz_doc_sp">WAZ document (→ SharePoint)</span> *</span>
         <div id="waz-current-doc"></div>
@@ -3724,18 +3724,25 @@ function nextWazNo(pipelineId){
 }
 function openAddWazModal(matId){
   wazMaterialId=matId; const m=getMaterial(matId);
+  if(!m) return;
   const existingWaz=[...new Set(pipelineMaterials(m.pipelineId).map(x=>x.wazNo).filter(Boolean))].sort();
   const newWaz=nextWazNo(m.pipelineId);
   const wazSel=document.getElementById('input-waz-no');
-  let wazOpts=`<option value="${escapeHtml(newWaz)}" selected>${escapeHtml(newWaz)} (new)</option>`;
-  existingWaz.forEach(w=>{ wazOpts+=`<option value="${escapeHtml(w)}">${escapeHtml(w)}</option>`; });
-  wazSel.innerHTML=wazOpts;
 
-  // Pre-fill cert + heat directly from this material
+  // Check if same pipeline already has this heatNo with a WAZ number
+  const pipeMatch = m.heatNo ? pipelineMaterials(m.pipelineId).find(x => x.id !== m.id && (x.heatNo||'').trim().toLowerCase() === (m.heatNo||'').trim().toLowerCase() && x.wazNo) : null;
+  const targetWaz = pipeMatch ? pipeMatch.wazNo : (m.wazNo || newWaz);
+
+  let wazOpts=`<option value="${escapeHtml(newWaz)}">${escapeHtml(newWaz)} (new)</option>`;
+  existingWaz.forEach(w=>{ wazOpts+=`<option value="${escapeHtml(w)}" ${w===targetWaz?'selected':''}>${escapeHtml(w)}</option>`; });
+  wazSel.innerHTML=wazOpts;
+  if(targetWaz) wazSel.value = targetWaz;
+
+  // Pre-fill cert + heat directly from this material (or matching sibling if missing)
   const certInput=document.getElementById('input-waz-cert-edit');
-  if(certInput) certInput.value=m.certificate||'';
+  if(certInput) certInput.value=m.certificate || (pipeMatch ? pipeMatch.certificate : '') || '';
   const heatInput=document.getElementById('input-waz-heat-edit');
-  if(heatInput) heatInput.value=m.heatNo||'';
+  if(heatInput) heatInput.value=m.heatNo || (pipeMatch ? pipeMatch.heatNo : '') || '';
 
   const fileEl=document.getElementById('input-waz-file'); if(fileEl) fileEl.value='';
   wazDocRemoved=false;
@@ -3746,6 +3753,27 @@ function openAddWazModal(matId){
   document.getElementById('waz-shared-warning').style.display='none';
   toggleWazFileVisibility();
   openModal('modal-waz-add');
+}
+function onWazHeatEditInput(){
+  const heatNo = (val('input-waz-heat-edit')||'').trim();
+  const m = getMaterial(wazMaterialId);
+  if(!m) return;
+  const wazSel = document.getElementById('input-waz-no');
+  if(!heatNo){
+    return;
+  }
+  const pipeMatch = pipelineMaterials(m.pipelineId).find(x => x.id !== m.id && (x.heatNo||'').trim().toLowerCase() === heatNo.toLowerCase() && x.wazNo);
+  if(pipeMatch){
+    if([...wazSel.options].some(o => o.value === pipeMatch.wazNo)){
+      wazSel.value = pipeMatch.wazNo;
+    }
+    const certInput = document.getElementById('input-waz-cert-edit');
+    if(certInput && !certInput.value && pipeMatch.certificate){
+      certInput.value = pipeMatch.certificate;
+    }
+    wazDocRemoved = false;
+    toggleWazFileVisibility();
+  }
 }
 let wazDocRemoved=false;
 let _wazProjectPdfUrl='';

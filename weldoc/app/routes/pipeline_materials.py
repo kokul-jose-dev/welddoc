@@ -16,6 +16,11 @@ def _pos_letter(n):
 def get_pipeline_materials():
     pipeline_id = request.args.get("pipelineId", type=int)
     archived = request.args.get("archived", "false").lower() == "true"
+    if pipeline_id and not archived:
+        try:
+            _sync_pipeline_waz_nos(pipeline_id)
+        except Exception:
+            db.session.rollback()
     query = PipelineMaterial.query.filter_by(archived=archived)
     if pipeline_id:
         query = query.filter_by(pipeline_id=pipeline_id)
@@ -49,11 +54,26 @@ def create_pipeline_material():
     # Auto-assign WAZ number
     waz_no = _assign_waz_no(pipeline_id, project_material_id)
 
+    # Check if another material with the same heat already has a waz_package_url in this pipeline
+    waz_package_url = None
+    pm_curr = ProjectMaterial.query.get(project_material_id)
+    if pm_curr and pm_curr.heat_no:
+        h_curr = pm_curr.heat_no.strip().lower()
+        existing_sibling = PipelineMaterial.query.filter_by(
+            pipeline_id=pipeline_id, archived=False
+        ).all()
+        for sib in existing_sibling:
+            if sib.project_material and sib.project_material.heat_no:
+                if sib.project_material.heat_no.strip().lower() == h_curr and sib.waz_package_url:
+                    waz_package_url = sib.waz_package_url
+                    break
+
     m = PipelineMaterial(
         pipeline_id=pipeline_id,
         project_material_id=project_material_id,
         position=position,
         waz_no=waz_no,
+        waz_package_url=waz_package_url,
         start_of_plumbing=data.get("startOfPlumbing", False),
         end_of_plumbing=data.get("endOfPlumbing", False),
     )
@@ -201,17 +221,17 @@ def edit_pipeline_material(pm_id):
         pm.waz_pdf_url = data["wazPdfUrl"]
         pm_changed = True
 
-    # Auto-assign WAZ number if certificate + heat are now filled and waz_no is empty
-    if pm_changed and pm.certificate and pm.heat_no and not m.waz_no:
-        m.waz_no = _assign_waz_no(m.pipeline_id, m.project_material_id)
-        siblings = PipelineMaterial.query.filter_by(
-            pipeline_id=m.pipeline_id, project_material_id=m.project_material_id, archived=False
-        ).filter(PipelineMaterial.id != m.id).all()
-        for sib in siblings:
-            if not sib.waz_no:
-                sib.waz_no = m.waz_no
+    # Auto-assign / sync WAZ numbers across the pipeline when heat/certificate changes
+    if pm_changed:
+        if pm.certificate and pm.heat_no:
+            if not m.waz_no:
+                m.waz_no = _assign_waz_no(m.pipeline_id, m.project_material_id)
+        else:
+            m.waz_no = None
+            m.waz_package_url = None
 
     db.session.commit()
+    _sync_pipeline_waz_nos(m.pipeline_id)
 
     if "connections" in data:
         _update_connections(m, data["connections"], m.pipeline_id)
@@ -276,6 +296,19 @@ def upload_waz_for_pipeline_material(pm_id):
         m.waz_no = _assign_waz_no(m.pipeline_id, m.project_material_id)
     # 2. Generate Cover Letter, merge with raw WAZ PDF, and upload package to pipeline WAZ folder
     _build_and_save_waz_package(m, file_content=file_content)
+
+    # Sync package URL and WAZ no across all pipeline materials sharing this heat number
+    if pm.heat_no:
+        h_norm = pm.heat_no.strip().lower()
+        siblings = PipelineMaterial.query.filter_by(
+            pipeline_id=m.pipeline_id, archived=False
+        ).filter(PipelineMaterial.id != m.id).all()
+        for sib in siblings:
+            if sib.project_material and sib.project_material.heat_no:
+                if sib.project_material.heat_no.strip().lower() == h_norm:
+                    sib.waz_no = m.waz_no
+                    sib.waz_package_url = m.waz_package_url
+        db.session.commit()
 
     return jsonify(_serialize(m)), 200
 
@@ -419,25 +452,103 @@ def reorder_pipeline_materials():
 
 def _assign_waz_no(pipeline_id, project_material_id):
     """Auto-assign WAZ number only if project material has certificate + heat number.
-    Same project_material_id in same pipeline = same WAZ no."""
-    # Check if project material has certificate and heat number
+    Same heat number in same pipeline = same WAZ no.
+    Different heat numbers = unique sequential WAZ numbers (Z001, Z002, etc.)."""
+    import re
     pm = ProjectMaterial.query.get(project_material_id)
-    if not pm or not pm.certificate or not pm.heat_no:
+    if not pm or not pm.certificate or not (pm.heat_no or "").strip():
         return None  # Don't assign WAZ number yet
 
-    # Check if same project material already exists in this pipeline
-    existing_same = PipelineMaterial.query.filter_by(
-        pipeline_id=pipeline_id, project_material_id=project_material_id, archived=False
-    ).first()
-    if existing_same and existing_same.waz_no:
-        return existing_same.waz_no
+    heat_target = pm.heat_no.strip().lower()
 
-    # Get all distinct WAZ numbers already used in this pipeline
-    used = db.session.query(PipelineMaterial.waz_no).filter_by(
+    # Query all active pipeline materials in this pipeline
+    existing_mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
-    ).filter(PipelineMaterial.waz_no.isnot(None)).distinct().count()
+    ).all()
 
-    return f"Z{used + 1:03d}"
+    # Check if any existing material in this pipeline has the same heat number and an assigned waz_no
+    for mat in existing_mats:
+        if mat.project_material and mat.project_material.heat_no:
+            if mat.project_material.heat_no.strip().lower() == heat_target and mat.waz_no:
+                return mat.waz_no
+
+    # If new heat number in the pipeline, find max existing Z number to avoid any collisions
+    used_nums = []
+    for mat in existing_mats:
+        if mat.waz_no:
+            match = re.match(r'^Z(\d+)$', mat.waz_no.strip(), re.IGNORECASE)
+            if match:
+                used_nums.append(int(match.group(1)))
+
+    next_num = max(used_nums, default=0) + 1
+    return f"Z{next_num:03d}"
+
+
+def _sync_pipeline_waz_nos(pipeline_id):
+    """Ensure 1 heat number = 1 WAZ number per pipeline, eliminate duplicate Z numbers across different heats,
+    and propagate waz_package_url across matching heat numbers."""
+    import re
+    mats = PipelineMaterial.query.filter_by(
+        pipeline_id=pipeline_id, archived=False
+    ).order_by(PipelineMaterial.position, PipelineMaterial.id).all()
+
+    heat_to_waz = {}
+    waz_to_heat = {}
+    heat_to_pkg = {}
+    used_nums = set()
+
+    # First pass: collect existing unambiguous assignments & package URLs
+    for m in mats:
+        pm = m.project_material
+        if not pm or not pm.certificate or not (pm.heat_no or "").strip():
+            continue
+        heat_key = pm.heat_no.strip().lower()
+
+        if m.waz_package_url and heat_key not in heat_to_pkg:
+            heat_to_pkg[heat_key] = m.waz_package_url
+
+        if m.waz_no:
+            waz = m.waz_no.strip().upper()
+            match = re.match(r'^Z(\d+)$', waz)
+            if match:
+                num = int(match.group(1))
+                if waz not in waz_to_heat and heat_key not in heat_to_waz:
+                    heat_to_waz[heat_key] = waz
+                    waz_to_heat[waz] = heat_key
+                    used_nums.add(num)
+
+    # Second pass: assign canonical WAZ number and propagate package URL to all matching rows
+    changed = False
+    next_num = 1
+    for m in mats:
+        pm = m.project_material
+        if not pm or not pm.certificate or not (pm.heat_no or "").strip():
+            if m.waz_no is not None:
+                m.waz_no = None
+                changed = True
+            continue
+
+        heat_key = pm.heat_no.strip().lower()
+
+        if heat_key not in heat_to_waz:
+            while next_num in used_nums:
+                next_num += 1
+            assigned_waz = f"Z{next_num:03d}"
+            used_nums.add(next_num)
+            heat_to_waz[heat_key] = assigned_waz
+            waz_to_heat[assigned_waz] = heat_key
+
+        canonical_waz = heat_to_waz[heat_key]
+        if m.waz_no != canonical_waz:
+            m.waz_no = canonical_waz
+            changed = True
+
+        if heat_key in heat_to_pkg and m.waz_package_url != heat_to_pkg[heat_key]:
+            m.waz_package_url = heat_to_pkg[heat_key]
+            changed = True
+
+    if changed:
+        db.session.commit()
 
 
 def _build_and_save_waz_package_with_bytes(m, file_content=None):

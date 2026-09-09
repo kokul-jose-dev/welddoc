@@ -27,6 +27,13 @@ def get_pipeline_detail(pipeline_id):
     if not row:
         return jsonify({"error": "not found"}), 404
 
+    from app.routes.pipeline_materials import _sync_pipeline_waz_nos, _sync_and_renumber_welds
+    try:
+        _sync_pipeline_waz_nos(pipeline_id)
+        _sync_and_renumber_welds(pipeline_id)
+    except Exception:
+        db.session.rollback()
+
     # Materials in one JOIN query
     mat_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.pipeline_id, pm.project_material_id, pm.position,
@@ -63,12 +70,6 @@ def get_pipeline_detail(pipeline_id):
         FROM weldoc_pipelines
         WHERE project_id = :proj_id AND archived = 0
     """), {"proj_id": row.project_id}).fetchall()
-
-    from app.routes.pipeline_materials import _sync_and_renumber_welds
-    try:
-        _sync_and_renumber_welds(pipeline_id)
-    except Exception:
-        db.session.rollback()
 
     weld_rows = db.session.execute(db.text("""
         SELECT id, pipeline_id, weld_no, between_a, between_b, type, [procedure],
