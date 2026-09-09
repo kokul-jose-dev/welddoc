@@ -579,3 +579,140 @@ def _download_sharepoint_file_content(url):
     except Exception as e:
         current_app.logger.error(f"SharePoint: Failed to download file: {e}")
         return None
+
+
+def delete_pipeline_subfolder_file(drive_id, folder_id, pipeline_no, subfolder, file_name):
+    """Delete a file from project_folder/Rohrleitungen/{pipeline_no}/{subfolder}/{file_name}."""
+    if not drive_id or not folder_id or not file_name:
+        return False
+    try:
+        safe_pipeline = _sanitize_name(pipeline_no)
+        safe_sub = _sanitize_name(subfolder)
+        safe_file = _sanitize_name(file_name)
+        relative_path = f"Rohrleitungen/{safe_pipeline}/{safe_sub}/{safe_file}"
+        token = _get_app_token()
+        delete_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/{urllib.parse.quote(relative_path)}"
+        req = urllib.request.Request(delete_url, method="DELETE")
+        req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            pass
+        current_app.logger.info(f"SharePoint: Deleted '{safe_file}' from Rohrleitungen/{safe_pipeline}/{safe_sub}/")
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            current_app.logger.warning(f"SharePoint: File '{file_name}' not found for deletion (404).")
+            return True
+        current_app.logger.error(f"SharePoint: Failed to delete '{file_name}': {e}")
+        return False
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: Failed to delete '{file_name}': {e}")
+        return False
+
+
+def delete_pipeline_waz_file(drive_id, folder_id, pipeline_no, file_name):
+    """Delete a file from project_folder/Rohrleitungen/{pipeline_no}/04 Materialzertifikat 3.1/{file_name}."""
+    return delete_pipeline_subfolder_file(drive_id, folder_id, pipeline_no, "04 Materialzertifikat 3.1", file_name)
+
+
+def delete_sharepoint_file_by_url(url):
+    """Delete a SharePoint file given its web URL."""
+    if not url:
+        return False
+    try:
+        import base64
+        token = _get_app_token()
+        encoded_url = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
+        share_id = "u!" + encoded_url
+        item_url = f"{GRAPH_BASE}/shares/{share_id}/driveItem"
+        req = urllib.request.Request(item_url)
+        req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            data = json.loads(resp.read())
+        drive_id = data.get("parentReference", {}).get("driveId")
+        item_id = data.get("id")
+        if drive_id and item_id:
+            del_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}"
+            del_req = urllib.request.Request(del_url, method="DELETE")
+            del_req.add_header("Authorization", f"Bearer {token}")
+            with urllib.request.urlopen(del_req, context=_ssl_context()) as resp:
+                pass
+            current_app.logger.info(f"SharePoint: Deleted file by URL {url}")
+            return True
+        return False
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return True
+        current_app.logger.error(f"SharePoint: Failed to delete file by url: {e}")
+        return False
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: Failed to delete file by url: {e}")
+        return False
+
+
+def list_pipeline_subfolder_files(drive_id, folder_id, pipeline_no, subfolder="04 Materialzertifikat 3.1"):
+    """List all files in project_folder/Rohrleitungen/{pipeline_no}/{subfolder}."""
+    if not drive_id or not folder_id:
+        return []
+    try:
+        safe_pipeline = _sanitize_name(pipeline_no)
+        safe_sub = _sanitize_name(subfolder)
+        subfolder_path = f"Rohrleitungen/{safe_pipeline}/{safe_sub}"
+        token = _get_app_token()
+        list_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/{urllib.parse.quote(subfolder_path)}:/children"
+        req = urllib.request.Request(list_url)
+        req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            data = json.loads(resp.read())
+        return data.get("value", [])
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return []
+        current_app.logger.error(f"SharePoint: Failed to list files in subfolder: {e}")
+        return []
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: Failed to list files in subfolder: {e}")
+        return []
+
+
+def delete_sharepoint_drive_item(drive_id, item_id):
+    """Delete an item directly by drive_id and item_id."""
+    if not drive_id or not item_id:
+        return False
+    try:
+        token = _get_app_token()
+        del_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}"
+        req = urllib.request.Request(del_url, method="DELETE")
+        req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            pass
+        current_app.logger.info(f"SharePoint: Deleted drive item {item_id}")
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return True
+        current_app.logger.error(f"SharePoint: Failed to delete item {item_id}: {e}")
+        return False
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: Failed to delete item {item_id}: {e}")
+        return False
+
+
+def clean_pipeline_waz_folder(drive_id, folder_id, pipeline_no, keep_filenames=None):
+    """Delete all files in the pipeline's 04 Materialzertifikat 3.1 folder except those in keep_filenames.
+    If keep_filenames is None or empty, deletes all files in the folder."""
+    if keep_filenames is None:
+        keep_filenames = set()
+    else:
+        keep_filenames = {_sanitize_name(f).strip().lower() for f in keep_filenames}
+
+    files = list_pipeline_subfolder_files(drive_id, folder_id, pipeline_no, "04 Materialzertifikat 3.1")
+    deleted_count = 0
+    for f in files:
+        fname = f.get("name", "").strip()
+        safe_fname = _sanitize_name(fname).strip().lower()
+        item_id = f.get("id")
+        if safe_fname not in keep_filenames and item_id:
+            if delete_sharepoint_drive_item(drive_id, item_id):
+                deleted_count += 1
+    current_app.logger.info(f"SharePoint: Cleaned {deleted_count} obsolete files from pipeline {pipeline_no} WAZ folder.")
+    return deleted_count

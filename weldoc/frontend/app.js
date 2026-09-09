@@ -1089,6 +1089,21 @@ function mountModals(){
     <p><strong id="modal-apply-all-piece"></strong></p>
     <p data-i18n="confirm_proceed">Are you sure you want to proceed?</p>
     <div class="modal-actions"><button class="btn btn-ghost" onclick="cancelGlobalEdit()" data-i18n="cancel">Cancel</button><button class="btn btn-primary" onclick="confirmGlobalEdit()" data-i18n="update_everywhere">Update everywhere</button></div>
+  </div></div>
+
+  <div class="modal-overlay" id="modal-restore-material"><div class="modal modal-wide">
+    <button class="modal-close" onclick="closeModal('modal-restore-material')">&times;</button><h2 id="modal-restore-mat-title" data-i18n="restore_material_title">Restore Material — Upload WAZ PDF</h2>
+    <div id="restore-mat-summary" style="margin-bottom:16px;padding:12px;background:var(--card-bg, rgba(255,255,255,0.05));border-radius:6px;"></div>
+    <div class="form-grid">
+      <div class="field"><span class="lbl" data-i18n="heat_melt_no">Heat / melt No.</span><input type="text" id="restore-mat-heat" placeholder="Type heat/melt No.…" data-i18n-placeholder="type_heat_no"></div>
+      <div class="field"><span class="lbl" data-i18n="cert_no">Certificate No.</span><input type="text" id="restore-mat-cert" placeholder="Type certificate No.…" data-i18n-placeholder="type_cert_no"></div>
+      <div class="field wide"><span class="lbl"><span data-i18n="waz_doc_sp">WAZ document (PDF)</span> *</span>
+        <input type="file" id="restore-mat-file" accept="application/pdf">
+        <p class="field-hint" style="margin-top:6px;" data-i18n="restore_mat_pdf_help">Please select the WAZ PDF document to restore this material.</p>
+      </div>
+      <div class="modal-err" id="restore-mat-err"></div>
+    </div>
+    <div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-restore-material')" data-i18n="cancel">Cancel</button><button type="button" id="restore-mat-submit-btn" class="btn btn-primary" onclick="submitRestoreMaterial()"><span data-i18n="restore_and_upload">Restore & Upload</span></button></div>
   </div></div>`;
   if(typeof translatePage==='function') translatePage();
   attachFormHandlers();
@@ -3060,7 +3075,7 @@ function renderArchiveMaterials(el){
     const pl=getPipeline(m.pipelineId);
     let dnDisplay=escapeHtml(m.dimension);
     for(let i=2;i<=6;i++){ if(m[`dimension${i}`]) dnDisplay+=' / '+escapeHtml(m[`dimension${i}`]); }
-    return `<tr><td>${escapeHtml(m.piece)}</td><td>${escapeHtml(m.itemDescription)}</td><td class="col-mono">${dnDisplay}</td><td class="col-mono">${escapeHtml(m.materialCode)}</td><td>${pl?escapeHtml(pl.no):'\u2014'}</td><td class="col-actions"><button class="btn-restore" onclick="restoreMaterial(${m.id})">${RESTORE_ICON} ${t('restore','Restore')}</button></td></tr>`;
+    return `<tr><td>${escapeHtml(m.piece)}</td><td>${escapeHtml(m.itemDescription)}</td><td class="col-mono">${dnDisplay}</td><td class="col-mono">${escapeHtml(m.materialCode)}</td><td>${pl?escapeHtml(pl.no):'\u2014'}</td><td class="col-actions"><button class="btn-restore" onclick="openRestoreMaterialModal(${m.id})">${RESTORE_ICON} ${t('restore','Restore')}</button></td></tr>`;
   }).join(''):'<tr class="empty-row"><td colspan="6">'+t('no_archived_materials','No archived materials.')+'</td></tr>'}</tbody></table></div>`;
 }
 function renderArchivePipelines(el){
@@ -3116,10 +3131,109 @@ async function restoreProject(id){
   try { await apiPost('/projects', {id, archived:false}); } catch(e){ console.error('Restore API error:', e); }
   saveDB(); renderArchivePage();
 }
+let _restoringMaterialId = null;
+function openRestoreMaterialModal(id){
+  _restoringMaterialId = id;
+  const m = DB.materials.find(x=>x.id===id);
+  if(!m) return;
+  const pl = getPipeline(m.pipelineId);
+  let dnDisplay = escapeHtml(m.dimension || '');
+  for(let i=2; i<=6; i++){ if(m[`dimension${i}`]) dnDisplay += ' / ' + escapeHtml(m[`dimension${i}`]); }
+
+  const summaryEl = document.getElementById('restore-mat-summary');
+  if(summaryEl){
+    summaryEl.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:8px;font-size:0.875rem;">
+        <div><span style="color:var(--muted);">${t('th_category','Category')}:</span> <strong>${escapeHtml(m.piece||'—')}</strong></div>
+        <div><span style="color:var(--muted);">${t('th_item_description','Item description')}:</span> <strong>${escapeHtml(m.itemDescription||'—')}</strong></div>
+        <div><span style="color:var(--muted);">${t('th_dn','DN')}:</span> <strong class="mono">${dnDisplay||'—'}</strong></div>
+        <div><span style="color:var(--muted);">${t('th_material','Material')}:</span> <strong class="mono">${escapeHtml(m.materialCode||'—')}</strong></div>
+        <div><span style="color:var(--muted);">${t('th_pipeline_no','Pipeline')}:</span> <strong class="mono">${pl ? escapeHtml(pl.no) : '—'}</strong></div>
+      </div>
+    `;
+  }
+
+  const heatInput = document.getElementById('restore-mat-heat');
+  if(heatInput) heatInput.value = m.heatNo || '';
+
+  const certInput = document.getElementById('restore-mat-cert');
+  if(certInput) certInput.value = m.certificate || '';
+
+  const fileInput = document.getElementById('restore-mat-file');
+  if(fileInput) fileInput.value = '';
+
+  const errEl = document.getElementById('restore-mat-err');
+  if(errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+
+  const btn = document.getElementById('restore-mat-submit-btn');
+  if(btn){
+    btn.disabled = false;
+    btn.innerHTML = `${RESTORE_ICON} <span>${t('restore_and_upload', 'Restore & Upload')}</span>`;
+  }
+
+  openModal('modal-restore-material');
+}
+
+async function submitRestoreMaterial(){
+  if(!_restoringMaterialId) return;
+  const id = _restoringMaterialId;
+  const fileInput = document.getElementById('restore-mat-file');
+  const errEl = document.getElementById('restore-mat-err');
+
+  if(!fileInput || !fileInput.files || fileInput.files.length === 0){
+    const msg = t('upload_required', 'Please select a WAZ PDF file to restore this material.');
+    if(errEl){ errEl.textContent = msg; errEl.style.display = 'block'; }
+    else alert(msg);
+    return;
+  }
+
+  const file = fileInput.files[0];
+  const heatNo = (document.getElementById('restore-mat-heat')?.value || '').trim();
+  const cert = (document.getElementById('restore-mat-cert')?.value || '').trim();
+
+  const btn = document.getElementById('restore-mat-submit-btn');
+  if(btn){
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> ${t('restoring_material', 'Restoring...')}`;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('heatNo', heatNo);
+  formData.append('certificate', cert);
+
+  try {
+    const res = await fetch('/api/pipeline-materials/' + id + '/restore', {
+      method: 'POST',
+      body: formData
+    });
+    const result = await res.json();
+    if(!res.ok){
+      const errTxt = result.error || t('error_restoring_material', 'Failed to restore material.');
+      if(errEl){ errEl.textContent = errTxt; errEl.style.display = 'block'; }
+      else alert(errTxt);
+      if(btn){
+        btn.disabled = false;
+        btn.innerHTML = `${RESTORE_ICON} <span>${t('restore_and_upload', 'Restore & Upload')}</span>`;
+      }
+      return;
+    }
+    closeModal('modal-restore-material');
+    await initArchivePage();
+  } catch(err) {
+    console.error('Error restoring material:', err);
+    const errTxt = t('error_restoring_material', 'Failed to restore material.');
+    if(errEl){ errEl.textContent = errTxt; errEl.style.display = 'block'; }
+    else alert(errTxt);
+    if(btn){
+      btn.disabled = false;
+      btn.innerHTML = `${RESTORE_ICON} <span>${t('restore_and_upload', 'Restore & Upload')}</span>`;
+    }
+  }
+}
+
 async function restoreMaterial(id){
-  const m=DB.materials.find(x=>x.id===id); if(m) m.archived=false;
-  try { await apiPost('/pipeline-materials/'+id, {archived:false}); } catch(e){ console.error('Restore API error:', e); }
-  saveDB(); renderArchivePage();
+  openRestoreMaterialModal(id);
 }
 async function restorePipeline(id){
   const p=DB.pipelines.find(x=>x.id===id); if(p) p.archived=false;
@@ -3426,6 +3540,33 @@ async function initPipelineDetailPage(){
   }
   if(!DB.globalMaterials || !DB.globalMaterials.length){
     apiGet('/global-materials').then(gms=>{ DB.globalMaterials = gms || []; }).catch(()=>{});
+  }
+}
+
+async function regeneratePipelineWaz(){
+  const pipelineId = PAGE.pipelineId || Number(qp('id'));
+  if(!pipelineId){
+    alert('No pipeline selected.');
+    return;
+  }
+  const btn = document.getElementById('regenerate-pipeline-waz-btn');
+  const originalHtml = btn ? btn.innerHTML : '';
+  if(btn){
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> ${t('regenerating_waz', 'Regenerating WAZ…')}`;
+  }
+  try {
+    const res = await apiPost(`/pipelines/${pipelineId}/regenerate-waz`, {});
+    alert(res.message || 'WAZ documents successfully regenerated.');
+    await initPipelineDetailPage();
+  } catch(err){
+    console.error('Failed to regenerate WAZ:', err);
+    alert(err.message || 'Failed to regenerate WAZ documents.');
+  } finally {
+    if(btn){
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
   }
 }
 function switchPipeline(id){ if(id&&Number(id)!==PAGE.pipelineId) location.href='pipeline-detail.html?id='+id; }

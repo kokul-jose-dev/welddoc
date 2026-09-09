@@ -6,7 +6,7 @@
   <div class="page-header"><div>
     <div class="title-switch"><span class="title-switch-label" data-i18n="th_pipeline_no">Pipeline</span><select id="pipeline-switch" onchange="switchPipeline(this.value)"></select></div>
     <div class="page-subtitle" id="detail-subtitle"></div>
-  </div></div>
+  </div><div style="display:flex;gap:8px;"><button type="button" class="btn btn-ghost" id="regenerate-pipeline-waz-btn" onclick="regeneratePipelineWaz()" title="Regenerate all WAZ cover letters and update filenames on SharePoint"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg><span data-i18n="regenerate_waz">Regenerate WAZ</span></button></div></div>
   <div class="info-panel"><div class="info-grid" id="detail-info"></div></div>
   <div id="detail-workflow"></div>
   <div class="subtab-nav">
