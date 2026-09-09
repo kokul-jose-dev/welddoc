@@ -239,6 +239,9 @@ def upload_waz_for_pipeline_material(pm_id):
     if not file.filename:
         return jsonify({"error": "Empty filename"}), 400
 
+    file_content = file.read()
+    content_type = file.content_type or "application/pdf"
+
     project = Project.query.get(pm.project_id)
     if not project.sharepoint_drive_id or not project.sharepoint_folder_id:
         return jsonify({"error": "No SharePoint folder configured for this project."}), 400
@@ -483,11 +486,12 @@ def _build_and_save_waz_package_with_bytes(m, file_content=None):
     client = Client.query.get(project.client_id)
     gm = pm.global_material
     from flask import session as flask_session
+    from app.dates import today_str
     user_name = flask_session.get("user", {}).get("name", "") if flask_session else ""
 
     cover_data = {
         "user_name": user_name,
-        "date": date.today().strftime("%d/%m/%Y"),
+        "date": today_str(),
         "client_name": client.name if client else "",
         "client_street": client.street or "" if client else "",
         "client_zip": client.zip_code or "" if client else "",

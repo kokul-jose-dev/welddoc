@@ -239,9 +239,17 @@ def _ensure_sharepoint_folder_path(drive_id, folder_path, token):
     return current_parent_id
 
 
+def _get_welder_folder_base():
+    cfg = current_app.config
+    return cfg.get(
+        "SHAREPOINT_WELDER_FOLDER",
+        "General/1_QMS ISO 9001_2015/4_Nachweisend/3.2_Personal & Ausbildung/Schweissprüfungen"
+    ).strip("/")
+
+
 def upload_welder_cert(process, welder_name, welder_no, file_content, content_type="application/pdf"):
     """Upload a welder certificate PDF to SharePoint:
-    3.2_Personal & Ausbildung/Schweissprüfungen/{process}/WPQ_{name}_{no}_{process}.pdf
+    {SHAREPOINT_WELDER_FOLDER}/{process}/WPQ_{name}_{no}_{process}.pdf
     """
     try:
         token = _get_app_token()
@@ -256,14 +264,14 @@ def upload_welder_cert(process, welder_name, welder_no, file_content, content_ty
         else:
             file_name = f"WPQ_{safe_name}_{safe_proc}.pdf"
 
-        upload_path = f"3.2_Personal & Ausbildung/Schweissprüfungen/{safe_proc}/{file_name}"
+        base_folder = _get_welder_folder_base()
+        folder_path = f"{base_folder}/{safe_proc}"
+        folder_id = _ensure_sharepoint_folder_path(drive_id, folder_path, token)
 
         if len(file_content) > 4 * 1024 * 1024:
-            folder_path = f"3.2_Personal & Ausbildung/Schweissprüfungen/{safe_proc}"
-            folder_id = _ensure_sharepoint_folder_path(drive_id, folder_path, token)
             web_url = _upload_large_file(drive_id, folder_id, file_name, file_content, content_type)
         else:
-            upload_url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{urllib.parse.quote(upload_path)}:/content"
+            upload_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/{urllib.parse.quote(file_name)}:/content"
             req = urllib.request.Request(upload_url, data=file_content, method="PUT")
             req.add_header("Authorization", f"Bearer {token}")
             req.add_header("Content-Type", content_type)
@@ -271,7 +279,7 @@ def upload_welder_cert(process, welder_name, welder_no, file_content, content_ty
                 result = json.loads(resp.read())
             web_url = result.get("webUrl", "")
 
-        current_app.logger.info(f"SharePoint: Uploaded welder cert '{file_name}' to {upload_path}")
+        current_app.logger.info(f"SharePoint: Uploaded welder cert '{file_name}' to {folder_path}")
         return web_url
     except Exception as e:
         current_app.logger.error(f"SharePoint: Failed to upload welder cert: {e}")
@@ -280,7 +288,7 @@ def upload_welder_cert(process, welder_name, welder_no, file_content, content_ty
 
 def archive_welder_cert(pdf_url, process, welder_name, welder_no, valid_until):
     """Move an expired/archived certificate PDF to:
-    3.2_Personal & Ausbildung/Schweissprüfungen/{process}/_Archive/WPQ_{name}_{no}_{process}_{date}.pdf
+    {SHAREPOINT_WELDER_FOLDER}/{process}/_Archive/WPQ_{name}_{no}_{process}_{date}.pdf
     """
     if not pdf_url:
         return None
@@ -316,7 +324,8 @@ def archive_welder_cert(pdf_url, process, welder_name, welder_no, valid_until):
         item_id = item["id"]
 
         # Ensure archive folder exists
-        archive_path = f"3.2_Personal & Ausbildung/Schweissprüfungen/{safe_proc}/_Archive"
+        base_folder = _get_welder_folder_base()
+        archive_path = f"{base_folder}/{safe_proc}/_Archive"
         archive_folder_id = _ensure_sharepoint_folder_path(drive_id, archive_path, token)
 
         # Move and rename file

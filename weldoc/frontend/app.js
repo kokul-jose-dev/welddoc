@@ -92,6 +92,20 @@ async function apiPost(path, data){
     hideGlobalProgress();
   }
 }
+
+async function apiUpload(path, formData){
+  showGlobalProgress();
+  try {
+    const r = await fetch(API_BASE + path, { method: 'POST', body: formData });
+    if(!r.ok){
+      const errData = await r.json().catch(() => ({}));
+      throw new Error(errData.error || r.statusText || 'Upload failed');
+    }
+    return await r.json();
+  } finally {
+    hideGlobalProgress();
+  }
+}
 async function apiBulk(includes, opts={}){ const p=new URLSearchParams({include:includes.join(',')}); if(opts.pipelineId) p.set('pipelineId',opts.pipelineId); if(opts.projectId) p.set('projectId',opts.projectId); if(opts.clientId) p.set('clientId',opts.clientId); if(opts.archived) p.set('archived','true'); return apiGet('/bulk?'+p.toString()); }
 function computeProjectStatus(p){
   const pls = (DB.pipelines||[]).filter(pl => pl.projectId === p.id && !pl.archived);
@@ -333,7 +347,7 @@ function posLetter(n){
   return String(n);
 }
 function fmtDia(v){ if(!v) return ''; const s=String(v).trim(); return 'Ø '+s+(s.toLowerCase().includes('mm')?'':' mm'); }
-/* Documents and UI both print dates as DD/MM/YYYY (see app/dates.py). */
+/* Documents and UI both print dates as DD.MM.YYYY (see app/dates.py). */
 function formatDate(iso){
   if(!iso) return '—';
   const s=String(iso).trim(); if(!s) return '—';
@@ -346,7 +360,7 @@ function formatDate(iso){
     if(mt){ d=+mt[1]; m=+mt[2]; y=+mt[3]; }
   }
   if(!y||!m||!d) return s;
-  return `${String(d).padStart(2,'0')}/${String(m).padStart(2,'0')}/${y}`;
+  return `${String(d).padStart(2,'0')}.${String(m).padStart(2,'0')}.${y}`;
 }
 function daysUntil(iso){
   if(!iso) return 9999;
@@ -967,6 +981,34 @@ function mountModals(){
     <label class="field"><span class="lbl" data-i18n="renewal_attachment">Renewal attachment (→ SharePoint) <span class="req">*</span></span><input type="file" id="renew-file" accept="application/pdf"></label>
     <div class="field-hint" data-i18n="renew_cert_hint">The uploaded PDF is stored in SharePoint; all fields are required.</div>
     <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('modal-renew')" data-i18n="cancel">Cancel</button><button id="renew-confirm-btn" class="btn btn-primary" onclick="confirmRenew()" data-i18n="confirm_renewal">Confirm renewal</button></div>
+  </div></div>
+
+  <div class="modal-overlay" id="modal-cert-edit"><div class="modal modal-small">
+    <button class="modal-close" onclick="closeModal('modal-cert-edit')">&times;</button><h2 id="modal-cert-edit-title" data-i18n="edit_certificate">Edit certificate</h2>
+    <p id="cert-edit-welder-info" style="color:var(--text-muted);font-size:0.88rem;margin-bottom:14px;font-weight:500;"></p>
+    <form id="cert-edit-form" onsubmit="submitCertEdit(event)">
+      <div class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="wps_no">WPS No. <span class="req">*</span></span>
+        <select id="cert-edit-wps-sel" onchange="onCertEditWpsChange()"></select>
+        <input type="text" id="cert-edit-wps-new" class="select-other-text" style="display:none;margin-top:4px;" placeholder="e.g. SP2/VP14" data-i18n-placeholder="wps_no_placeholder" oninput="onCertEditWpsNewInput()">
+      </div>
+      <div class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="qualified_processes">Qualified processes <span class="req">*</span></span>
+        <div id="cert-edit-procs-wrap"><input type="text" id="cert-edit-procs" placeholder="e.g. 141 / 142"></div>
+      </div>
+      <div class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="th_standard">Standard <span class="req">*</span></span>
+        <input type="text" id="cert-edit-standard" placeholder="e.g. EN ISO 14732" required>
+      </div>
+      <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="th_valid_until">Valid until <span class="req">*</span></span><input type="date" id="cert-edit-valid" required></label>
+      <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="th_renewal_due">Renewal due</span><input type="date" id="cert-edit-renewal"></label>
+      <div class="field" style="margin-bottom:12px;">
+        <span class="lbl" data-i18n="th_pdf">Certificate PDF (→ SharePoint)</span>
+        <div id="cert-edit-current-pdf" style="margin-bottom:6px;"></div>
+        <input type="file" id="cert-edit-file" accept="application/pdf" onchange="onCertEditFileChange()">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('modal-cert-edit')" data-i18n="cancel">Cancel</button>
+        <button type="submit" id="cert-edit-submit-btn" class="btn btn-primary" data-i18n="save">Save</button>
+      </div>
+    </form>
   </div></div>
 
   <div class="modal-overlay" id="modal-people"><div class="modal modal-small">
@@ -2307,6 +2349,206 @@ async function confirmRenew(){
   } catch(ex){ alert('Error renewing: '+ex.message); }
   finally { setButtonLoading(submitBtn, false); }
 }
+
+let editingCertId = null;
+let certEditRemovePdf = false;
+
+function renderCertEditPdfPreview(pdfUrl){
+  const pdfDiv = document.getElementById('cert-edit-current-pdf');
+  if(!pdfDiv) return;
+  if(certEditRemovePdf){
+    pdfDiv.innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px;font-size:0.82rem;color:var(--danger,#dc2626);background:rgba(220,38,38,0.08);padding:4px 8px;border-radius:4px;border:1px dashed var(--danger,#dc2626);">
+      <span>${t('file_marked_removal','File will be removed upon Save')}</span>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="restoreCertEditPdf()" style="font-size:0.75rem;padding:2px 8px;font-weight:600;color:var(--copper);">${t('undo','Undo')}</button>
+    </span>`;
+  } else if(pdfUrl){
+    pdfDiv.innerHTML = `<span style="display:inline-flex;align-items:center;gap:6px;font-size:0.8rem;">
+      <a class="doc-chip doc-iso" href="${escapeHtml(pdfUrl)}" target="_blank" rel="noopener">PDF</a>
+      <span class="muted" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(pdfUrl.split('/').pop() || 'Current PDF')}</span>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="removeCertEditPdf()" style="color:var(--danger,#dc2626);font-size:0.75rem;padding:2px 6px;margin-left:4px;" title="${t('remove_file','Remove file')}">✕ ${t('remove','Remove')}</button>
+    </span>`;
+  } else {
+    pdfDiv.innerHTML = `<span class="muted" style="font-size:0.82rem;">${t('no_file_uploaded', 'No file uploaded yet')}</span>`;
+  }
+}
+
+function removeCertEditPdf(){
+  certEditRemovePdf = true;
+  const fileInput = document.getElementById('cert-edit-file');
+  if(fileInput) fileInput.value = '';
+  const c = DB.certificates.find(x => x.id === editingCertId);
+  renderCertEditPdfPreview(c ? c.pdfUrl : '');
+}
+
+function restoreCertEditPdf(){
+  certEditRemovePdf = false;
+  const c = DB.certificates.find(x => x.id === editingCertId);
+  renderCertEditPdfPreview(c ? c.pdfUrl : '');
+}
+
+function onCertEditFileChange(){
+  const fileInput = document.getElementById('cert-edit-file');
+  if(fileInput && fileInput.files && fileInput.files.length > 0){
+    certEditRemovePdf = false;
+    const file = fileInput.files[0];
+    const pdfDiv = document.getElementById('cert-edit-current-pdf');
+    if(pdfDiv){
+      pdfDiv.innerHTML = `<span style="display:inline-flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--copper);font-weight:600;">
+        <span class="doc-chip doc-iso">PDF</span>
+        <span style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(file.name)}</span>
+        <span class="muted" style="font-size:0.75rem;font-weight:normal;">(${t('new_file_to_upload', 'Selected to upload')})</span>
+      </span>`;
+    }
+  }
+}
+
+function openCertEditModal(certId){
+  editingCertId = certId;
+  certEditRemovePdf = false;
+  const c = DB.certificates.find(x => x.id === certId);
+  if(!c) return;
+  const p = getPerson(c.personId);
+  
+  const infoEl = document.getElementById('cert-edit-welder-info');
+  if(infoEl){
+    infoEl.textContent = p ? `${p.name} (${t('th_no','No.')} ${p.no})` : '';
+  }
+
+  // Populate WPS dropdown
+  const wpsOpts = getDistinctWpsNos();
+  const sel = document.getElementById('cert-edit-wps-sel');
+  const inpNew = document.getElementById('cert-edit-wps-new');
+  if(sel){
+    const hasCurrent = wpsOpts.some(w => w.toLowerCase() === (c.certNo || '').toLowerCase());
+    let optsHtml = '<option value="">—</option>' + wpsOpts.map(w => `<option value="${escapeHtml(w)}" ${w.toLowerCase() === (c.certNo||'').toLowerCase() ? 'selected' : ''}>${escapeHtml(w)}</option>`).join('');
+    optsHtml += `<option value="__other__" ${!hasCurrent && c.certNo ? 'selected' : ''}>${t('new_wps_no','+ New WPS No. (type it)…')}</option>`;
+    sel.innerHTML = optsHtml;
+    if(!hasCurrent && c.certNo){
+      if(inpNew){ inpNew.style.display = ''; inpNew.value = c.certNo; }
+    } else {
+      if(inpNew){ inpNew.style.display = 'none'; inpNew.value = ''; }
+    }
+  }
+
+  updateCertEditProcField(c.certNo, c.process);
+
+  const stdInp = document.getElementById('cert-edit-standard');
+  if(stdInp) stdInp.value = c.standard || 'EN ISO 14732';
+  setV('cert-edit-valid', c.validUntil || '');
+  setV('cert-edit-renewal', c.renewalDue || '');
+  const fileInp = document.getElementById('cert-edit-file');
+  if(fileInp) fileInp.value = '';
+
+  renderCertEditPdfPreview(c.pdfUrl || '');
+
+  openModal('modal-cert-edit');
+}
+
+function onCertEditWpsChange(){
+  const sel = document.getElementById('cert-edit-wps-sel');
+  const inpNew = document.getElementById('cert-edit-wps-new');
+  if(!sel) return;
+  const isOther = sel.value === '__other__';
+  if(inpNew){
+    inpNew.style.display = isOther ? '' : 'none';
+    if(isOther) inpNew.focus();
+  }
+  const wpsVal = isOther ? (inpNew ? inpNew.value.trim() : '') : sel.value;
+  updateCertEditProcField(wpsVal);
+}
+
+function onCertEditWpsNewInput(){
+  const inpNew = document.getElementById('cert-edit-wps-new');
+  const wpsVal = inpNew ? inpNew.value.trim() : '';
+  updateCertEditProcField(wpsVal);
+}
+
+function updateCertEditProcField(wpsVal, prefillProc){
+  const wrap = document.getElementById('cert-edit-procs-wrap');
+  if(!wrap) return;
+  const procs = getProcessesForWps(wpsVal);
+  if(procs.length > 1){
+    const currentVal = prefillProc || procs[0];
+    const isOther = !procs.includes(currentVal) && !!currentVal;
+    wrap.innerHTML = `<select id="cert-edit-proc-sel" onchange="toggleSelectOther('cert-edit-proc-sel','cert-edit-procs')">
+      ${procs.map(p => `<option value="${escapeHtml(p)}" ${p === currentVal ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+      <option value="__other__" ${isOther ? 'selected' : ''}>${t('other_custom','+ Other (type it)…')}</option>
+    </select>
+    <input type="text" id="cert-edit-procs" class="select-other-text" style="${isOther ? '' : 'display:none;'}margin-top:4px;" value="${escapeHtml(currentVal||'')}" placeholder="e.g. 141 / 142">`;
+  } else if(procs.length === 1){
+    wrap.innerHTML = `<input type="text" id="cert-edit-procs" value="${escapeHtml(prefillProc || procs[0])}" placeholder="e.g. 141 / 142">`;
+  } else {
+    wrap.innerHTML = `<input type="text" id="cert-edit-procs" value="${escapeHtml(prefillProc || '')}" placeholder="e.g. 141 / 142">`;
+  }
+}
+
+async function submitCertEdit(event){
+  if(event) event.preventDefault();
+  const c = DB.certificates.find(x => x.id === editingCertId);
+  if(!c) return;
+
+  const btn = document.getElementById('cert-edit-submit-btn');
+  setButtonLoading(btn, true, t('saving', 'Saving…'));
+
+  const sel = document.getElementById('cert-edit-wps-sel');
+  const inpNew = document.getElementById('cert-edit-wps-new');
+  let wpsVal = sel ? (sel.value === '__other__' ? (inpNew ? inpNew.value.trim() : '') : sel.value) : '';
+  if(!wpsVal) wpsVal = c.certNo || '';
+
+  const procSel = document.getElementById('cert-edit-proc-sel');
+  const procInp = document.getElementById('cert-edit-procs');
+  let procVal = '';
+  if(procSel && procInp && procSel.offsetParent !== null){
+    procVal = readSelectOther('cert-edit-proc-sel', 'cert-edit-procs');
+  } else if(procInp){
+    procVal = procInp.value.trim();
+  } else if(procSel){
+    procVal = procSel.value.trim();
+  }
+  if(!procVal) procVal = c.process || '';
+
+  const stdVal = document.getElementById('cert-edit-standard').value.trim() || 'EN ISO 14732';
+  const validVal = val('cert-edit-valid');
+  const renewalVal = val('cert-edit-renewal');
+
+  const fileInput = document.getElementById('cert-edit-file');
+  const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+
+  try {
+    let pdfUrl = certEditRemovePdf ? '' : (c.pdfUrl || '');
+    if(file){
+      const fd = new FormData();
+      fd.append('file', file);
+      if(procVal) fd.append('process', procVal);
+      const uploadRes = await apiUpload(`/welders/certificates/${c.id}/upload`, fd);
+      if(uploadRes && (uploadRes.pdfUrl || uploadRes.url)){
+        pdfUrl = uploadRes.pdfUrl || uploadRes.url;
+      }
+    }
+
+    const payload = {
+      certNo: wpsVal,
+      process: procVal,
+      standard: stdVal,
+      validUntil: validVal,
+      renewalDue: renewalVal,
+      pdfUrl: pdfUrl
+    };
+
+    const updated = await apiPost(`/welders/certificates/${c.id}`, payload);
+    Object.assign(c, updated);
+    saveDB();
+    await loadWeldersFromApi();
+    closeModal('modal-cert-edit');
+    rerenderPage();
+  } catch(err){
+    console.error('Failed to update certificate:', err);
+    alert('Failed to update certificate: ' + (err.message || err));
+  } finally {
+    setButtonLoading(btn, false);
+  }
+}
+
 
 /* ================================================================ ARCHIVE (soft delete) ================================================================ */
 function openArchiveModal(type,id){
@@ -4065,7 +4307,7 @@ function certRow(cert, includeWelder){
     <td>${cert.renewalDue?formatDate(cert.renewalDue):'—'}</td>
     <td>${cert.pdfUrl?`<a class="doc-chip doc-iso" href="${escapeHtml(cert.pdfUrl)}" target="_blank" rel="noopener">PDF</a>`:'<span class="muted">—</span>'}</td>
     <td>${signHtml}</td>
-    <td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="openRenewModal(${cert.id})">${t('renew','Renew')}</button></td></tr>`;
+    <td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="openCertEditModal(${cert.id})" data-i18n="edit">${t('edit','Edit')}</button><button class="btn btn-ghost btn-sm" onclick="openRenewModal(${cert.id})" data-i18n="renew">${t('renew','Renew')}</button></td></tr>`;
 }
 function archivedCertRow(cert){
   const p=getPerson(cert.personId);

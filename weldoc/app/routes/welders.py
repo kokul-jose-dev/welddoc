@@ -195,7 +195,15 @@ def update_certificate(cid):
     if "renewalDue" in data:
         c.renewal_due = data["renewalDue"]
     if "pdfUrl" in data:
-        c.pdf_url = data["pdfUrl"]
+        new_pdf_url = data["pdfUrl"] or ""
+        old_pdf_url = c.pdf_url
+        if old_pdf_url and old_pdf_url != new_pdf_url and not data.get("archived"):
+            from app.sharepoint import delete_sharepoint_file
+            try:
+                delete_sharepoint_file(old_pdf_url)
+            except Exception as e:
+                current_app.logger.warning(f"Could not delete old cert PDF {old_pdf_url}: {e}")
+        c.pdf_url = new_pdf_url
     if "archived" in data:
         c.archived = data["archived"]
         if data["archived"] and c.pdf_url:
@@ -218,7 +226,7 @@ def update_certificate(cid):
 @welders_bp.route("/certificates/<int:cid>/upload", methods=["POST"])
 def upload_certificate_pdf(cid):
     """Upload certificate PDF to SharePoint process folder."""
-    from app.sharepoint import upload_welder_cert
+    from app.sharepoint import upload_welder_cert, delete_sharepoint_file
 
     c = Certificate.query.get_or_404(cid)
     w = Welder.query.get(c.welder_id)
@@ -233,17 +241,25 @@ def upload_certificate_pdf(cid):
     file_content = file.read()
     content_type = file.content_type or "application/pdf"
 
+    process = request.form.get("process") or c.process
+    old_pdf_url = c.pdf_url
+
     url = upload_welder_cert(
-        process=c.process,
+        process=process,
         welder_name=w.name,
         welder_no=w.no,
         file_content=file_content,
         content_type=content_type,
     )
     if url:
+        if old_pdf_url and old_pdf_url != url:
+            try:
+                delete_sharepoint_file(old_pdf_url)
+            except Exception as e:
+                current_app.logger.warning(f"Could not delete previous cert PDF {old_pdf_url}: {e}")
         c.pdf_url = url
         db.session.commit()
-        return jsonify({"pdfUrl": url}), 200
+        return jsonify({"pdfUrl": url, "url": url}), 200
     else:
         return jsonify({"error": "Failed to upload to SharePoint"}), 500
 

@@ -6,7 +6,7 @@ time), so anything printed on a document goes through fmt_date first.
 
 from datetime import datetime
 
-DISPLAY_FORMAT = "%d/%m/%Y"
+DISPLAY_FORMAT = "%d.%m.%Y"
 
 _DATE_PATTERNS = (
     "%Y-%m-%d",

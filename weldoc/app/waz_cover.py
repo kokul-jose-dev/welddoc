@@ -32,12 +32,24 @@ def generate_waz_cover_page(data):
         ry -= 3.2 * mm
 
     # ---- Created by / Date (top-left) ----
+    user_name = data.get('user_name', '')
+    if not user_name:
+        try:
+            from flask import session
+            user_name = session.get("user", {}).get("name", "") if session else ""
+        except Exception:
+            user_name = ""
+
+    from app.dates import fmt_date, today_str
+    raw_date = data.get('date', '')
+    date_str = fmt_date(raw_date) if raw_date else today_str()
+
     c.setFillColor(BLACK)
     c.setFont("Helvetica", 9)
     y = h - 32 * mm
-    c.drawString(margin_l, y, f"Erstellt von:  {data.get('user_name', '')}")
+    c.drawString(margin_l, y, f"Erstellt von:  {user_name}")
     y -= 5 * mm
-    c.drawString(margin_l, y, f"Datum: {data.get('date', '')}")
+    c.drawString(margin_l, y, f"Datum: {date_str}")
 
     # ---- Title ----
     y -= 18 * mm

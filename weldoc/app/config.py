@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 class Config:
@@ -22,3 +22,4 @@ class Config:
     AZURE_CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET", "")
     SHAREPOINT_HOST = os.getenv("SHAREPOINT_HOST", "")
     SHAREPOINT_SITE_PATH = os.getenv("SHAREPOINT_SITE_PATH", "")
+    SHAREPOINT_WELDER_FOLDER = os.getenv("SHAREPOINT_WELDER_FOLDER", "General/1_QMS ISO 9001_2015/4_Nachweisend/3.2_Personal & Ausbildung/Schweissprüfungen")

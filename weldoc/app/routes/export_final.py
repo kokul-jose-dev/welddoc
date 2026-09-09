@@ -177,10 +177,13 @@ def export_final(pipeline_id):
     waz_page_map = {}
     cert_page_map = {}
 
+    from flask import session as flask_session
+    user_name = flask_session.get("user", {}).get("name", "") if flask_session else ""
+
     for waz in waz_docs:
         mat = next((m for m in materials if m["waz_no"] == waz["waz_no"]), {})
         cover_data = {
-            "user_name": "", "date": today_str(),
+            "user_name": user_name, "date": today_str(),
             "client_name": cli.name if cli else "",
             "client_street": cli.street or "" if cli else "",
             "client_zip": cli.zip_code or "" if cli else "",

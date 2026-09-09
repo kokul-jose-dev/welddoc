@@ -66,6 +66,8 @@ def create_app():
         from flask import request
         if "127.0.0.1" in request.host:
             return redirect(request.url.replace("127.0.0.1", "localhost"))
+        if app.debug and 'user' not in session:
+            session['user'] = {'email': 'jeny@istinox.ch', 'name': 'Jeny M Jerry', 'role': 'office'}
         path = request.path
         # Allow public paths, API routes, and static assets (css/js/images)
         if path in PUBLIC_PATHS:
@@ -77,12 +79,9 @@ def create_app():
         # Allow static assets like fonts, images
         if path.endswith(('.css', '.js', '.png', '.jpg', '.svg', '.ico', '.woff', '.woff2')):
             return
-        # If not logged in, redirect to login page (or auto-login dev in local debug)
+        # If not logged in, redirect to login page
         if 'user' not in session:
-            if app.debug:
-                session['user'] = {'email': 'jeny@istinox.ch', 'name': 'Jeny M Jerry', 'role': 'office'}
-            else:
-                return redirect('/')
+            return redirect('/')
 
     @app.route("/")
     def serve_index():
