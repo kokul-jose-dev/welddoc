@@ -524,4 +524,60 @@ tr.drag-over td{border-top:2px solid var(--copper)!important;}
   border-color: var(--copper, #C26D2B);
 }
 
+/* ================================================================ MATERIAL LIST & PIPELINE DETAIL TABLE OPTIMIZATION ================================================================ */
+body.page-pipeline-detail .content {
+  padding: calc(var(--topbar-h) + 20px) 28px 36px;
+  max-width: 100%;
+}
+
+/* Keep top boxes in normal comfortable layout */
+body.page-pipeline-detail .info-panel {
+  padding: 16px 22px;
+  margin-bottom: 16px;
+}
+body.page-pipeline-detail .workflow-bar {
+  padding: 12px 18px;
+  margin: 12px 0 16px;
+}
+
+/* Make Material List table compact & fit smoothly without scrollbars */
+body.page-pipeline-detail .table-card {
+  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+body.page-pipeline-detail table.table-xwide {
+  min-width: unset;
+  width: 100%;
+}
+body.page-pipeline-detail table th {
+  background: #F5F7F9;
+  padding: 8px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+}
+body.page-pipeline-detail table td {
+  padding: 7px 8px;
+  font-size: 0.82rem;
+  vertical-align: middle;
+}
+body.page-pipeline-detail .btn-sm {
+  padding: 4px 8px;
+  font-size: 0.78rem;
+}
+body.page-pipeline-detail .col-actions {
+  white-space: nowrap;
+}
+body.page-pipeline-detail .doc-chip {
+  padding: 2px 6px;
+  font-size: 0.72rem;
+}
+body.page-pipeline-detail .img-btn {
+  padding: 3px 7px;
+  font-size: 0.75rem;
+}
+
+
+
 
