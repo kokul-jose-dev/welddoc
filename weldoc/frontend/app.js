@@ -792,7 +792,7 @@ function renderChrome(activeNav, breadcrumbHtml){
       updateSidebarBadges(cnt);
     }).catch(()=>{});
   }
-  const nav=(key,label,href,showCount)=>`<a class="nav-tab ${activeNav===key?'active':''}" href="${href}"><span class="nav-icon">${icon(key)}</span><span class="nav-label">${label}</span>${showCount?`<span class="nav-count">${counts[key]}</span>`:''}</a>`;
+  const nav=(key,label,href,showCount)=>`<a class="nav-tab ${activeNav===key?'active':''}" href="${href}" title="${label}"><span class="nav-icon">${icon(key)}</span><span class="nav-label">${label}</span>${showCount?`<span class="nav-count">${counts[key]}</span>`:''}</a>`;
   const role=getRole();
   const lang=typeof getLang==='function'?getLang():'de';
   const roleName = role==='vendor' ? escapeHtml((getPerson(getCurrentUserId())||{}).name||'Vendor') : (typeof t==='function'?t('office_staff','Office staff'):'Office staff');
@@ -844,16 +844,16 @@ function renderChrome(activeNav, breadcrumbHtml){
       </div>
     </header>
     <nav class="sidebar">
-      <div class="nav-section-label" data-i18n="nav_workspace">${t('nav_workspace','Workspace')}</div>
       ${nav('home',t('nav_home','Home'),'home.html',false)}
       ${nav('clients',t('clients','Clients'),'index.html',true)}
       ${nav('projects',t('projects','Projects'),'projects.html'+(activeClient?'?client='+activeClient:''),true)}
-      <div class="nav-section-label" data-i18n="nav_documents">${t('nav_documents','Documents')}</div>
+      <div class="nav-section-divider"></div>
       ${nav('materials',t('nav_materials','Materials'),'materials.html',true)}
       ${nav('welders',t('welders','Welders'),'welders.html',true)}
       <div class="sidebar-role">
-        <div class="role-line"><span data-i18n="signed_in_as">${t('signed_in_as','Signed in as')}</span><br><strong>${roleName}</strong></div>
-        <a href="role.html" data-i18n="switch_role">${t('switch_role','Switch role')}</a>
+        <a href="role.html" title="${t('switch_role','Switch role')} (${roleName})">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </a>
       </div>
     </nav>`;
 }
@@ -5765,8 +5765,8 @@ function openProjectMaterialModal(editId){
         <div class="field" id="pm-thickness-field"><span class="lbl">${t('th_thickness','Thickness')} <span class="req">*</span></span><select id="pm-thickness" onchange="toggleSelectOther('pm-thickness','pm-thickness-new')"></select><input type="text" id="pm-thickness-new" class="select-other-text" style="display:none" placeholder="${t('type_thickness','Type thickness…')}"></div>
         <div class="field"><span class="lbl">${t('surface','Surface')}</span><select id="pm-surface" onchange="toggleSelectOther('pm-surface','pm-surface-new')"></select><input type="text" id="pm-surface-new" class="select-other-text" style="display:none" placeholder="${t('type_surface','Type surface…')}"></div>
         <div class="field-separator wide"></div>
-        <label class="field"><span class="lbl">${t('cert_no','Certificate number')} <span class="req">*</span></span><input type="text" id="pm-certificate" required placeholder="${t('cert_no_placeholder','e.g. 12345')}"></label>
-        <label class="field"><span class="lbl">${t('heat_melt_no','Heat number')} <span class="req">*</span></span><input type="text" id="pm-heat" required placeholder="${t('heat_no_placeholder','e.g. H-98765')}"></label>
+        <label class="field"><span class="lbl">${t('cert_no','Certificate number')}</span><input type="text" id="pm-certificate" placeholder="${t('cert_no_placeholder','e.g. 12345')}"></label>
+        <label class="field"><span class="lbl">${t('heat_melt_no','Heat number')}</span><input type="text" id="pm-heat" placeholder="${t('heat_no_placeholder','e.g. H-98765')}"></label>
         <div class="field wide"><span class="lbl">${t('mat_cert_pdf','Material certificate (PDF)')}</span><div id="pm-waz-section"></div></div>
         <div class="modal-err" id="pm-err"></div>
       </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-proj-material')">${t('cancel','Cancel')}</button><button type="submit" class="btn btn-primary">${t('save','Save')}</button></div></form>
@@ -5944,8 +5944,6 @@ async function saveProjectMaterial(e){
   /* Validation */
   if(!category){ err.textContent='Category is required.'; err.classList.add('show'); return; }
   if(!materialCode){ err.textContent='Material code is required.'; err.classList.add('show'); return; }
-  if(!certificate){ err.textContent='Certificate number is required.'; err.classList.add('show'); return; }
-  if(!heatNo){ err.textContent='Heat number is required.'; err.classList.add('show'); return; }
 
   setButtonLoading(submitBtn, true, t('saving', 'Saving…'));
   try {
