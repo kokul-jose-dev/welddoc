@@ -445,7 +445,7 @@ function docCell(pl){
   if(_uploadingIsoPipelines.has(pl.id)){
     iso = `<span class="doc-chip doc-iso is-loading" title="${t('uploading','Uploading…')}"><span class="doc-spinner"></span>ISO</span>`;
   } else if(pl.docIso){
-    iso = `<a class="doc-chip doc-iso" href="${escapeHtml(pl.docIso)}" target="_blank" rel="noopener" title="${t('upload_iso','Isometric drawing (SharePoint)')}">ISO</a>`;
+    iso = `<span class="doc-chip-group"><a class="doc-chip doc-iso" href="${escapeHtml(pl.docIso)}" target="_blank" rel="noopener" title="${t('upload_iso','Isometric drawing (SharePoint)')}">ISO</a><button class="btn-iso-reload" onclick="uploadIsoDoc(${pl.id})" title="${t('replace_iso','Replace / Re-upload ISO document')}">✎</button></span>`;
   } else {
     iso = `<button class="btn btn-primary btn-sm" onclick="uploadIsoDoc(${pl.id})" title="${t('upload_iso','Upload ISO document')}">+</button>`;
   }
@@ -460,8 +460,14 @@ function docCell(pl){
     : slot(t('doc_final_pending','Final document available after export'));
   return `<div class="docs">${iso}${builder}${fin}</div>`;
 }
-/* Upload ISO document for a pipeline */
+/* Upload / Replace ISO document for a pipeline */
 function uploadIsoDoc(plId){
+  const curPl = getPipeline(plId);
+  if(curPl && curPl.docIso){
+    if(!confirm(t('confirm_replace_iso', 'Do you want to replace the existing ISO document? The old file in SharePoint will be deleted.'))){
+      return;
+    }
+  }
   const input=document.createElement('input');
   input.type='file'; input.accept='application/pdf';
   input.onchange=async()=>{
@@ -494,6 +500,30 @@ function uploadIsoDoc(plId){
     }
   };
   input.click();
+}
+/* Delete ISO document for a pipeline */
+async function deleteIsoDoc(plId){
+  if(!confirm(t('confirm_delete_iso', 'Are you sure you want to delete this ISO document from SharePoint?'))) return;
+  _uploadingIsoPipelines.add(plId);
+  rerenderPage();
+  showGlobalProgress();
+  try {
+    const resp = await fetch(`${API_BASE}/pipelines/${plId}/delete-iso`, {method:'POST'});
+    const result = await resp.json();
+    if(!resp.ok){ alert(result.error || 'Failed to delete ISO'); return; }
+    const p = getPipeline(plId);
+    if(p){
+      p.docIso = null;
+      p.isoUploaded = false;
+    }
+    saveDB();
+  } catch(e){
+    alert('Delete failed: ' + e.message);
+  } finally {
+    _uploadingIsoPipelines.delete(plId);
+    hideGlobalProgress();
+    rerenderPage();
+  }
 }
 
 /* ================================================================ WORKFLOW STATE MACHINE ================================================================ */
@@ -863,6 +893,10 @@ function mountModals(){
       <label class="field"><span class="lbl" data-i18n="order_no_from_project">Order number (from project)</span><input type="text" id="input-pl-order" disabled></label>
       <label class="field"><span class="lbl" data-i18n="plant">Plant</span><input type="text" id="input-pl-plant"></label>
       <label class="field"><span class="lbl" data-i18n="status">Status</span><select id="input-pl-status"></select></label>
+      <div class="field wide" id="pipeline-modal-iso-row" style="display:none;margin-top:2px;">
+        <span class="lbl" data-i18n="doc_iso">ISO document</span>
+        <div id="pipeline-modal-iso-content" style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#F8FAFC;border:1px solid var(--border);border-radius:4px;"></div>
+      </div>
       <div class="modal-note" data-i18n="order_inherited_note">Order number is inherited from the project.</div>
     </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-pipeline')" data-i18n="cancel">Cancel</button><button type="submit" class="btn btn-primary" data-i18n="save_pipeline">Save pipeline</button></div></form>
   </div></div>
@@ -1003,8 +1037,8 @@ function mountModals(){
       <div class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="th_standard">Standard <span class="req">*</span></span>
         <input type="text" id="cert-edit-standard" placeholder="e.g. EN ISO 14732" required>
       </div>
-      <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="th_valid_until">Valid until <span class="req">*</span></span><input type="date" id="cert-edit-valid" required></label>
-      <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="th_renewal_due">Renewal due</span><input type="date" id="cert-edit-renewal"></label>
+      <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="th_valid_until">Certificate Valid Until <span class="req">*</span></span><input type="date" id="cert-edit-valid" required></label>
+      <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="th_renewal_due">Verification Due</span><input type="date" id="cert-edit-renewal"></label>
       <div class="field" style="margin-bottom:12px;">
         <span class="lbl" data-i18n="th_pdf">Certificate PDF (→ SharePoint)</span>
         <div id="cert-edit-current-pdf" style="margin-bottom:6px;"></div>
@@ -1526,7 +1560,29 @@ function openPipelineModal(id=null){
     if(!readOnly){ readOnly=document.createElement('input'); readOnly.type='text'; readOnly.id='input-pl-project-readonly'; readOnly.disabled=true; projSel.parentElement.appendChild(readOnly); }
     readOnly.value=pr?`${pr.title} — ${getClientName(pr.clientId)}`:'';
     readOnly.style.display='';
+
+    const isoRow=document.getElementById('pipeline-modal-iso-row');
+    const isoContent=document.getElementById('pipeline-modal-iso-content');
+    if(isoRow) isoRow.style.display='';
+    if(isoContent){
+      if(pl.docIso){
+        isoContent.innerHTML=`
+          <a href="${escapeHtml(pl.docIso)}" target="_blank" rel="noopener" class="doc-chip doc-iso">ISO PDF</a>
+          <span style="flex:1;"></span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="closeModal('modal-pipeline');uploadIsoDoc(${pl.id});" style="font-size:0.75rem;">✎ ${t('replace_iso','Replace ISO')}</button>
+          <button type="button" class="btn btn-link btn-link-danger btn-sm" onclick="closeModal('modal-pipeline');deleteIsoDoc(${pl.id});" style="font-size:0.75rem;">${t('delete_iso','Delete ISO')}</button>
+        `;
+      } else {
+        isoContent.innerHTML=`
+          <span class="muted" style="font-size:0.82rem;">${t('no_file_uploaded','No file uploaded yet')}</span>
+          <span style="flex:1;"></span>
+          <button type="button" class="btn btn-primary btn-sm" onclick="closeModal('modal-pipeline');uploadIsoDoc(${pl.id});" style="font-size:0.75rem;">+ ${t('upload_iso','Upload ISO document')}</button>
+        `;
+      }
+    }
   } else { document.getElementById('modal-pipeline-title').textContent=t('new_pipeline','New pipeline'); setV('input-pl-status','0');
+    const isoRow=document.getElementById('pipeline-modal-iso-row');
+    if(isoRow) isoRow.style.display='none';
     /* Pre-select and lock the project if we're on a project page or pipeline page */
     let lockedProjectId=null;
     if(PAGE.projectId) lockedProjectId=PAGE.projectId;
@@ -1828,8 +1884,8 @@ function addWelderCertRow(){
           <input type="text" id="wc-procs-${_wCertIdx}" placeholder="e.g. 141 / 142">
         </div>
       </div>
-      <label class="field"><span class="lbl">${t('th_valid_until','Valid until')} <span class="req">*</span></span><input type="date" id="wc-valid-${_wCertIdx}"></label>
-      <label class="field"><span class="lbl">${t('th_renewal_due','Renewal due')} <span class="req">*</span></span><input type="date" id="wc-renewal-${_wCertIdx}"></label>
+      <label class="field"><span class="lbl">${t('th_valid_until','Certificate Valid Until')} <span class="req">*</span></span><input type="date" id="wc-valid-${_wCertIdx}"></label>
+      <label class="field"><span class="lbl">${t('th_renewal_due','Verification Due')} <span class="req">*</span></span><input type="date" id="wc-renewal-${_wCertIdx}"></label>
       <label class="field"><span class="lbl">${t('cert_pdf_sp','Certificate PDF (→ SharePoint)')} <span class="req">*</span></span><input type="file" id="wc-file-${_wCertIdx}" accept="application/pdf"></label>
       <div class="field" style="display:flex;align-items:flex-end;"><button type="button" class="conn-remove" onclick="this.closest('.w-cert-row').remove()" title="Remove">✕</button></div>
     </div>
@@ -4902,8 +4958,8 @@ function renderWeldersPage(){
     hdr+=`<th>${t('th_cert_no','Certificate No.')}</th>`;
     hdr+=welderColFilter(t('th_process','Process'),'process',procOpts,welderFilters.process);
     hdr+=`<th>${t('th_standard','Standard')}</th>`;
-    hdr+=welderColFilter(t('th_valid_until','Valid until'),'status',statusOpts,welderFilters.status);
-    hdr+=`<th>${t('th_renewal_due','Renewal due')}</th><th>${t('th_pdf','PDF')}</th><th>${t('th_signature','Sign')}</th><th></th>`;
+    hdr+=welderColFilter(t('th_valid_until','Certificate Valid Until'),'status',statusOpts,welderFilters.status);
+    hdr+=`<th>${t('th_renewal_due','Verification Due')}</th><th>${t('th_pdf','PDF')}</th><th>${t('th_signature','Sign')}</th><th></th>`;
     thead.innerHTML=hdr;
   }
   const tbody=document.getElementById('welders-tbody');
@@ -4941,7 +4997,7 @@ function renderArchivedCerts(){
     hdr+=archivedColFilter(t('th_welder_name','Welder name'),'welder',welderOpts,archivedCertFilters.welder);
     hdr+=`<th>${t('th_cert_no','Certificate No.')}</th>`;
     hdr+=archivedColFilter(t('th_process','Process'),'process',procOpts,archivedCertFilters.process);
-    hdr+=`<th>${t('th_standard','Standard')}</th><th>${t('th_valid_until','Valid until')}</th><th>${t('th_pdf','PDF')}</th><th>${t('th_signature','Sign')}</th>`;
+    hdr+=`<th>${t('th_standard','Standard')}</th><th>${t('th_valid_until','Certificate Valid Until')}</th><th>${t('th_pdf','PDF')}</th><th>${t('th_signature','Sign')}</th>`;
     thead.innerHTML=hdr;
   }
   const tbody=document.getElementById('welders-archived-tbody');
@@ -5021,7 +5077,7 @@ function homePipelineTable(list, emptyMsg){
 function homeCertTable(list){
   const sorted=list.slice().sort((a,b)=>daysUntil(a.validUntil)-daysUntil(b.validUntil));
   const rows=sorted.length? sorted.map(c=>certRow(c,true)).join('') : `<tr class="empty-row"><td colspan="9">${t('no_expiring_certs_30d','No certificates expiring in the next 30 days.')}</td></tr>`;
-  return `<div class="table-card"><table class="table-wide"><thead><tr><th>${t('th_no','No.')}</th><th>${t('th_welder','Welder')}</th><th>${t('th_cert_no','Certificate No.')}</th><th>${t('th_process','Process')}</th><th>${t('th_standard','Standard')}</th><th>${t('th_valid_until','Valid until')}</th><th>${t('th_renewal_due','Renewal due')}</th><th>${t('th_pdf','PDF')}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-card"><table class="table-wide"><thead><tr><th>${t('th_no','No.')}</th><th>${t('th_welder','Welder')}</th><th>${t('th_cert_no','Certificate No.')}</th><th>${t('th_process','Process')}</th><th>${t('th_standard','Standard')}</th><th>${t('th_valid_until','Certificate Valid Until')}</th><th>${t('th_renewal_due','Verification Due')}</th><th>${t('th_pdf','PDF')}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 /* ================================================================ HOME (office + vendor dashboards) ================================================================ */

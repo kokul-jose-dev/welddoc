@@ -73,9 +73,10 @@ def _serialize(p):
 
 @pipelines_bp.route("/<int:pipeline_id>/upload-iso", methods=["POST"])
 def upload_iso(pipeline_id):
-    """Upload ISO document to SharePoint at {project_folder}/{pipeline_no}/ISO/"""
+    """Upload or replace ISO document in SharePoint at {project_folder}/{pipeline_no}/01 Isometrie & Stückliste/
+    Deletes any existing file in the ISO subfolder before uploading the new one."""
     from app.models.project import Project
-    from app.sharepoint import upload_to_pipeline_subfolder
+    from app.sharepoint import upload_to_pipeline_subfolder, list_pipeline_subfolder_files, delete_sharepoint_drive_item, delete_sharepoint_file_by_url
 
     p = Pipeline.query.get_or_404(pipeline_id)
     project = Project.query.get(p.project_id)
@@ -92,6 +93,25 @@ def upload_iso(pipeline_id):
     content_type = file.content_type or "application/pdf"
 
     try:
+        # Delete old files in the ISO subfolder if any exist
+        existing_files = list_pipeline_subfolder_files(
+            project.sharepoint_drive_id,
+            project.sharepoint_folder_id,
+            p.no,
+            "01 Isometrie & Stückliste"
+        )
+        for item in existing_files:
+            item_id = item.get("id")
+            if item_id:
+                delete_sharepoint_drive_item(project.sharepoint_drive_id, item_id)
+
+        # Also try deleting old doc_iso url if recorded
+        if p.doc_iso:
+            try:
+                delete_sharepoint_file_by_url(p.doc_iso)
+            except Exception:
+                pass
+
         web_url = upload_to_pipeline_subfolder(
             project.sharepoint_drive_id,
             project.sharepoint_folder_id,
@@ -108,6 +128,36 @@ def upload_iso(pipeline_id):
         return jsonify({"docIso": web_url, "status": p.status}), 200
     except Exception as e:
         return jsonify({"error": f"Upload failed: {e}"}), 500
+
+
+@pipelines_bp.route("/<int:pipeline_id>/delete-iso", methods=["POST", "DELETE"])
+def delete_iso(pipeline_id):
+    """Delete ISO document from SharePoint and clear p.doc_iso."""
+    from app.models.project import Project
+    from app.sharepoint import list_pipeline_subfolder_files, delete_sharepoint_drive_item, delete_sharepoint_file_by_url
+
+    p = Pipeline.query.get_or_404(pipeline_id)
+    project = Project.query.get(p.project_id)
+    if project and project.sharepoint_drive_id and project.sharepoint_folder_id:
+        existing_files = list_pipeline_subfolder_files(
+            project.sharepoint_drive_id,
+            project.sharepoint_folder_id,
+            p.no,
+            "01 Isometrie & Stückliste"
+        )
+        for item in existing_files:
+            item_id = item.get("id")
+            if item_id:
+                delete_sharepoint_drive_item(project.sharepoint_drive_id, item_id)
+        if p.doc_iso:
+            try:
+                delete_sharepoint_file_by_url(p.doc_iso)
+            except Exception:
+                pass
+
+    p.doc_iso = None
+    db.session.commit()
+    return jsonify({"ok": True, "docIso": None}), 200
 
 
 @pipelines_bp.route("/<int:pipeline_id>/regenerate-waz", methods=["POST"])
