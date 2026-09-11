@@ -1,6 +1,11 @@
 from flask import Blueprint, request, jsonify
 from app.database import db
 from app.models.global_material import GlobalMaterial
+from app.material_utils import (
+    normalize_gm_data,
+    find_matching_global_material,
+    merge_global_materials,
+)
 
 global_materials_bp = Blueprint("global_materials", __name__)
 
@@ -21,41 +26,28 @@ def get_global_material(gm_id):
 @global_materials_bp.route("", methods=["POST"])
 def create_or_find_global_material():
     """Create a global material or return existing one if it matches all fields."""
-    data = request.get_json()
+    data = request.get_json() or {}
+    norm = normalize_gm_data(data)
 
-    # Try to find an existing match
-    existing = GlobalMaterial.query.filter_by(
-        category=data.get("category", ""),
-        material_code=data.get("materialCode", ""),
-        dien_no=data.get("dienNo", ""),
-        dn1=data.get("dn1", ""),
-        dn2=data.get("dn2", ""),
-        dn3=data.get("dn3", ""),
-        diameter=data.get("diameter", ""),
-        thickness=data.get("thickness", ""),
-        item_description=data.get("itemDescription", ""),
-        surface=data.get("surface", ""),
-        archived=False,
-    ).first()
-
+    existing = find_matching_global_material(norm)
     if existing:
         return jsonify(_serialize(existing)), 200
 
     # Create new
     m = GlobalMaterial(
-        category=data.get("category", ""),
-        dn1=data.get("dn1", ""),
-        dn2=data.get("dn2", ""),
-        dn3=data.get("dn3", ""),
-        dn4=data.get("dn4", ""),
-        dn5=data.get("dn5", ""),
-        dn6=data.get("dn6", ""),
-        diameter=data.get("diameter", ""),
-        thickness=data.get("thickness", ""),
-        item_description=data.get("itemDescription", ""),
-        material_code=data.get("materialCode", ""),
-        dien_no=data.get("dienNo", ""),
-        surface=data.get("surface", ""),
+        category=norm["category"],
+        dn1=norm["dn1"],
+        dn2=norm["dn2"],
+        dn3=norm["dn3"],
+        dn4=norm["dn4"],
+        dn5=norm["dn5"],
+        dn6=norm["dn6"],
+        diameter=norm["diameter"],
+        thickness=norm["thickness"],
+        item_description=norm["item_description"],
+        material_code=norm["material_code"],
+        dien_no=norm["dien_no"],
+        surface=norm["surface"],
     )
     db.session.add(m)
     db.session.commit()
@@ -64,100 +56,117 @@ def create_or_find_global_material():
 
 @global_materials_bp.route("/<int:gm_id>", methods=["POST"])
 def edit_global_material(gm_id):
-    """Edit an existing global material."""
+    """Edit an existing global material with automatic deduplication/merge."""
     m = GlobalMaterial.query.get_or_404(gm_id)
-    data = request.get_json()
-    m.category = data.get("category", m.category)
-    m.dn1 = data.get("dn1", m.dn1)
-    m.dn2 = data.get("dn2", m.dn2)
-    m.dn3 = data.get("dn3", m.dn3)
-    m.dn4 = data.get("dn4", m.dn4)
-    m.dn5 = data.get("dn5", m.dn5)
-    m.dn6 = data.get("dn6", m.dn6)
-    m.diameter = data.get("diameter", m.diameter)
-    m.thickness = data.get("thickness", m.thickness)
-    m.surface = data.get("surface", m.surface)
-    m.item_description = data.get("itemDescription", m.item_description)
-    m.material_code = data.get("materialCode", m.material_code)
-    m.dien_no = data.get("dienNo", m.dien_no)
+    data = request.get_json() or {}
+
+    # Merge current values with updates to create full normalized dict
+    current_dict = {
+        "category": data.get("category", m.category),
+        "dn1": data.get("dn1", m.dn1),
+        "dn2": data.get("dn2", m.dn2),
+        "dn3": data.get("dn3", m.dn3),
+        "dn4": data.get("dn4", m.dn4),
+        "dn5": data.get("dn5", m.dn5),
+        "dn6": data.get("dn6", m.dn6),
+        "diameter": data.get("diameter", m.diameter),
+        "thickness": data.get("thickness", m.thickness),
+        "surface": data.get("surface", m.surface),
+        "itemDescription": data.get("itemDescription", m.item_description),
+        "materialCode": data.get("materialCode", m.material_code),
+        "dienNo": data.get("dienNo", m.dien_no),
+    }
+    norm = normalize_gm_data(current_dict)
+
+    # Check if another active GlobalMaterial with the exact same spec already exists
+    existing_other = find_matching_global_material(norm, exclude_id=gm_id)
+    if existing_other:
+        # Auto-merge: move all ProjectMaterials referencing gm_id to existing_other.id
+        merge_global_materials(gm_id, existing_other.id)
+        db.session.commit()
+        return jsonify(_serialize(existing_other)), 200
+
+    # Otherwise update in place
+    m.category = norm["category"]
+    m.dn1 = norm["dn1"]
+    m.dn2 = norm["dn2"]
+    m.dn3 = norm["dn3"]
+    m.dn4 = norm["dn4"]
+    m.dn5 = norm["dn5"]
+    m.dn6 = norm["dn6"]
+    m.diameter = norm["diameter"]
+    m.thickness = norm["thickness"]
+    m.surface = norm["surface"]
+    m.item_description = norm["item_description"]
+    m.material_code = norm["material_code"]
+    m.dien_no = norm["dien_no"]
     if "archived" in data:
         m.archived = data["archived"]
+
     db.session.commit()
     return jsonify(_serialize(m)), 200
 
 
 @global_materials_bp.route("/update-spec", methods=["POST"])
 def update_global_material_spec():
-    """Update global material specification, matching by globalMaterialId or original spec."""
+    """Update global material specification with auto-merge."""
     data = request.get_json() or {}
     gm_id = data.get("globalMaterialId") or data.get("gmId")
-    original = data.get("original") or {}
+    norm = normalize_gm_data(data)
 
     gm = None
     if gm_id:
         gm = GlobalMaterial.query.get(gm_id)
 
-    if not gm and original:
-        orig_cat = original.get("piece") or original.get("category") or ""
-        orig_desc = original.get("itemDescription") or ""
-        orig_dn1 = original.get("dimension") or original.get("dn1") or ""
-        orig_dien = original.get("dienNo") or ""
-        orig_code = original.get("materialCode") or ""
-        query = GlobalMaterial.query.filter_by(category=orig_cat, archived=False)
-        if orig_desc:
-            query = query.filter_by(item_description=orig_desc)
-        if orig_dn1:
-            query = query.filter_by(dn1=orig_dn1)
-        if orig_dien:
-            query = query.filter_by(dien_no=orig_dien)
-        if orig_code:
-            query = query.filter_by(material_code=orig_code)
-        gm = query.first()
-
     if not gm:
-        # Create a new GlobalMaterial
+        existing = find_matching_global_material(norm)
+        if existing:
+            return jsonify(_serialize(existing)), 200
+
         gm = GlobalMaterial(
-            category=data.get("category") or data.get("piece") or "",
-            item_description=data.get("itemDescription") or "",
-            dn1=data.get("dn1") or data.get("dimension") or "",
-            dn2=data.get("dn2") or data.get("dimension2") or "",
-            dn3=data.get("dn3") or data.get("dimension3") or "",
-            dn4=data.get("dn4") or data.get("dimension4") or "",
-            dn5=data.get("dn5") or data.get("dimension5") or "",
-            dn6=data.get("dn6") or data.get("dimension6") or "",
-            diameter=data.get("diameter") or "",
-            thickness=data.get("thickness") or "",
-            surface=data.get("surface") or "",
-            material_code=data.get("materialCode") or "",
-            dien_no=data.get("dienNo") or "",
+            category=norm["category"],
+            item_description=norm["item_description"],
+            dn1=norm["dn1"],
+            dn2=norm["dn2"],
+            dn3=norm["dn3"],
+            dn4=norm["dn4"],
+            dn5=norm["dn5"],
+            dn6=norm["dn6"],
+            diameter=norm["diameter"],
+            thickness=norm["thickness"],
+            surface=norm["surface"],
+            material_code=norm["material_code"],
+            dien_no=norm["dien_no"],
         )
         db.session.add(gm)
+        db.session.commit()
+        return jsonify(_serialize(gm)), 201
     else:
-        # Update existing
-        if "category" in data or "piece" in data:
-            gm.category = data.get("category") or data.get("piece") or gm.category
-        if "itemDescription" in data:
-            gm.item_description = data.get("itemDescription") or gm.item_description
-        if "dn1" in data or "dimension" in data:
-            gm.dn1 = data.get("dn1") or data.get("dimension") or gm.dn1
-        for i in range(2, 7):
-            k = f"dn{i}"
-            dk = f"dimension{i}"
-            if k in data or dk in data:
-                setattr(gm, k, data.get(k) or data.get(dk) or "")
-        if "diameter" in data:
-            gm.diameter = data.get("diameter") or ""
-        if "thickness" in data:
-            gm.thickness = data.get("thickness") or ""
-        if "surface" in data:
-            gm.surface = data.get("surface") or ""
-        if "materialCode" in data:
-            gm.material_code = data.get("materialCode") or gm.material_code
-        if "dienNo" in data:
-            gm.dien_no = data.get("dienNo") or gm.dien_no
+        # Check if updating gm matches another existing GM
+        existing_other = find_matching_global_material(norm, exclude_id=gm.id)
+        if existing_other:
+            merge_global_materials(gm.id, existing_other.id)
+            db.session.commit()
+            return jsonify(_serialize(existing_other)), 200
 
-    db.session.commit()
-    return jsonify(_serialize(gm)), 200
+        # Update in place
+        gm.category = norm["category"]
+        gm.item_description = norm["item_description"]
+        gm.dn1 = norm["dn1"]
+        gm.dn2 = norm["dn2"]
+        gm.dn3 = norm["dn3"]
+        gm.dn4 = norm["dn4"]
+        gm.dn5 = norm["dn5"]
+        gm.dn6 = norm["dn6"]
+        gm.diameter = norm["diameter"]
+        gm.thickness = norm["thickness"]
+        gm.surface = norm["surface"]
+        gm.material_code = norm["material_code"]
+        gm.dien_no = norm["dien_no"]
+
+        db.session.commit()
+        return jsonify(_serialize(gm)), 200
+
 
 
 def _serialize(m):

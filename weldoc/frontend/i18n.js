@@ -559,6 +559,13 @@ const TRANSLATIONS = {
     reopen_mat_list: "Materialliste bearbeiten",
     reopen_weld_list: "Schweissnahtliste bearbeiten",
     waz_file_required: "WAZ-PDF-Dokument ist erforderlich.",
+    heat_conflict_title: "Material mit dieser Schmelznummer existiert bereits",
+    heat_conflict_desc: "Ein Material mit dieser Schmelznummer existiert bereits im System mit abweichenden Spezifikationen. Wie möchten Sie fortfahren?",
+    field_name: "Feld",
+    existing_val: "Bestehendes Material",
+    new_val: "Neu eingegeben",
+    add_as_new: "Als neues Material hinzufügen",
+    update_existing: "Bestehendes Material aktualisieren",
   },
   en: {
     // Navigation & Chrome
@@ -1115,6 +1122,13 @@ const TRANSLATIONS = {
     reopen_mat_list: "Re-open material list",
     reopen_weld_list: "Re-open weld list",
     waz_file_required: "WAZ PDF document is required.",
+    heat_conflict_title: "Material with this Heat Number already exists",
+    heat_conflict_desc: "A material with this Heat Number already exists in the system with different specifications. How would you like to proceed?",
+    field_name: "Field",
+    existing_val: "Existing Material",
+    new_val: "New Values Entered",
+    add_as_new: "Add as New Material",
+    update_existing: "Update Existing Material",
   }
 };
 

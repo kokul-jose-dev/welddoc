@@ -3,6 +3,7 @@ from app.database import db
 from app.models.pipeline_material import PipelineMaterial, pipeline_material_connections
 from app.models.project_material import ProjectMaterial
 from app.models.weld import Weld
+from app.material_utils import clean_str, find_matching_project_material
 
 pipeline_materials_bp = Blueprint("pipeline_materials", __name__)
 
@@ -54,17 +55,23 @@ def create_pipeline_material():
     # Auto-assign WAZ number
     waz_no = _assign_waz_no(pipeline_id, project_material_id)
 
-    # Check if another material with the same heat already has a waz_package_url in this pipeline
+    # Check if another material with the same project material spec already has a waz_package_url in this pipeline
     waz_package_url = None
     pm_curr = ProjectMaterial.query.get(project_material_id)
-    if pm_curr and pm_curr.heat_no:
+    if pm_curr and pm_curr.certificate and pm_curr.heat_no:
+        c_curr = pm_curr.certificate.strip().lower()
         h_curr = pm_curr.heat_no.strip().lower()
+        gm_curr = pm_curr.global_material_id
         existing_sibling = PipelineMaterial.query.filter_by(
             pipeline_id=pipeline_id, archived=False
         ).all()
         for sib in existing_sibling:
-            if sib.project_material and sib.project_material.heat_no:
-                if sib.project_material.heat_no.strip().lower() == h_curr and sib.waz_package_url:
+            if sib.project_material:
+                s_pm = sib.project_material
+                if (s_pm.global_material_id == gm_curr and
+                    (s_pm.certificate or "").strip().lower() == c_curr and
+                    (s_pm.heat_no or "").strip().lower() == h_curr and
+                    sib.waz_package_url):
                     waz_package_url = sib.waz_package_url
                     break
 
@@ -163,22 +170,21 @@ def edit_pipeline_material(pm_id):
     pm_changed = False
 
     if new_cert or new_heat:
-        cert = new_cert or pm.certificate or ""
-        heat = new_heat or pm.heat_no or ""
-        if cert != (pm.certificate or "") or heat != (pm.heat_no or ""):
+        cert = clean_str(new_cert or pm.certificate)
+        heat = clean_str(new_heat or pm.heat_no)
+        cur_cert = clean_str(pm.certificate)
+        cur_heat = clean_str(pm.heat_no)
+        if cert != cur_cert or heat != cur_heat:
             # If existing project material has no cert/heat yet, just fill it in
-            if not pm.certificate and not pm.heat_no:
+            if not cur_cert and not cur_heat:
                 pm.certificate = cert
                 pm.heat_no = heat
                 pm_changed = True
             else:
                 # Cert/heat changed — find or create a separate project material
-                existing_pm = ProjectMaterial.query.filter_by(
-                    project_id=pm.project_id,
-                    global_material_id=pm.global_material_id,
-                    certificate=cert,
-                    heat_no=heat,
-                ).first()
+                existing_pm = find_matching_project_material(
+                    pm.project_id, pm.global_material_id, cert, heat
+                )
                 if existing_pm:
                     m.project_material_id = existing_pm.id
                     pm = existing_pm
@@ -280,15 +286,20 @@ def upload_waz_for_pipeline_material(pm_id):
     # 2. Generate Cover Letter, merge with raw WAZ PDF, and upload package to pipeline WAZ folder
     _build_and_save_waz_package(m, file_content=file_content)
 
-    # Sync package URL and WAZ no across all pipeline materials sharing this heat number
-    if pm.heat_no:
+    # Sync package URL and WAZ no across all pipeline materials sharing this exact project material spec
+    if pm.certificate and pm.heat_no:
+        c_norm = pm.certificate.strip().lower()
         h_norm = pm.heat_no.strip().lower()
+        gm_norm = pm.global_material_id
         siblings = PipelineMaterial.query.filter_by(
             pipeline_id=m.pipeline_id, archived=False
         ).filter(PipelineMaterial.id != m.id).all()
         for sib in siblings:
-            if sib.project_material and sib.project_material.heat_no:
-                if sib.project_material.heat_no.strip().lower() == h_norm:
+            if sib.project_material:
+                s_pm = sib.project_material
+                if (s_pm.global_material_id == gm_norm and
+                    (s_pm.certificate or "").strip().lower() == c_norm and
+                    (s_pm.heat_no or "").strip().lower() == h_norm):
                     sib.waz_no = m.waz_no
                     sib.waz_package_url = m.waz_package_url
         db.session.commit()
@@ -346,17 +357,17 @@ def restore_pipeline_material(pm_id):
         file_content = file.read()
         content_type = file.content_type or "application/pdf"
 
-    heat_no = request.form.get("heatNo", "").strip() or pm.heat_no or ""
-    certificate = request.form.get("certificate", "").strip() or pm.certificate or ""
+    heat_no = clean_str(request.form.get("heatNo", "") or pm.heat_no)
+    certificate = clean_str(request.form.get("certificate", "") or pm.certificate)
     existing_pdf_url = request.form.get("existingPdfUrl", "").strip()
 
-    if heat_no != (pm.heat_no or "") or certificate != (pm.certificate or ""):
-        existing_pm = ProjectMaterial.query.filter_by(
-            project_id=pm.project_id,
-            global_material_id=pm.global_material_id,
-            certificate=certificate,
-            heat_no=heat_no,
-        ).first()
+    cur_heat = clean_str(pm.heat_no)
+    cur_cert = clean_str(pm.certificate)
+
+    if heat_no != cur_heat or certificate != cur_cert:
+        existing_pm = find_matching_project_material(
+            pm.project_id, pm.global_material_id, certificate, heat_no
+        )
         if existing_pm:
             m.project_material_id = existing_pm.id
             pm = existing_pm
@@ -523,6 +534,11 @@ def reorder_pipeline_materials():
             VALUES {weld_values}
         """))
 
+    db.session.commit()
+    _sync_pipeline_waz_nos(pipeline_id)
+    return jsonify({"status": "ok"}), 200
+
+
 def _archive_pipeline_material(m):
     """Perform archive actions for a pipeline material:
     1. Bridge connections if exactly 2 active neighbors.
@@ -616,8 +632,8 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id, force_regenerat
         pipeline_id=pipeline_id, archived=False
     ).order_by(PipelineMaterial.position, PipelineMaterial.id).all()
 
-    heat_groups = []
-    seen_heats = {}
+    material_groups = []
+    seen_groups = {}
 
     for m in active_mats:
         pm = m.project_material
@@ -627,17 +643,19 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id, force_regenerat
                 m.waz_package_url = None
             continue
 
-        heat_key = pm.heat_no.strip().lower()
-        if heat_key not in seen_heats:
+        c_key = (pm.certificate or "").strip().lower()
+        h_key = (pm.heat_no or "").strip().lower()
+        grp_key = (pm.global_material_id, c_key, h_key)
+        if grp_key not in seen_groups:
             group = {
-                "heat_key": heat_key,
+                "grp_key": grp_key,
                 "old_waz": m.waz_no,
                 "mats": [m]
             }
-            seen_heats[heat_key] = group
-            heat_groups.append(group)
+            seen_groups[grp_key] = group
+            material_groups.append(group)
         else:
-            seen_heats[heat_key]["mats"].append(m)
+            seen_groups[grp_key]["mats"].append(m)
 
     def _waz_sort_key(grp):
         old_w = grp["old_waz"]
@@ -647,12 +665,12 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id, force_regenerat
                 return (0, int(match.group(1)))
         return (1, grp["mats"][0].id)
 
-    heat_groups.sort(key=_waz_sort_key)
+    material_groups.sort(key=_waz_sort_key)
 
     regen_count = 0
     valid_filenames = set()
 
-    for idx, grp in enumerate(heat_groups, 1):
+    for idx, grp in enumerate(material_groups, 1):
         target_waz = f"Z{idx:03d}"
         old_waz = grp["old_waz"]
         waz_changed = (old_waz != target_waz)
@@ -723,27 +741,33 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id, force_regenerat
 
 def _assign_waz_no(pipeline_id, project_material_id):
     """Auto-assign WAZ number only if project material has certificate + heat number.
-    Same heat number in same pipeline = same WAZ no.
-    Different heat numbers = unique sequential WAZ numbers (Z001, Z002, etc.)."""
+    Same project material (or same global_material_id + cert + heat) in same pipeline = same WAZ no.
+    Different materials / heats = unique sequential WAZ numbers (Z001, Z002, etc.)."""
     import re
     pm = ProjectMaterial.query.get(project_material_id)
     if not pm or not pm.certificate or not (pm.heat_no or "").strip():
         return None  # Don't assign WAZ number yet
 
-    heat_target = pm.heat_no.strip().lower()
+    c_target = pm.certificate.strip().lower()
+    h_target = pm.heat_no.strip().lower()
+    gm_target = pm.global_material_id
 
     # Query all active pipeline materials in this pipeline
     existing_mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
     ).all()
 
-    # Check if any existing material in this pipeline has the same heat number and an assigned waz_no
+    # Check if any existing material in this pipeline has the same project material spec and an assigned waz_no
     for mat in existing_mats:
-        if mat.project_material and mat.project_material.heat_no:
-            if mat.project_material.heat_no.strip().lower() == heat_target and mat.waz_no:
+        if mat.project_material:
+            m_pm = mat.project_material
+            if (m_pm.global_material_id == gm_target and
+                (m_pm.certificate or "").strip().lower() == c_target and
+                (m_pm.heat_no or "").strip().lower() == h_target and
+                mat.waz_no):
                 return mat.waz_no
 
-    # If new heat number in the pipeline, find max existing Z number to avoid any collisions
+    # If new material spec / heat number in the pipeline, find max existing Z number to avoid any collisions
     used_nums = []
     for mat in existing_mats:
         if mat.waz_no:
@@ -756,36 +780,43 @@ def _assign_waz_no(pipeline_id, project_material_id):
 
 
 def _sync_pipeline_waz_nos(pipeline_id):
-    """Ensure 1 heat number = 1 WAZ number per pipeline, eliminate duplicate Z numbers across different heats,
-    and propagate waz_package_url across matching heat numbers."""
+    """Ensure 1 unique project material spec = 1 WAZ number per pipeline, eliminate duplicate Z numbers across different specs,
+    and propagate waz_package_url across matching project materials."""
     import re
     mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
     ).order_by(PipelineMaterial.position, PipelineMaterial.id).all()
 
-    heat_to_waz = {}
-    waz_to_heat = {}
-    heat_to_pkg = {}
+    def _pm_key(pm):
+        if not pm or not pm.certificate or not (pm.heat_no or "").strip():
+            return None
+        c = (pm.certificate or "").strip().lower()
+        h = (pm.heat_no or "").strip().lower()
+        return (pm.global_material_id, c, h)
+
+    pm_to_waz = {}
+    waz_to_pm = {}
+    pm_to_pkg = {}
     used_nums = set()
 
     # First pass: collect existing unambiguous assignments & package URLs
     for m in mats:
         pm = m.project_material
-        if not pm or not pm.certificate or not (pm.heat_no or "").strip():
+        k = _pm_key(pm)
+        if not k:
             continue
-        heat_key = pm.heat_no.strip().lower()
 
-        if m.waz_package_url and heat_key not in heat_to_pkg:
-            heat_to_pkg[heat_key] = m.waz_package_url
+        if m.waz_package_url and k not in pm_to_pkg:
+            pm_to_pkg[k] = m.waz_package_url
 
         if m.waz_no:
             waz = m.waz_no.strip().upper()
             match = re.match(r'^Z(\d+)$', waz)
             if match:
                 num = int(match.group(1))
-                if waz not in waz_to_heat and heat_key not in heat_to_waz:
-                    heat_to_waz[heat_key] = waz
-                    waz_to_heat[waz] = heat_key
+                if waz not in waz_to_pm and k not in pm_to_waz:
+                    pm_to_waz[k] = waz
+                    waz_to_pm[waz] = k
                     used_nums.add(num)
 
     # Second pass: assign canonical WAZ number and propagate package URL to all matching rows
@@ -793,29 +824,28 @@ def _sync_pipeline_waz_nos(pipeline_id):
     next_num = 1
     for m in mats:
         pm = m.project_material
-        if not pm or not pm.certificate or not (pm.heat_no or "").strip():
+        k = _pm_key(pm)
+        if not k:
             if m.waz_no is not None:
                 m.waz_no = None
                 changed = True
             continue
 
-        heat_key = pm.heat_no.strip().lower()
-
-        if heat_key not in heat_to_waz:
+        if k not in pm_to_waz:
             while next_num in used_nums:
                 next_num += 1
             assigned_waz = f"Z{next_num:03d}"
             used_nums.add(next_num)
-            heat_to_waz[heat_key] = assigned_waz
-            waz_to_heat[assigned_waz] = heat_key
+            pm_to_waz[k] = assigned_waz
+            waz_to_pm[assigned_waz] = k
 
-        canonical_waz = heat_to_waz[heat_key]
+        canonical_waz = pm_to_waz[k]
         if m.waz_no != canonical_waz:
             m.waz_no = canonical_waz
             changed = True
 
-        if heat_key in heat_to_pkg and m.waz_package_url != heat_to_pkg[heat_key]:
-            m.waz_package_url = heat_to_pkg[heat_key]
+        if k in pm_to_pkg and m.waz_package_url != pm_to_pkg[k]:
+            m.waz_package_url = pm_to_pkg[k]
             changed = True
 
     if changed:
@@ -1081,6 +1111,7 @@ def _serialize(m):
         "id": m.id,
         "pipelineId": m.pipeline_id,
         "projectMaterialId": m.project_material_id,
+        "globalMaterialId": gm.id if gm else None,
         "position": m.position,
         "wazNo": m.waz_no,
         "startOfPlumbing": m.start_of_plumbing,

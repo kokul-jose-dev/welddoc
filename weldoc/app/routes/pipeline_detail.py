@@ -38,7 +38,7 @@ def get_pipeline_detail(pipeline_id):
     mat_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.pipeline_id, pm.project_material_id, pm.position,
                pm.waz_no, pm.waz_package_url, pm.start_of_plumbing, pm.end_of_plumbing, pm.archived,
-               prm.certificate, prm.heat_no, prm.waz_pdf_url,
+               prm.certificate, prm.heat_no, prm.waz_pdf_url, prm.global_material_id,
                gm.category, gm.item_description, gm.dn1, gm.dn2, gm.dn3,
                gm.dn4, gm.dn5, gm.dn6, gm.diameter, gm.thickness,
                gm.surface, gm.material_code, gm.dien_no
@@ -146,6 +146,7 @@ def get_pipeline_detail(pipeline_id):
         materials.append({
             "id": r.id, "pipelineId": r.pipeline_id,
             "projectMaterialId": r.project_material_id,
+            "globalMaterialId": getattr(r, 'global_material_id', None),
             "position": r.position, "wazNo": r.waz_no,
             "startOfPlumbing": r.start_of_plumbing,
             "endOfPlumbing": r.end_of_plumbing, "archived": r.archived,

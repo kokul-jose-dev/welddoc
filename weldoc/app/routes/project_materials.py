@@ -4,9 +4,31 @@ from app.models.project_material import ProjectMaterial
 from app.models.global_material import GlobalMaterial
 from app.models.project import Project
 from app.models.client import Client
-from app.sharepoint import upload_waz_to_project_folder
+from app.material_utils import (
+    clean_str,
+    find_matching_project_material,
+    merge_project_materials,
+    check_heat_number_diff,
+)
 
 project_materials_bp = Blueprint("project_materials", __name__)
+
+
+@project_materials_bp.route("/check-heat-diff", methods=["POST"])
+def check_heat_diff():
+    data = request.get_json() or {}
+    heat_no = data.get("heatNo") or data.get("heat") or ""
+    project_id = data.get("projectId")
+    exclude_pm_id = data.get("excludeProjectMaterialId") or data.get("id")
+
+    result = check_heat_number_diff(
+        heat_no=heat_no,
+        form_data=data,
+        project_id=project_id,
+        exclude_pm_id=exclude_pm_id,
+    )
+    return jsonify(result), 200
+
 
 
 @project_materials_bp.route("", methods=["GET"])
@@ -28,37 +50,128 @@ def get_project_material(pm_id):
 
 @project_materials_bp.route("", methods=["POST"])
 def create_or_update_project_material():
-    data = request.get_json()
+    data = request.get_json() or {}
+    cert = clean_str(data.get("certificate"))
+    heat = clean_str(data.get("heatNo"))
+    waz_pdf_url = data.get("wazPdfUrl")
+
     if "id" in data and data["id"]:
         m = ProjectMaterial.query.get_or_404(data["id"])
-        m.global_material_id = data.get("globalMaterialId", m.global_material_id)
-        m.certificate = data.get("certificate", m.certificate)
-        m.heat_no = data.get("heatNo", m.heat_no)
-        if "wazPdfUrl" in data:
-            m.waz_pdf_url = data["wazPdfUrl"]
+        target_gm_id = data.get("globalMaterialId", m.global_material_id)
+
+        # Check if updating this PM matches another existing PM in the same project
+        existing_other = find_matching_project_material(
+            m.project_id, target_gm_id, cert, heat, exclude_id=m.id
+        )
+        if existing_other:
+            # Auto-merge: move all PipelineMaterials to existing_other
+            merge_project_materials(m.id, existing_other.id)
+            if waz_pdf_url and not existing_other.waz_pdf_url:
+                existing_other.waz_pdf_url = waz_pdf_url
+            db.session.commit()
+            return jsonify(_serialize(existing_other)), 200
+
+        # Update in place
+        m.global_material_id = target_gm_id
+        m.certificate = cert
+        m.heat_no = heat
+        if waz_pdf_url is not None:
+            m.waz_pdf_url = waz_pdf_url
         if "archived" in data:
             m.archived = data["archived"]
+        db.session.commit()
+        return jsonify(_serialize(m)), 200
     else:
+        raw_project_id = data.get("projectId")
+        raw_gm_id = data.get("globalMaterialId")
+        try:
+            project_id = int(raw_project_id) if raw_project_id is not None else None
+        except Exception:
+            project_id = raw_project_id
+
+        try:
+            gm_id = int(raw_gm_id) if raw_gm_id is not None else None
+        except Exception:
+            gm_id = raw_gm_id
+
         # Check if same combination already exists in this project
-        existing = ProjectMaterial.query.filter_by(
-            project_id=data["projectId"],
-            global_material_id=data["globalMaterialId"],
-            certificate=data.get("certificate", ""),
-            heat_no=data.get("heatNo", ""),
-            archived=False,
-        ).first()
+        existing = find_matching_project_material(project_id, gm_id, cert, heat)
         if existing:
+            if waz_pdf_url and not existing.waz_pdf_url:
+                existing.waz_pdf_url = waz_pdf_url
+                db.session.commit()
             return jsonify(_serialize(existing)), 200
 
         m = ProjectMaterial(
-            project_id=data["projectId"],
-            global_material_id=data["globalMaterialId"],
-            certificate=data.get("certificate", ""),
-            heat_no=data.get("heatNo", ""),
+            project_id=project_id,
+            global_material_id=gm_id,
+            certificate=cert,
+            heat_no=heat,
+            waz_pdf_url=waz_pdf_url or "",
         )
         db.session.add(m)
-    db.session.commit()
-    return jsonify(_serialize(m)), 200
+        db.session.commit()
+
+        if waz_pdf_url:
+            import threading
+            app = current_app._get_current_object()
+            pm_id = m.id
+            def _bg_copy():
+                with app.app_context():
+                    mat = ProjectMaterial.query.get(pm_id)
+                    if mat:
+                        _copy_waz_file_for_pm(mat)
+            threading.Thread(target=_bg_copy, daemon=True).start()
+
+        return jsonify(_serialize(m)), 201
+
+
+def _copy_waz_file_for_pm(m):
+    """If project material has a waz_pdf_url, ensure SharePoint has a copy formatted with this material's specs."""
+    if not m.waz_pdf_url:
+        return
+    project = Project.query.get(m.project_id)
+    if not project or not project.sharepoint_drive_id or not project.sharepoint_folder_id:
+        return
+
+    import base64
+    import urllib.request
+    from app.sharepoint import _get_app_token, _ssl_context, GRAPH_BASE, format_waz_filename, upload_waz_to_project_folder
+
+    gm = m.global_material
+    target_name = format_waz_filename(
+        item_desc=gm.item_description if gm else "",
+        dn=gm.dn1 if gm else "",
+        diameter=gm.diameter if gm else "",
+        thickness=gm.thickness if gm else "",
+        material_code=gm.material_code if gm else "",
+        surface=gm.surface if gm else "",
+        heat_no=m.heat_no or "",
+    )
+
+    try:
+        token = _get_app_token()
+        encoded_url = base64.urlsafe_b64encode(m.waz_pdf_url.encode()).decode().rstrip("=")
+        share_id = "u!" + encoded_url
+        download_url = f"{GRAPH_BASE}/shares/{share_id}/driveItem/content"
+        req = urllib.request.Request(download_url)
+        req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            file_content = resp.read()
+        if file_content:
+            new_url = upload_waz_to_project_folder(
+                project.sharepoint_drive_id,
+                project.sharepoint_folder_id,
+                target_name,
+                file_content,
+                "application/pdf"
+            )
+            if new_url:
+                m.waz_pdf_url = new_url
+                db.session.commit()
+    except Exception as e:
+        current_app.logger.error(f"Failed to copy WAZ file for project material {m.id}: {e}")
+
 
 
 @project_materials_bp.route("/<int:pm_id>/upload-waz", methods=["POST"])
