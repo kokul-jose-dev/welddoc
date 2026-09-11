@@ -1033,8 +1033,8 @@ function mountModals() {
     <div class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="qualified_processes">Qualified processes <span class="req">*</span></span>
       <div id="renew-procs-wrap"><input type="text" id="renew-procs" placeholder="e.g. 141 / 142"></div>
     </div>
-    <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="new_valid_until">New valid until <span class="req">*</span></span><input type="date" id="renew-valid" required></label>
-    <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="next_renewal_due">Next renewal due <span class="req">*</span></span><input type="date" id="renew-renewal" required></label>
+    <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="new_valid_until">${t('new_valid_until', 'New certificate valid until')} <span class="req">*</span></span><input type="date" id="renew-valid" required></label>
+    <label class="field" style="margin-bottom:12px;"><span class="lbl" data-i18n="next_renewal_due">${t('next_renewal_due', 'New verification due')} <span class="req">*</span></span><input type="date" id="renew-renewal" required></label>
     <label class="field"><span class="lbl" data-i18n="renewal_attachment">Renewal attachment (→ SharePoint) <span class="req">*</span></span><input type="file" id="renew-file" accept="application/pdf"></label>
     <div class="field-hint" data-i18n="renew_cert_hint">The uploaded PDF is stored in SharePoint; all fields are required.</div>
     <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('modal-renew')" data-i18n="cancel">Cancel</button><button id="renew-confirm-btn" class="btn btn-primary" onclick="confirmRenew()" data-i18n="confirm_renewal">Confirm renewal</button></div>
@@ -1999,6 +1999,24 @@ async function openWelderModal(id = null, returnToWeld = false) {
   else { document.getElementById('modal-welder-title').textContent = t('new_welder', 'New welder'); /* auto-show 1 required cert row */ showWelderCertSection(); }
   openModal('modal-welder'); document.getElementById('input-w-name').focus();
 }
+function defaultCertValidUntil() {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + 2);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function defaultCertVerificationDue() {
+  const d = new Date();
+  d.setMonth(d.getMonth() + 6);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 let _wCertIdx = 0;
 function showWelderCertSection() {
   document.getElementById('w-cert-section').style.display = '';
@@ -2027,8 +2045,8 @@ function addWelderCertRow() {
           <input type="text" id="wc-procs-${_wCertIdx}" placeholder="e.g. 141 / 142">
         </div>
       </div>
-      <label class="field"><span class="lbl">${t('th_valid_until', 'Certificate Valid Until')} <span class="req">*</span></span><input type="date" id="wc-valid-${_wCertIdx}"></label>
-      <label class="field"><span class="lbl">${t('th_renewal_due', 'Verification Due')} <span class="req">*</span></span><input type="date" id="wc-renewal-${_wCertIdx}"></label>
+      <label class="field"><span class="lbl">${t('th_valid_until', 'Certificate Valid Until')} <span class="req">*</span></span><input type="date" id="wc-valid-${_wCertIdx}" value="${defaultCertValidUntil()}"></label>
+      <label class="field"><span class="lbl">${t('th_renewal_due', 'Verification Due')} <span class="req">*</span></span><input type="date" id="wc-renewal-${_wCertIdx}" value="${defaultCertVerificationDue()}"></label>
       <label class="field"><span class="lbl">${t('cert_pdf_sp', 'Certificate PDF (→ SharePoint)')} <span class="req">*</span></span><input type="file" id="wc-file-${_wCertIdx}" accept="application/pdf"></label>
       <div class="field" style="display:flex;align-items:flex-end;"><button type="button" class="conn-remove" onclick="this.closest('.w-cert-row').remove()" title="Remove">✕</button></div>
     </div>
@@ -2898,7 +2916,9 @@ function openRenewModal(certId) {
 
   updateRenewProcField(c.certNo, c.process);
 
-  setV('renew-valid', c.validUntil || ''); setV('renew-renewal', c.renewalDue || ''); document.getElementById('renew-file').value = '';
+  setV('renew-valid', defaultCertValidUntil());
+  setV('renew-renewal', defaultCertVerificationDue());
+  document.getElementById('renew-file').value = '';
   openModal('modal-renew');
 }
 
@@ -3076,8 +3096,8 @@ function openCertEditModal(certId) {
 
   const stdInp = document.getElementById('cert-edit-standard');
   if (stdInp) stdInp.value = c.standard || 'EN ISO 14732';
-  setV('cert-edit-valid', c.validUntil || '');
-  setV('cert-edit-renewal', c.renewalDue || '');
+  setV('cert-edit-valid', c.validUntil || defaultCertValidUntil());
+  setV('cert-edit-renewal', c.renewalDue || defaultCertVerificationDue());
   const fileInp = document.getElementById('cert-edit-file');
   if (fileInp) fileInp.value = '';
 
