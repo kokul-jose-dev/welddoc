@@ -1472,45 +1472,75 @@ function attachFormHandlers() {
     /* Conflict check before saving */
     const isEditingMat = editingMaterialId !== null;
 
+    if (!_bypassMatHeatConflict) {
+      const dnsObj = { dn1: dimension };
+      for (let i = 2; i <= 6; i++) if (data[`dimension${i}`]) dnsObj[`dn${i}`] = data[`dimension${i}`];
+      const specsObj = { category: piece, itemDescription: itemDesc || piece, dn1: dimension, materialCode: matCode, dienNo, diameter, thickness, surface, certificate, ...dnsObj };
+
+      // Step 1: Check if an exact match on ALL fields exists (with same heatNo or both no heatNo)
+      const dupMatch = findDuplicateProjectMaterial(currentProjectId, heatNo, specsObj, isEditingMat && existingMat ? existingMat.projectMaterialId : null);
+
+      if (dupMatch) {
+        // SCENARIO 1: Exact matching project material already exists in project -> Merge/link confirmation
+        const specsSummary = formatMaterialSpecsStr({ category: piece, dn1: dimension, diameter, thickness, materialCode: matCode, ...dnsObj });
+        const descText = heatNo
+          ? t('matching_pipe_material_exists_desc', 'A material with heat number {heat} and these exact specifications ({specs}) already exists in this project. Updating will link to the existing material.').replace('{heat}', `<strong>${escapeHtml(heatNo)}</strong>`).replace('{specs}', `<em>${escapeHtml(specsSummary)}</em>`)
+          : t('matching_pipe_material_no_heat_exists_desc', 'A material with these exact specifications ({specs}) already exists in this project without a heat number. Updating will link to the existing material.').replace('{specs}', `<em>${escapeHtml(specsSummary)}</em>`);
+
+        promptHeatConflictModal({
+          mode: 'duplicate_merge',
+          title: t('matching_material_exists_title', 'Matching Material Already Exists'),
+          desc: descText,
+          updateBtnText: t('update', 'Update'),
+          onUpdateExisting: async () => {
+            await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: editingMaterialId, forceNew: false, targetProjectMaterialId: dupMatch.projectMaterial.id });
+          }
+        });
+        return;
+      }
+
+      // Step 2: If no heat number, check if exactly 1 material matches all MANDATORY fields
+      if (!heatNo) {
+        const mandatoryMatches = findMandatoryMatchingProjectMaterials(currentProjectId, specsObj, isEditingMat && existingMat ? existingMat.projectMaterialId : null);
+        if (mandatoryMatches.length === 1) {
+          const matched = mandatoryMatches[0];
+          const diffs = getMaterialDiffs(matched.projectMaterial, matched.globalMaterial, specsObj);
+          promptHeatConflictModal({
+            mode: 'update_or_add_new',
+            title: t('similar_material_exists_title', 'Similar Material Exists'),
+            desc: t('similar_material_exists_desc', 'A material with the same core specifications already exists in this project, but has different secondary specifications. Would you like to update the existing material or add this as a new material?'),
+            diffs,
+            updateBtnText: t('update', 'Update'),
+            addBtnText: t('add_as_new', 'Add as New Material'),
+            existingMaterial: {
+              globalMaterialId: matched.projectMaterial.globalMaterialId,
+              projectMaterialId: matched.projectMaterial.id,
+            },
+            onAddAsNew: async () => {
+              await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: editingMaterialId, forceNew: true });
+            },
+            onUpdateExisting: async () => {
+              await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: editingMaterialId, forceNew: false, targetProjectMaterialId: matched.projectMaterial.id });
+            }
+          });
+          return;
+        }
+      }
+    }
+
     if (isEditingMat && existingMat && !_bypassMatHeatConflict) {
       // When EDITING an existing material, check if user changed any material specifications on THIS material
-      const norm = v => (v === null || v === undefined ? '' : String(v)).trim();
-      const fieldDefs = [
-        { key: 'category', label: t('th_category', 'Category'), exist: existingMat.piece || existingMat.category || '', cur: piece },
-        { key: 'itemDescription', label: t('th_item_description', 'Item description'), exist: existingMat.itemDescription || '', cur: itemDesc || piece },
-        { key: 'dn1', label: t('dn', 'DN'), exist: existingMat.dimension || existingMat.dn1 || '', cur: dimension },
-        { key: 'diameter', label: t('th_diameter', 'Diameter'), exist: existingMat.diameter || '', cur: diameter },
-        { key: 'thickness', label: t('th_thickness', 'Thickness'), exist: existingMat.thickness || '', cur: thickness },
-        { key: 'dienNo', label: t('th_din_en_no', 'DIN EN No.'), exist: existingMat.dienNo || '', cur: dienNo },
-        { key: 'surface', label: t('th_surface', 'Surface'), exist: existingMat.surface || '', cur: surface },
-        { key: 'materialCode', label: t('th_material', 'Material'), exist: existingMat.materialCode || '', cur: matCode },
-        { key: 'certificate', label: t('th_certificate', 'Certificate'), exist: existingMat.certificate || '', cur: certificate },
-        { key: 'heatNo', label: t('th_heat_no', 'Heat No.'), exist: existingMat.heatNo || '', cur: heatNo },
-      ];
-      for (let i = 2; i <= 6; i++) {
-        const existVal = existingMat[`dimension${i}`] || existingMat[`dn${i}`] || '';
-        const curVal = data[`dimension${i}`] || '';
-        if (existVal || curVal) {
-          fieldDefs.push({ key: `dn${i}`, label: `DN ${i}`, exist: existVal, cur: curVal });
-        }
-      }
+      const diffs = getMaterialDiffs(existingMat, existingMat, { category: piece, itemDescription: itemDesc || piece, dn1: dimension, materialCode: matCode, dienNo, diameter, thickness, surface, certificate, heatNo, ...data });
 
-      const diffs = [];
-      for (const f of fieldDefs) {
-        if (norm(f.exist).toLowerCase() !== norm(f.cur).toLowerCase()) {
-          diffs.push({
-            field: f.key,
-            label: f.label,
-            existingVal: norm(f.exist),
-            newVal: norm(f.cur),
-          });
-        }
-      }
-
-      // If user modified any specifications on this material, show confirmation popup with ONLY what changed on this material!
+      // SCENARIO 2: If user modified any specifications on this material, show confirmation popup
       if (diffs.length > 0) {
         promptHeatConflictModal({
+          mode: 'update_or_add_new',
+          title: t('update_material_specs_title', 'Update Material Specifications'),
+          desc: t('update_material_specs_desc', 'You are changing the specifications for this material. Would you like to update this material or add it as a new material?'),
           diffs,
+          updateBtnText: t('update', 'Update'),
+          addBtnText: t('add_as_new', 'Add as New Material'),
           existingMaterial: {
             globalMaterialId: existingMat.globalMaterialId,
             projectMaterialId: existingMat.projectMaterialId,
@@ -1525,7 +1555,7 @@ function attachFormHandlers() {
         return;
       }
     } else if (!isEditingMat && heatNo && !_bypassMatHeatConflict) {
-      // Adding a brand new material: check if heat number already exists on another material
+      // Adding a brand new material: check if heat number already exists on another material with different specs
       try {
         const dnsObj = { dn1: dimension };
         for (let i = 2; i <= 6; i++) if (data[`dimension${i}`]) dnsObj[`dn${i}`] = data[`dimension${i}`];
@@ -1546,8 +1576,13 @@ function attachFormHandlers() {
         const checkRes = await apiPost('/project-materials/check-heat-diff', checkPayload);
         if (checkRes.hasDuplicateHeat && checkRes.hasDifferences) {
           promptHeatConflictModal({
+            mode: 'update_or_add_new',
+            title: t('heat_conflict_title', 'Material with this Heat Number already exists'),
+            desc: t('heat_conflict_desc', 'A material with this Heat Number already exists in the system with different specifications. How would you like to proceed?'),
             diffs: checkRes.diffs,
             existingMaterial: checkRes.existingMaterial,
+            updateBtnText: t('update_existing', 'Update Existing Material'),
+            addBtnText: t('add_as_new', 'Add as New Material'),
             onAddAsNew: async () => {
               await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: null, forceNew: true });
             },
@@ -5932,6 +5967,7 @@ function saveMaterialProps(e) {
   document.getElementById('modal-apply-all-piece').textContent = `${m.piece} · ${m.itemDescription} · ${m.dimension}`;
   openModal('modal-apply-all');
 }
+
 async function confirmGlobalEdit() {
   const m = getMaterial(_materialsPageEditId); if (!m) return;
   const submitBtn = document.querySelector('#modal-apply-all .btn-primary');
@@ -6005,10 +6041,12 @@ async function confirmGlobalEdit() {
     try {
       const data = await apiGet('/page/materials');
       if (data && data.materials) DB.materials = normalizeMaterials(data.materials);
+      if (data && data.globalMaterials) DB.globalMaterials = data.globalMaterials;
     } catch (e) { }
     renderMaterialsPage();
   }
 }
+
 function cancelGlobalEdit() {
   /* Revert local changes */
   const m = getMaterial(_materialsPageEditId);
@@ -6146,11 +6184,145 @@ function renderProjectMaterialsTable() {
   }
 }
 
-/* --- Heat Conflict Dialog --- */
+/* --- Heat Conflict Dialog & Matching Helpers --- */
 let _bypassHeatConflict = false;
 let _bypassMatHeatConflict = false;
 
-function promptHeatConflictModal({ diffs, existingMaterial, onAddAsNew, onUpdateExisting }) {
+function formatMaterialSpecsStr(mat) {
+  if (!mat) return '';
+  const parts = [];
+  if (mat.category || mat.piece) parts.push(mat.category || mat.piece);
+  if (mat.dn1 || mat.dimension) parts.push('DN ' + (mat.dn1 || mat.dimension));
+  for (let i = 2; i <= 6; i++) {
+    const val = mat[`dn${i}`] || mat[`dimension${i}`];
+    if (val) parts.push(`DN ${i} ${val}`);
+  }
+  if (mat.diameter) parts.push(mat.diameter + ' mm');
+  if (mat.thickness) parts.push(mat.thickness + ' mm');
+  if (mat.materialCode) parts.push(mat.materialCode);
+  return parts.filter(Boolean).join(', ');
+}
+
+function findDuplicateProjectMaterial(projectId, heatNo, specs, excludePmId) {
+  if (!projectId) return null;
+  const norm = v => (v === null || v === undefined ? '' : String(v)).trim().toLowerCase();
+  const cleanHeat = norm(heatNo);
+  const pms = (DB.projectMaterials || []).filter(pm => pm.projectId === projectId && (!excludePmId || pm.id !== excludePmId) && !pm.archived);
+  for (const pm of pms) {
+    if (norm(pm.heatNo) !== cleanHeat) continue;
+    const gm = (DB.globalMaterials || []).find(g => g.id === pm.globalMaterialId) || {};
+
+    const matchCat = norm(gm.category) === norm(specs.category);
+    const matchDesc = norm(gm.itemDescription || gm.category) === norm(specs.itemDescription || specs.category);
+    const matchDn1 = norm(gm.dn1) === norm(specs.dn1 || specs.dimension);
+    const matchDia = norm(gm.diameter) === norm(specs.diameter);
+    const matchThk = norm(gm.thickness) === norm(specs.thickness);
+    const matchDien = norm(gm.dienNo) === norm(specs.dienNo);
+    const matchSurf = norm(gm.surface) === norm(specs.surface);
+    const matchCode = norm(gm.materialCode) === norm(specs.materialCode);
+    const matchCert = norm(pm.certificate) === norm(specs.certificate);
+
+    let matchExtraDns = true;
+    for (let i = 2; i <= 6; i++) {
+      const gVal = gm[`dn${i}`] || '';
+      const sVal = specs[`dn${i}`] || specs[`dimension${i}`] || '';
+      if (norm(gVal) !== norm(sVal)) {
+        matchExtraDns = false;
+        break;
+      }
+    }
+
+    if (matchCat && matchDesc && matchDn1 && matchDia && matchThk && matchDien && matchSurf && matchCode && matchCert && matchExtraDns) {
+      return { projectMaterial: pm, globalMaterial: gm };
+    }
+  }
+  return null;
+}
+
+function findMandatoryMatchingProjectMaterials(projectId, specs, excludePmId) {
+  if (!projectId) return [];
+  const norm = v => (v === null || v === undefined ? '' : String(v)).trim().toLowerCase();
+  const pms = (DB.projectMaterials || []).filter(pm => pm.projectId === projectId && (!excludePmId || pm.id !== excludePmId) && !pm.archived);
+  const matches = [];
+
+  for (const pm of pms) {
+    if (norm(pm.heatNo) !== '') continue; // only check materials without heat number
+    const gm = (DB.globalMaterials || []).find(g => g.id === pm.globalMaterialId) || {};
+
+    const matchCat = norm(gm.category) === norm(specs.category);
+    const matchDesc = norm(gm.itemDescription || gm.category) === norm(specs.itemDescription || specs.category);
+    const matchDn1 = norm(gm.dn1) === norm(specs.dn1 || specs.dimension);
+    const matchCode = norm(gm.materialCode) === norm(specs.materialCode);
+    const matchDia = hasDiameter(specs.category) ? norm(gm.diameter) === norm(specs.diameter) : true;
+    const matchThk = hasThickness(specs.category) ? norm(gm.thickness) === norm(specs.thickness) : true;
+
+    let matchExtraDns = true;
+    const dnCount = requiredDns(specs.category);
+    for (let i = 2; i <= dnCount; i++) {
+      const gVal = gm[`dn${i}`] || '';
+      const sVal = specs[`dn${i}`] || specs[`dimension${i}`] || '';
+      if (norm(gVal) !== norm(sVal)) {
+        matchExtraDns = false;
+        break;
+      }
+    }
+
+    if (matchCat && matchDesc && matchDn1 && matchDia && matchThk && matchCode && matchExtraDns) {
+      matches.push({ projectMaterial: pm, globalMaterial: gm });
+    }
+  }
+  return matches;
+}
+
+function getMaterialDiffs(existingPm, existingGm, newSpecs) {
+  const norm = v => (v === null || v === undefined ? '' : String(v)).trim();
+  const fieldDefs = [
+    { key: 'category', label: t('th_category', 'Category'), exist: existingGm.category || '', cur: newSpecs.category || newSpecs.piece || '' },
+    { key: 'itemDescription', label: t('th_item_description', 'Item description'), exist: existingGm.itemDescription || '', cur: newSpecs.itemDescription || newSpecs.category || newSpecs.piece || '' },
+    { key: 'dn1', label: t('dn', 'DN'), exist: existingGm.dn1 || existingGm.dimension || '', cur: newSpecs.dn1 || newSpecs.dimension || '' },
+    { key: 'diameter', label: t('th_diameter', 'Diameter'), exist: existingGm.diameter || '', cur: newSpecs.diameter || '' },
+    { key: 'thickness', label: t('th_thickness', 'Thickness'), exist: existingGm.thickness || '', cur: newSpecs.thickness || '' },
+    { key: 'dienNo', label: t('th_din_en_no', 'DIN EN No.'), exist: existingGm.dienNo || '', cur: newSpecs.dienNo || '' },
+    { key: 'surface', label: t('th_surface', 'Surface'), exist: existingGm.surface || '', cur: newSpecs.surface || '' },
+    { key: 'materialCode', label: t('th_material', 'Material'), exist: existingGm.materialCode || '', cur: newSpecs.materialCode || '' },
+    { key: 'certificate', label: t('th_certificate', 'Certificate'), exist: (existingPm ? existingPm.certificate : '') || '', cur: newSpecs.certificate || '' },
+    { key: 'heatNo', label: t('th_heat_no', 'Heat No.'), exist: (existingPm ? existingPm.heatNo : '') || '', cur: newSpecs.heatNo || '' },
+  ];
+  for (let i = 2; i <= 6; i++) {
+    const existVal = existingGm[`dn${i}`] || existingGm[`dimension${i}`] || '';
+    const curVal = newSpecs[`dn${i}`] || newSpecs[`dimension${i}`] || '';
+    if (existVal || curVal) {
+      fieldDefs.push({ key: `dn${i}`, label: `DN ${i}`, exist: existVal, cur: curVal });
+    }
+  }
+
+  const diffs = [];
+  for (const f of fieldDefs) {
+    if (norm(f.exist).toLowerCase() !== norm(f.cur).toLowerCase()) {
+      diffs.push({
+        field: f.key,
+        label: f.label,
+        existingVal: norm(f.exist),
+        newVal: norm(f.cur),
+      });
+    }
+  }
+  return diffs;
+}
+
+function promptHeatConflictModal({
+  title,
+  desc,
+  diffs = [],
+  mode = 'update_or_add_new',
+  updateBtnText,
+  addBtnText,
+  cancelBtnText,
+  existingMaterial,
+  onAddAsNew,
+  onUpdateExisting,
+  onCancel,
+}) {
   let modal = document.getElementById('modal-heat-conflict');
   if (!modal) {
     const overlay = document.createElement('div');
@@ -6158,54 +6330,102 @@ function promptHeatConflictModal({ diffs, existingMaterial, onAddAsNew, onUpdate
     overlay.id = 'modal-heat-conflict';
     overlay.innerHTML = `<div class="modal modal-wide" style="max-width:680px;">
       <button class="modal-close" onclick="closeModal('modal-heat-conflict')">&times;</button>
-      <h2 style="display:flex;align-items:center;gap:10px;color:#92400E;">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#D97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-        <span>${t('heat_conflict_title', 'Material with this Heat Number already exists')}</span>
+      <h2 id="heat-conflict-modal-title" style="display:flex;align-items:center;gap:10px;">
+        <span id="heat-conflict-modal-icon"></span>
+        <span id="heat-conflict-modal-title-text"></span>
       </h2>
       <div class="heat-diff-card">
-        <p>${t('heat_conflict_desc', 'A material with this Heat Number already exists in the system with different specifications. How would you like to proceed?')}</p>
+        <p id="heat-conflict-modal-desc"></p>
         <div id="heat-conflict-table-container"></div>
       </div>
-      <div class="heat-modal-actions">
-        <button type="button" class="btn btn-ghost" onclick="closeModal('modal-heat-conflict')">${t('cancel', 'Cancel')}</button>
-        <button type="button" class="btn btn-secondary" id="btn-heat-update-existing">${t('update_existing', 'Update Existing Material')}</button>
+      <div class="heat-modal-actions" id="heat-modal-actions">
+        <button type="button" class="btn btn-ghost" id="btn-heat-cancel">${t('cancel', 'Cancel')}</button>
+        <button type="button" class="btn btn-secondary" id="btn-heat-update-existing">${t('update', 'Update')}</button>
         <button type="button" class="btn btn-primary" id="btn-heat-add-new">${t('add_as_new', 'Add as New Material')}</button>
       </div>
     </div>`;
     document.getElementById('modal-root').appendChild(overlay);
   }
 
-  const tableRows = (diffs || []).map(d => {
-    const existDisplay = d.existingVal ? `<span class="diff-val-old">${escapeHtml(d.existingVal)}</span>` : `<span class="diff-val-empty">— empty —</span>`;
-    const newDisplay = d.newVal ? `<span class="diff-val-new">${escapeHtml(d.newVal)}</span>` : `<span class="diff-val-empty">— empty —</span>`;
-    return `<tr>
-      <td style="font-weight:600;color:var(--text);">${escapeHtml(t('field_' + d.field, d.label))}</td>
-      <td>${existDisplay}</td>
-      <td>${newDisplay}</td>
-    </tr>`;
-  }).join('');
+  const titleHeader = document.getElementById('heat-conflict-modal-title');
+  const titleEl = document.getElementById('heat-conflict-modal-title-text');
+  const iconEl = document.getElementById('heat-conflict-modal-icon');
+  const descEl = document.getElementById('heat-conflict-modal-desc');
+  const tableContainer = document.getElementById('heat-conflict-table-container');
+  const updateBtn = document.getElementById('btn-heat-update-existing');
+  const addBtn = document.getElementById('btn-heat-add-new');
+  const cancelBtn = document.getElementById('btn-heat-cancel');
 
-  document.getElementById('heat-conflict-table-container').innerHTML = `
-    <table class="diff-table">
-      <thead>
-        <tr>
-          <th>${t('field_name', 'Field')}</th>
-          <th>${t('existing_val', 'Existing Material')}</th>
-          <th>${t('new_val', 'New Values Entered')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${tableRows}
-      </tbody>
-    </table>
-  `;
+  if (mode === 'duplicate_merge') {
+    iconEl.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`;
+    titleHeader.style.color = '#1E40AF';
+    titleEl.textContent = title || t('matching_material_exists_title', 'Matching Material Already Exists');
+    descEl.innerHTML = desc || '';
+    tableContainer.style.display = 'none';
+    tableContainer.innerHTML = '';
 
-  document.getElementById('btn-heat-add-new').onclick = () => {
+    addBtn.style.display = 'none';
+    updateBtn.style.display = '';
+    updateBtn.className = 'btn btn-primary';
+    updateBtn.textContent = updateBtnText || t('update', 'Update');
+    cancelBtn.textContent = cancelBtnText || t('cancel', 'Cancel');
+  } else {
+    iconEl.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#D97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`;
+    titleHeader.style.color = '#92400E';
+    titleEl.textContent = title || t('update_material_specs_title', 'Update Material Specifications');
+    descEl.innerHTML = desc || t('update_material_specs_desc', 'You are changing the specifications for this material. Would you like to update this material or add it as a new material?');
+
+    if (diffs && diffs.length > 0) {
+      tableContainer.style.display = '';
+      const tableRows = diffs.map(d => {
+        const existDisplay = d.existingVal ? `<span class="diff-val-old">${escapeHtml(d.existingVal)}</span>` : `<span class="diff-val-empty">— empty —</span>`;
+        const newDisplay = d.newVal ? `<span class="diff-val-new">${escapeHtml(d.newVal)}</span>` : `<span class="diff-val-empty">— empty —</span>`;
+        return `<tr>
+          <td style="font-weight:600;color:var(--text);">${escapeHtml(t('field_' + d.field, d.label))}</td>
+          <td>${existDisplay}</td>
+          <td>${newDisplay}</td>
+        </tr>`;
+      }).join('');
+
+      tableContainer.innerHTML = `
+        <table class="diff-table">
+          <thead>
+            <tr>
+              <th>${t('field_name', 'Field')}</th>
+              <th>${t('existing_val', 'Current Value')}</th>
+              <th>${t('new_val', 'New Value')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+          </tbody>
+        </table>
+      `;
+    } else {
+      tableContainer.style.display = 'none';
+      tableContainer.innerHTML = '';
+    }
+
+    addBtn.style.display = '';
+    addBtn.className = 'btn btn-primary';
+    addBtn.textContent = addBtnText || t('add_as_new', 'Add as New Material');
+    updateBtn.style.display = '';
+    updateBtn.className = 'btn btn-secondary';
+    updateBtn.textContent = updateBtnText || t('update', 'Update');
+    cancelBtn.textContent = cancelBtnText || t('cancel', 'Cancel');
+  }
+
+  cancelBtn.onclick = () => {
+    closeModal('modal-heat-conflict');
+    if (typeof onCancel === 'function') onCancel();
+  };
+
+  addBtn.onclick = () => {
     closeModal('modal-heat-conflict');
     if (typeof onAddAsNew === 'function') onAddAsNew();
   };
 
-  document.getElementById('btn-heat-update-existing').onclick = () => {
+  updateBtn.onclick = () => {
     closeModal('modal-heat-conflict');
     if (typeof onUpdateExisting === 'function') onUpdateExisting();
   };
@@ -6779,6 +6999,59 @@ async function saveProjectMaterial(e) {
   const isEditingPm = !!_projMatEditId;
   const currentProjectId = PAGE.projectId;
 
+  if (!_bypassHeatConflict) {
+    // Check Scenario 1: Does ANOTHER material in this project already have this heatNo (or both have no heatNo) AND exact matching specs?
+    const specsObj = { category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, ...dns };
+    const dupMatch = findDuplicateProjectMaterial(currentProjectId, heatNo, specsObj, isEditingPm ? _projMatEditId : null);
+
+    if (dupMatch) {
+      // SCENARIO 1: Exact specs match already exists in project -> Merge confirmation
+      const specsSummary = formatMaterialSpecsStr({ category, dn1, diameter, thickness, materialCode, ...dns });
+      const descText = heatNo
+        ? t('matching_material_exists_desc', 'A material with heat number {heat} and these exact specifications ({specs}) already exists in this project. Updating will merge these materials together.').replace('{heat}', `<strong>${escapeHtml(heatNo)}</strong>`).replace('{specs}', `<em>${escapeHtml(specsSummary)}</em>`)
+        : t('matching_material_no_heat_exists_desc', 'A material with these exact specifications ({specs}) already exists in this project without a heat number. Updating will merge these materials together.').replace('{specs}', `<em>${escapeHtml(specsSummary)}</em>`);
+
+      promptHeatConflictModal({
+        mode: 'duplicate_merge',
+        title: t('matching_material_exists_title', 'Matching Material Already Exists'),
+        desc: descText,
+        updateBtnText: t('update', 'Update'),
+        onUpdateExisting: async () => {
+          await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false, targetProjectMaterialId: dupMatch.projectMaterial.id });
+        }
+      });
+      return;
+    }
+
+    // Step 2: If no heat number, check if exactly 1 material matches all MANDATORY fields
+    if (!heatNo) {
+      const mandatoryMatches = findMandatoryMatchingProjectMaterials(currentProjectId, specsObj, isEditingPm ? _projMatEditId : null);
+      if (mandatoryMatches.length === 1) {
+        const matched = mandatoryMatches[0];
+        const diffs = getMaterialDiffs(matched.projectMaterial, matched.globalMaterial, specsObj);
+        promptHeatConflictModal({
+          mode: 'update_or_add_new',
+          title: t('similar_material_exists_title', 'Similar Material Exists'),
+          desc: t('similar_material_exists_desc', 'A material with the same core specifications already exists in this project, but has different secondary specifications. Would you like to update the existing material or add this as a new material?'),
+          diffs,
+          updateBtnText: t('update', 'Update'),
+          addBtnText: t('add_as_new', 'Add as New Material'),
+          existingMaterial: {
+            globalMaterialId: matched.projectMaterial.globalMaterialId,
+            projectMaterialId: matched.projectMaterial.id,
+          },
+          onAddAsNew: async () => {
+            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: true });
+          },
+          onUpdateExisting: async () => {
+            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false, targetProjectMaterialId: matched.projectMaterial.id });
+          }
+        });
+        return;
+      }
+    }
+  }
+
   if (isEditingPm && existingPm && !_bypassHeatConflict) {
     const gm = (DB.globalMaterials || []).find(g => g.id === existingPm.globalMaterialId) || {};
     const norm = v => (v === null || v === undefined ? '' : String(v)).trim();
@@ -6814,9 +7087,15 @@ async function saveProjectMaterial(e) {
       }
     }
 
+    // SCENARIO 2: Editing existing material specifications (no exact duplicate match exists)
     if (diffs.length > 0) {
       promptHeatConflictModal({
+        mode: 'update_or_add_new',
+        title: t('update_material_specs_title', 'Update Material Specifications'),
+        desc: t('update_material_specs_desc', 'You are changing the specifications for this material. Would you like to update this material or add it as a new material?'),
         diffs,
+        updateBtnText: t('update', 'Update'),
+        addBtnText: t('add_as_new', 'Add as New Material'),
         existingMaterial: {
           globalMaterialId: existingPm.globalMaterialId,
           projectMaterialId: existingPm.id,
@@ -6849,8 +7128,13 @@ async function saveProjectMaterial(e) {
       const checkRes = await apiPost('/project-materials/check-heat-diff', checkPayload);
       if (checkRes.hasDuplicateHeat && checkRes.hasDifferences) {
         promptHeatConflictModal({
+          mode: 'update_or_add_new',
+          title: t('heat_conflict_title', 'Material with this Heat Number already exists'),
+          desc: t('heat_conflict_desc', 'A material with this Heat Number already exists in the system with different specifications. How would you like to proceed?'),
           diffs: checkRes.diffs,
           existingMaterial: checkRes.existingMaterial,
+          updateBtnText: t('update_existing', 'Update Existing Material'),
+          addBtnText: t('add_as_new', 'Add as New Material'),
           onAddAsNew: async () => {
             await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: true });
           },
