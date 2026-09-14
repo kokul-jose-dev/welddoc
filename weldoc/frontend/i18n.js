@@ -566,6 +566,17 @@ const TRANSLATIONS = {
     new_val: "Neu eingegeben",
     add_as_new: "Als neues Material hinzufügen",
     update_existing: "Bestehendes Material aktualisieren",
+    heat_no_required: "Schmelz- / Chargennummer ist erforderlich.",
+    heat_melt_no: "Schmelz- / Chargennr.",
+    type_heat_no: "Schmelz-/Chargennr. eingeben…",
+    category_required: "Kategorie ist erforderlich.",
+    description_required: "Artikelbeschreibung ist erforderlich.",
+    dn_required: "DN ist erforderlich.",
+    dn_x_required: "DN {x} ist erforderlich.",
+    material_code_required: "Werkstoff ist erforderlich.",
+    diameter_required: "Aussendurchmesser ist erforderlich.",
+    thickness_required: "Wandstärke ist erforderlich.",
+    din_en_required: "DIN EN Nummer ist erforderlich.",
   },
   en: {
     // Navigation & Chrome
@@ -1129,6 +1140,17 @@ const TRANSLATIONS = {
     new_val: "New Values Entered",
     add_as_new: "Add as New Material",
     update_existing: "Update Existing Material",
+    heat_no_required: "Heat / melt No. is required.",
+    heat_melt_no: "Heat / melt No.",
+    type_heat_no: "Type heat/melt No.…",
+    category_required: "Category is required.",
+    description_required: "Item description is required.",
+    dn_required: "DN is required.",
+    dn_x_required: "DN {x} is required.",
+    material_code_required: "Material code is required.",
+    diameter_required: "Outer diameter is required.",
+    thickness_required: "Thickness is required.",
+    din_en_required: "DIN EN Number is required.",
   }
 };
 
