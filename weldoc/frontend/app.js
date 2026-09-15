@@ -2781,23 +2781,29 @@ function onCategoryTyped() {
 function toggleDnFields(piece) {
   const dnCount = requiredDns(piece);
   const container = document.getElementById('dn-fields-container');
-  /* Always keep the first DN field (dn1-field) and add/remove extras */
+  if (!container) return;
   const dn1 = document.getElementById('dn1-field');
   const dn1Label = document.getElementById('dn1-label');
   if (dnCount <= 0) { container.style.display = 'none'; return; }
   container.style.display = '';
-  dn1.style.display = '';
-  dn1Label.innerHTML = (dnCount > 1 ? 'DN 1' : 'DN') + ' <span class="req">*</span>';
-  /* Remove extra DN fields beyond what's needed */
-  container.querySelectorAll('.dn-extra-field').forEach(el => el.remove());
-  /* Add extra DN fields (2..dnCount) */
+  if (dn1) dn1.style.display = '';
+  if (dn1Label) dn1Label.innerHTML = (dnCount > 1 ? 'DN 1' : 'DN') + ' <span class="req">*</span>';
+  /* Remove extra DN fields beyond what's needed (if count reduced) */
+  for (let i = dnCount + 1; i <= 6; i++) {
+    const el = document.getElementById(`dn${i}-field`);
+    if (el) el.remove();
+  }
+  /* Add extra DN fields (2..dnCount) only if not already in DOM */
   for (let i = 2; i <= dnCount; i++) {
-    const div = document.createElement('div');
-    div.className = 'field dn-extra-field';
-    div.id = `dn${i}-field`;
-    div.innerHTML = `<span class="lbl">DN ${i} <span class="req">*</span></span><select id="input-mat-dimension${i}" onchange="onExtraDnChange(${i})"></select><input type="text" id="input-mat-dimension${i}-new" class="select-other-text" style="display:none" placeholder="Type DN ${i}…">`;
-    container.appendChild(div);
-    buildSelectOther(`input-mat-dimension${i}`, `input-mat-dimension${i}-new`, DIMENSION_OPTIONS, '');
+    let div = document.getElementById(`dn${i}-field`);
+    if (!div) {
+      div = document.createElement('div');
+      div.className = 'field dn-extra-field';
+      div.id = `dn${i}-field`;
+      div.innerHTML = `<span class="lbl">DN ${i} <span class="req">*</span></span><select id="input-mat-dimension${i}" onchange="onExtraDnChange(${i})"></select><input type="text" id="input-mat-dimension${i}-new" class="select-other-text" style="display:none" placeholder="Type DN ${i}…">`;
+      container.appendChild(div);
+      buildSelectOther(`input-mat-dimension${i}`, `input-mat-dimension${i}-new`, DIMENSION_OPTIONS, '');
+    }
   }
 }
 function onExtraDnChange(i) {
@@ -6594,8 +6600,13 @@ function _refreshPmHeatAndCerts(presetExisting = null, autoFillIfSingle = false)
   const curCert = presetExisting ? (presetExisting.certificate || '') : readSelectOther('pm-certificate', 'pm-certificate-new');
   const curHeat = presetExisting ? (presetExisting.heatNo || '') : readSelectOther('pm-heat', 'pm-heat-new');
 
-  // Auto-fill ONLY if there is exactly 1 matching material and exactly 1 heat number
-  if (autoFillIfSingle && matches.length === 1 && allHeats.length === 1 && !_projMatEditId) {
+  const isAnyFieldOther = [
+    'pm-category', 'pm-desc', 'pm-heat', 'pm-dn1', 'pm-dien', 'pm-code', 'pm-diameter', 'pm-thickness', 'pm-surface', 'pm-certificate'
+  ].some(id => document.getElementById(id)?.value === '__other__') ||
+  Array.from({ length: 5 }, (_, k) => document.getElementById(`pm-dn${k + 2}`)?.value === '__other__').some(Boolean);
+
+  // Auto-fill ONLY if there is exactly 1 matching material, exactly 1 heat number, and user is NOT selecting/typing a custom '__other__' value
+  if (autoFillIfSingle && !isAnyFieldOther && matches.length === 1 && allHeats.length === 1 && !_projMatEditId) {
     const single = matches[0];
     const allGm = DB.globalMaterials || [];
     const descs = [...new Set((cat ? allGm.filter(g => g.category === cat) : allGm).map(g => g.itemDescription).filter(Boolean))];
@@ -6605,7 +6616,7 @@ function _refreshPmHeatAndCerts(presetExisting = null, autoFillIfSingle = false)
     const dnCount = requiredDns(cat);
     for (let i = 2; i <= dnCount; i++) {
       const sel = document.getElementById(`pm-dn${i}`);
-      if (sel) buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, DIMENSION_OPTIONS, single[`dn${i}`] || '');
+      if (sel && sel.value !== '__other__') buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, DIMENSION_OPTIONS, single[`dn${i}`] || '');
     }
     const diens = [...new Set((cat ? allGm.filter(g => g.category === cat) : allGm).map(g => g.dienNo).filter(Boolean))];
     buildSelectOther('pm-dien', 'pm-dien-new', diens, single.dienNo || '');
@@ -6631,9 +6642,14 @@ function _refreshPmHeatAndCerts(presetExisting = null, autoFillIfSingle = false)
     }
   } else {
     // If multiple heat numbers exist, or user is editing, select nothing by default (keep current value if any)
-    buildSelectOther('pm-certificate', 'pm-certificate-new', allCerts, curCert);
-    buildSelectOther('pm-heat', 'pm-heat-new', allHeats, curHeat);
-    if (!curHeat && !_projMatEditId) {
+    const selCert = document.getElementById('pm-certificate');
+    const isCertOther = selCert && selCert.value === '__other__';
+    buildSelectOther('pm-certificate', 'pm-certificate-new', allCerts, isCertOther ? (curCert || '__other__') : curCert);
+
+    const selHeat = document.getElementById('pm-heat');
+    const isHeatOther = selHeat && selHeat.value === '__other__';
+    buildSelectOther('pm-heat', 'pm-heat-new', allHeats, isHeatOther ? (curHeat || '__other__') : curHeat);
+    if (!curHeat && !isHeatOther && !_projMatEditId) {
       _pmAttachedWazPdfUrl = '';
       _renderPmWazDoc();
     }
@@ -6798,27 +6814,37 @@ function pmCascadeFromDesc() {
   if (desc && desc !== '__other__') filtered = filtered.filter(g => g.itemDescription === desc);
 
   // DN 1 auto-selection
-  const dn1s = [...new Set(filtered.map(g => g.dn1).filter(Boolean))];
-  const curDn1 = readSelectOther('pm-dn1', 'pm-dn1-new');
-  buildSelectOther('pm-dn1', 'pm-dn1-new', dn1s.length ? dn1s : DIMENSION_OPTIONS, curDn1 || (dn1s.length === 1 ? dn1s[0] : ''));
+  const selDn1 = document.getElementById('pm-dn1');
+  if (selDn1 && selDn1.value !== '__other__') {
+    const dn1s = [...new Set(filtered.map(g => g.dn1).filter(Boolean))];
+    const curDn1 = readSelectOther('pm-dn1', 'pm-dn1-new');
+    buildSelectOther('pm-dn1', 'pm-dn1-new', dn1s.length ? dn1s : DIMENSION_OPTIONS, curDn1 || (dn1s.length === 1 ? dn1s[0] : ''));
+  }
 
   // Extra DNs auto-selection
   const dnCount = requiredDns(cat);
   for (let i = 2; i <= dnCount; i++) {
-    const extraDns = [...new Set(filtered.map(g => g[`dn${i}`] || g[`dimension${i}`]).filter(Boolean))];
-    const curExtra = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
     const sel = document.getElementById(`pm-dn${i}`);
-    if (sel) {
+    if (sel && sel.value !== '__other__') {
+      const extraDns = [...new Set(filtered.map(g => g[`dn${i}`] || g[`dimension${i}`]).filter(Boolean))];
+      const curExtra = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
       buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, extraDns.length ? extraDns : DIMENSION_OPTIONS, curExtra || (extraDns.length === 1 ? extraDns[0] : ''));
     }
   }
 
-  const diens = [...new Set(filtered.map(g => g.dienNo).filter(Boolean))];
-  const codes = [...new Set(filtered.map(g => g.materialCode).filter(Boolean))];
-  const curDien = readSelectOther('pm-dien', 'pm-dien-new');
-  const curCode = readSelectOther('pm-code', 'pm-code-new');
-  buildSelectOther('pm-dien', 'pm-dien-new', diens, curDien || (desc && diens.length === 1 ? diens[0] : ''));
-  buildSelectOther('pm-code', 'pm-code-new', codes, curCode || (desc && codes.length === 1 ? codes[0] : ''));
+  const selDien = document.getElementById('pm-dien');
+  if (selDien && selDien.value !== '__other__') {
+    const diens = [...new Set(filtered.map(g => g.dienNo).filter(Boolean))];
+    const curDien = readSelectOther('pm-dien', 'pm-dien-new');
+    buildSelectOther('pm-dien', 'pm-dien-new', diens, curDien || (desc && diens.length === 1 ? diens[0] : ''));
+  }
+
+  const selCode = document.getElementById('pm-code');
+  if (selCode && selCode.value !== '__other__') {
+    const codes = [...new Set(filtered.map(g => g.materialCode).filter(Boolean))];
+    const curCode = readSelectOther('pm-code', 'pm-code-new');
+    buildSelectOther('pm-code', 'pm-code-new', codes, curCode || (desc && codes.length === 1 ? codes[0] : ''));
+  }
   pmCascadeDiameter();
 }
 function onPmDienChange() { toggleSelectOther('pm-dien', 'pm-dien-new'); _updateAllPmBadges(); }
@@ -6835,20 +6861,20 @@ function onPmDnChange() {
   if (dn1 && dn1 !== '__other__') filtered = filtered.filter(g => g.dn1 === dn1);
   const dnCount = requiredDns(cat);
   for (let i = 2; i <= dnCount; i++) {
-    const extraDns = [...new Set(filtered.map(g => g[`dn${i}`] || g[`dimension${i}`]).filter(Boolean))];
-    const curExtra = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
     const sel = document.getElementById(`pm-dn${i}`);
-    if (sel) {
+    if (sel && sel.value !== '__other__') {
+      const extraDns = [...new Set(filtered.map(g => g[`dn${i}`] || g[`dimension${i}`]).filter(Boolean))];
+      const curExtra = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
       buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, extraDns.length ? extraDns : DIMENSION_OPTIONS, curExtra || (extraDns.length === 1 ? extraDns[0] : ''));
     }
   }
   pmCascadeDiameter();
-  _refreshPmHeatAndCerts(null, true);
+  _refreshPmHeatAndCerts(null, false);
 }
 function onPmExtraDnChange(idx) {
   toggleSelectOther(`pm-dn${idx}`, `pm-dn${idx}-new`);
   pmCascadeDiameter();
-  _refreshPmHeatAndCerts(null, true);
+  _refreshPmHeatAndCerts(null, false);
 }
 function pmCascadeDiameter() {
   const cat = readSelectOther('pm-category', 'pm-category-new');
@@ -6864,9 +6890,12 @@ function pmCascadeDiameter() {
     const extra = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
     if (extra && extra !== '__other__') filtered = filtered.filter(g => (g[`dn${i}`] || g[`dimension${i}`]) === extra);
   }
-  const diameters = [...new Set(filtered.map(g => g.diameter).filter(Boolean))];
-  const curDia = readSelectOther('pm-diameter', 'pm-diameter-new');
-  buildSelectOther('pm-diameter', 'pm-diameter-new', diameters, curDia || (diameters.length === 1 ? diameters[0] : ''));
+  const selDia = document.getElementById('pm-diameter');
+  if (selDia && selDia.value !== '__other__') {
+    const diameters = [...new Set(filtered.map(g => g.diameter).filter(Boolean))];
+    const curDia = readSelectOther('pm-diameter', 'pm-diameter-new');
+    buildSelectOther('pm-diameter', 'pm-diameter-new', diameters, curDia || (diameters.length === 1 ? diameters[0] : ''));
+  }
   pmCascadeThickness();
 }
 function onPmDiameterChange() { toggleSelectOther('pm-diameter', 'pm-diameter-new'); pmCascadeThickness(); }
@@ -6886,9 +6915,12 @@ function pmCascadeThickness() {
     if (extra && extra !== '__other__') filtered = filtered.filter(g => (g[`dn${i}`] || g[`dimension${i}`]) === extra);
   }
   if (diameter && diameter !== '__other__') filtered = filtered.filter(g => g.diameter === diameter);
-  const thicknesses = [...new Set(filtered.map(g => g.thickness).filter(Boolean))];
-  const curThk = readSelectOther('pm-thickness', 'pm-thickness-new');
-  buildSelectOther('pm-thickness', 'pm-thickness-new', thicknesses, curThk || (thicknesses.length === 1 ? thicknesses[0] : ''));
+  const selThk = document.getElementById('pm-thickness');
+  if (selThk && selThk.value !== '__other__') {
+    const thicknesses = [...new Set(filtered.map(g => g.thickness).filter(Boolean))];
+    const curThk = readSelectOther('pm-thickness', 'pm-thickness-new');
+    buildSelectOther('pm-thickness', 'pm-thickness-new', thicknesses, curThk || (thicknesses.length === 1 ? thicknesses[0] : ''));
+  }
   _updateAllPmBadges();
 }
 
