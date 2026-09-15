@@ -51,7 +51,7 @@ def export_final(pipeline_id):
 
     raw_materials = (
         PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, archived=False)
-        .order_by(PipelineMaterial.position)
+        .order_by(db.func.length(PipelineMaterial.position), PipelineMaterial.position)
         .all()
     )
     welds = (

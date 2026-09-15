@@ -122,11 +122,36 @@ function normalizeProject(p) {
   return p;
 }
 function normalizeProjects(arr) { return arr.map(normalizeProject); }
+function _numToLetter(num) {
+  let n = Math.floor(Number(num));
+  if (isNaN(n) || n <= 0) return '';
+  let res = '';
+  while (n > 0) {
+    let r = (n - 1) % 26;
+    res = String.fromCharCode(65 + r) + res;
+    n = Math.floor((n - 1) / 26);
+  }
+  return res;
+}
+function _letterToNum(str) {
+  if (str === null || str === undefined || str === '') return 0;
+  if (typeof str === 'number') return str;
+  const s = String(str).trim().toUpperCase();
+  if (/^[A-Z]+$/.test(s)) {
+    let num = 0;
+    for (let i = 0; i < s.length; i++) {
+      num = num * 26 + (s.charCodeAt(i) - 64);
+    }
+    return num;
+  }
+  const n = parseInt(s, 10);
+  return isNaN(n) ? 0 : n;
+}
 function normalizeMaterial(m) {
   if (m.category && !m.piece) m.piece = m.category;
   if (m.dn1 && !m.dimension) m.dimension = m.dn1;
   for (let i = 2; i <= 6; i++) { if (m[`dn${i}`] && !m[`dimension${i}`]) m[`dimension${i}`] = m[`dn${i}`]; }
-  if (typeof m.position === 'string') { const code = m.position.charCodeAt(0); m.position = code >= 65 && code <= 90 ? code - 64 : parseInt(m.position) || 1; }
+  if (typeof m.position === 'string') { m.position = _letterToNum(m.position) || parseInt(m.position) || 1; }
   if (!m.connections) m.connections = [];
   if (!m.materialCode && m.material_code) m.materialCode = m.material_code;
   if (!m.itemDescription && m.item_description) m.itemDescription = m.item_description;
@@ -339,14 +364,14 @@ function initials(name) { return (name || '').split(/\s+/).map(w => w[0]).slice(
 function posLetter(n) {
   if (n === null || n === undefined || n === '') return '';
   if (typeof n === 'string') {
-    const s = n.trim();
-    if (/^[A-Za-z]+$/.test(s)) return s.toUpperCase();
+    const s = n.trim().toUpperCase();
+    if (/^[A-Z]+$/.test(s)) return s;
     const num = Number(s);
-    if (!isNaN(num) && num >= 1 && num <= 26) return String.fromCharCode(64 + num);
+    if (!isNaN(num) && num >= 1) return _numToLetter(num);
     return s;
   }
   const num = Number(n);
-  if (!isNaN(num) && num >= 1 && num <= 26) return String.fromCharCode(64 + num);
+  if (!isNaN(num) && num >= 1) return _numToLetter(num);
   return String(n);
 }
 function fmtDia(v) { if (!v) return ''; const s = String(v).trim(); return 'Ø ' + s + (s.toLowerCase().includes('mm') ? '' : ' mm'); }
@@ -1454,7 +1479,7 @@ function attachFormHandlers() {
     const attachedWazPdfUrl = (!_matWazDocRemoved && _matAttachedWazPdfUrl) ? _matAttachedWazPdfUrl : '';
 
     const existingMat = editingMaterialId !== null ? getMaterial(editingMaterialId) : null;
-    const posVal = val('input-mat-position'); const posNum = Number(posVal) || (posVal && posVal.charCodeAt(0) >= 65 && posVal.charCodeAt(0) <= 90 ? posVal.charCodeAt(0) - 64 : pipelineMaterials(PAGE.pipelineId).length + 1);
+    const posVal = val('input-mat-position'); const posNum = _letterToNum(posVal) || Number(posVal) || (pipelineMaterials(PAGE.pipelineId).length + 1);
     const data = {
       pipelineId: PAGE.pipelineId, position: posNum,
       piece, dimension, materialCode: matCode, itemDescription: itemDesc || piece,

@@ -9,8 +9,34 @@ pipeline_materials_bp = Blueprint("pipeline_materials", __name__)
 
 
 def _pos_letter(n):
-    """Convert position number to letter: 1→A, 2→B, etc."""
-    return chr(64 + int(n))
+    """Convert position number to Excel-style letter: 1→A, 26→Z, 27→AA, 28→AB, etc."""
+    try:
+        n = int(n)
+        if n <= 0:
+            return ""
+        res = ""
+        while n > 0:
+            n, r = divmod(n - 1, 26)
+            res = chr(65 + r) + res
+        return res
+    except (ValueError, TypeError):
+        return str(n) if n is not None else ""
+
+
+def _letter_to_pos(s):
+    """Convert Excel-style letter to number: A→1, Z→26, AA→27, AB→28, etc."""
+    if not s:
+        return 0
+    s = str(s).strip().upper()
+    if s.isalpha():
+        num = 0
+        for ch in s:
+            num = num * 26 + (ord(ch) - 64)
+        return num
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        return 0
 
 
 @pipeline_materials_bp.route("", methods=["GET"])
@@ -25,7 +51,7 @@ def get_pipeline_materials():
     query = PipelineMaterial.query.filter_by(archived=archived)
     if pipeline_id:
         query = query.filter_by(pipeline_id=pipeline_id)
-    rows = query.order_by(PipelineMaterial.position).all()
+    rows = query.order_by(db.func.length(PipelineMaterial.position), PipelineMaterial.position).all()
     return jsonify([_serialize(m) for m in rows])
 
 
@@ -46,11 +72,16 @@ def create_pipeline_material():
     pipeline_id = data["pipelineId"]
     project_material_id = data["projectMaterialId"]
 
-    # Determine position (next letter)
-    existing = PipelineMaterial.query.filter_by(
+    # Determine position (next sequential letter, preventing duplicates)
+    existing_mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
-    ).count()
-    position = data.get("position", _pos_letter(existing + 1))
+    ).all()
+    existing_positions = {m.position for m in existing_mats if m.position}
+    req_pos = (data.get("position") or "").strip().upper()
+    if req_pos and req_pos not in existing_positions:
+        position = req_pos
+    else:
+        position = _pos_letter(len(existing_mats) + 1)
 
     # Auto-assign WAZ number
     waz_no = _assign_waz_no(pipeline_id, project_material_id)
@@ -1032,7 +1063,7 @@ def _sync_and_renumber_welds(pipeline_id):
     """Synchronize welds with active material connections, eliminate duplicates, and renumber sequentially 1..N."""
     mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
-    ).order_by(PipelineMaterial.position).all()
+    ).order_by(db.func.length(PipelineMaterial.position), PipelineMaterial.position).all()
     mat_positions = {m.position for m in mats if m.position}
 
     # 1. Clean up invalid/dangling and duplicate welds
@@ -1047,7 +1078,7 @@ def _sync_and_renumber_welds(pipeline_id):
         if w.between_a not in mat_positions or w.between_b not in mat_positions:
             db.session.delete(w)
             continue
-        pair = tuple(sorted([w.between_a, w.between_b]))
+        pair = tuple(sorted([w.between_a, w.between_b], key=_letter_to_pos))
         if pair in seen_pairs:
             db.session.delete(w)
             continue
@@ -1058,20 +1089,20 @@ def _sync_and_renumber_welds(pipeline_id):
     for m in mats:
         for conn in m.connections:
             if not conn.archived and m.position and conn.position:
-                pair = tuple(sorted([m.position, conn.position]))
+                pair = tuple(sorted([m.position, conn.position], key=_letter_to_pos))
                 if pair not in seen_pairs:
                     w = Weld(
                         pipeline_id=pipeline_id,
                         weld_no="0",
-                        between_a=min(m.position, conn.position),
-                        between_b=max(m.position, conn.position),
+                        between_a=pair[0],
+                        between_b=pair[1],
                     )
                     db.session.add(w)
                     valid_welds.append(w)
                     seen_pairs.add(pair)
 
     # 3. Sort welds by (between_a, between_b) and assign unique sequential weld_no: 1, 2, 3...
-    valid_welds.sort(key=lambda w: (w.between_a or "", w.between_b or ""))
+    valid_welds.sort(key=lambda w: (_letter_to_pos(w.between_a), _letter_to_pos(w.between_b)))
     for idx, w in enumerate(valid_welds, 1):
         w.weld_no = str(idx)
 
@@ -1082,7 +1113,7 @@ def _renumber_positions(pipeline_id):
     """Renumber positions sequentially after a deletion and synchronize welds."""
     mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
-    ).order_by(PipelineMaterial.position).all()
+    ).order_by(db.func.length(PipelineMaterial.position), PipelineMaterial.position).all()
     pos_map = {}
     for idx, m in enumerate(mats, 1):
         new_pos = _pos_letter(idx)
