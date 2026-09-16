@@ -505,9 +505,9 @@ function docCell(pl) {
   }
   let builder;
   if (pl.status >= 3 && pl.docBuilder) {
-    builder = `<a class="doc-chip doc-weld" href="${escapeHtml(pl.docBuilder)}" target="_blank" rel="noopener" title="${t('doc_welder', 'Welder document (SharePoint)')}">${t('doc_welder', 'Welder')}</a>`;
+    builder = `<a class="doc-chip doc-weld" href="${escapeHtml(pl.docBuilder)}" target="_blank" rel="noopener" title="${t('doc_welder', 'Welder doc')} (SharePoint)">${t('doc_welder', 'Welder doc')}</a>`;
   } else {
-    builder = slot(t('doc_welder', 'Welder document'));
+    builder = slot(t('doc_welder', 'Welder doc'));
   }
   const fin = pl.docFinal
     ? `<a class="doc-chip doc-final" href="${escapeHtml(pl.docFinal)}" target="_blank" rel="noopener" title="${t('doc_final_title', 'Final documentation package (SharePoint)')}">${t('doc_final', 'Final')}</a>`
@@ -2655,14 +2655,14 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   toggleDnFields(curPiece);
   toggleDiameterThicknessFields(curPiece);
 
-  /* Category + DN filtered sets. If a DN narrows a list down to nothing, fall back to the
-     category-only list so the user is never left with an empty dropdown. */
+  /* Category + DN filtered sets. There is deliberately NO fallback to a category-only list:
+     widening the scope would offer heats/certificates belonging to a different DN, and since a
+     single remaining option is auto-selected, that produced a value contradicting the DN.
+     No project material for this category + DN simply means an empty list and a new material. */
   const catOnlyPms = projMats.filter(_catMatch);
   const catOnlyGms = globalMats.filter(_catMatch);
-  const catDnPms = projMats.filter(matchesCatDn);
-  const catDnGms = globalMats.filter(matchesCatDn);
-  const scopedPms = catDnPms.length ? catDnPms : catOnlyPms;
-  const scopedGms = catDnGms.length ? catDnGms : catOnlyGms;
+  const scopedPms = projMats.filter(matchesCatDn);
+  const scopedGms = globalMats.filter(matchesCatDn);
 
   // 2. Item Description
   const pmDescs = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : candidates) : scopedPms).map(pm => pm.itemDescription || pm.description);
@@ -2670,9 +2670,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   const availDescs = makeOpts(pmDescs, gmDescs);
 
   // 3. Heat Number
-  const heatPmsDn = scopedPms.filter(descMatches);
-  const heatPmsNoDn = catOnlyPms.filter(descMatches);
-  const pmHeats = (heatPmsDn.some(pm => pm.heatNo) ? heatPmsDn : heatPmsNoDn).map(pm => pm.heatNo);
+  const pmHeats = scopedPms.filter(descMatches).map(pm => pm.heatNo);
   const availHeats = [...new Set(pmHeats.filter(Boolean))];
   const availHeatsCount = availHeats.length;   /* snapshot: availHeats is mutated by unshift below */
 
@@ -3248,9 +3246,7 @@ function _renderMatWazDoc() {
     </div>`;
   } else {
     fileEl.style.display = '';
-    docDiv.innerHTML = _matWazDocRemoved
-      ? `<div class="muted small" style="margin-bottom:6px;">${t('doc_removed_upload_new', 'Document removed — select a file to upload a new one:')}</div>`
-      : `<div class="waz-doc-none">${escapeHtml(t('waz_no_document_yet', 'No WAZ document uploaded yet.'))}</div>`;
+    docDiv.innerHTML = _matWazDocRemoved ? `<div class="muted small" style="margin-bottom:6px;">${t('doc_removed_upload_new', 'Document removed — select a file to upload a new one:')}</div>` : '';
   }
 }
 function _removeMatCurrentWazDoc() {
@@ -6648,13 +6644,13 @@ function showProjectView(tab) {
 }
 
 /* --- Project Materials table --- */
-let pmFilters = { piece: '', dn: '', dien: '', diameter: '', thickness: '', code: '' };
+let pmFilters = { piece: '', dn: '', dien: '', diameter: '', thickness: '', code: '', heat: '' };
 function setPmFilter(key, val) {
   pmFilters[key] = val;
   document.querySelectorAll('.col-filter.open').forEach(el => el.classList.remove('open'));
   renderProjectMaterialsTable();
 }
-function clearPmFilters() { pmFilters = { piece: '', dn: '', dien: '', diameter: '', thickness: '', code: '' }; renderProjectMaterialsTable(); }
+function clearPmFilters() { pmFilters = { piece: '', dn: '', dien: '', diameter: '', thickness: '', code: '', heat: '' }; renderProjectMaterialsTable(); }
 function renderProjectMaterialsTable() {
   const tbody = document.getElementById('proj-materials-tbody');
   if (!tbody) return;
@@ -6668,6 +6664,7 @@ function renderProjectMaterialsTable() {
     if (pmFilters.diameter && (gm.diameter || '') !== pmFilters.diameter) return false;
     if (pmFilters.thickness && (gm.thickness || '') !== pmFilters.thickness) return false;
     if (pmFilters.code && (gm.materialCode || '') !== pmFilters.code) return false;
+    if (pmFilters.heat && (pm.heatNo || '') !== pmFilters.heat) return false;
     return true;
   });
   /* Find max DN, Diameter, Thickness count across all project materials */
@@ -6712,6 +6709,7 @@ function renderProjectMaterialsTable() {
   if (thead) {
     const allGms = allMats.map(pm => (DB.globalMaterials || []).find(g => g.id === pm.globalMaterialId) || {});
     const opts = key => [...new Set(allGms.map(g => g[key]).filter(Boolean))].sort();
+    const heatOpts = [...new Set(allMats.map(pm => pm.heatNo).filter(Boolean))].sort();
     const pmfTh = (label, key, options) => colFilterTh(label, key, options, pmFilters[key]).replace(/setMatFilter/g, 'setPmFilter');
     let hdr = '<th>#</th>';
     hdr += pmfTh(t('th_category', 'Category'), 'piece', opts('category'));
@@ -6725,7 +6723,9 @@ function renderProjectMaterialsTable() {
     hdr += pmfTh(t('th_din_en_no', 'DIN EN No.'), 'dien', opts('dienNo'));
     hdr += `<th>${t('th_surface', 'Surface')}</th>`;
     hdr += pmfTh(t('th_material', 'Material'), 'code', opts('materialCode'));
-    hdr += `<th>${t('th_certificate', 'Certificate')}</th><th>${t('th_heat_no', 'Heat No.')}</th><th>${t('th_mat_cert', 'Mat. Cert.')}</th><th></th>`;
+    hdr += `<th>${t('th_certificate', 'Certificate')}</th>`;
+    hdr += pmfTh(t('th_heat_no', 'Heat No.'), 'heat', heatOpts);
+    hdr += `<th>${t('th_mat_cert', 'Mat. Cert.')}</th><th></th>`;
     thead.innerHTML = hdr;
   }
 }
