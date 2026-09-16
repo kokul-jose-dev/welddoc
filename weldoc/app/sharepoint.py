@@ -61,33 +61,82 @@ def _sanitize_name(name):
     return name.strip().strip('.')
 
 
-def format_waz_filename(item_desc="", dn="", diameter="", thickness="", material_code="", surface="", heat_no="", waz_no=None):
+def _format_dim_pair(dia, thk):
+    dia_str = str(dia or "").strip().replace("Ø", "").replace("mm", "").strip()
+    thk_str = str(thk or "").strip().replace("mm", "").strip()
+    if dia_str and thk_str:
+        return f"Ø{dia_str}x{thk_str}"
+    elif dia_str:
+        return f"Ø{dia_str}"
+    elif thk_str:
+        return f"{thk_str}mm"
+    return ""
+
+
+def _clean_single_dn(d):
+    s = str(d or "").strip()
+    if not s:
+        return ""
+    if s.upper().startswith("DN"):
+        num_part = s[2:].strip()
+        return f"DN{num_part}"
+    elif s.replace(".", "").isdigit():
+        return f"DN{s}"
+    return s
+
+
+def format_waz_filename(item_desc="", dn="", diameter="", thickness="", material_code="", surface="", heat_no="", waz_no=None, dns=None, diameters=None, thicknesses=None):
     """Format WAZ filename according to specification:
-    Project level: Item description, DN, Outer diameter x Thickness, Material code, Surface, Heat number.pdf
-    Pipeline level: {WAZ_No}, Item description, DN, Outer diameter x Thickness, Material code, Surface, Heat number.pdf
-    Example:
-    Bogen 3D, DN25, Ø33.7x2.0, 1.4304, Ra 0.8, 123456.pdf
-    Z001, Bogen 3D, DN25, Ø33.7x2.0, 1.4304, Ra 0.8, 123456.pdf
+    1 Port:  {WAZ_No}, Item description, DN25, Ø33.7x2.0, Material code, Surface, Heat number.pdf
+    2 Ports: {WAZ_No}, Item description, DN25 / DN15, Ø33.7x2.0 / Ø21.3x1.6, Material code, Surface, Heat number.pdf
+    3 Ports: {WAZ_No}, Item description, DN25 / DN20 / DN15, Ø33.7x2.0 / Ø26.9x1.6 / Ø21.3x1.6, Material code, Surface, Heat number.pdf
     """
     parts = []
     if waz_no:
         parts.append(str(waz_no).strip())
     if item_desc:
         parts.append(str(item_desc).strip())
-    if dn:
-        dn_str = str(dn).strip()
-        if not dn_str.upper().startswith("DN") and dn_str.replace(".", "").isdigit():
-            dn_str = f"DN{dn_str}"
-        parts.append(dn_str)
 
-    dia_str = str(diameter or "").strip().replace("Ø", "").replace("mm", "").strip()
-    thk_str = str(thickness or "").strip().replace("mm", "").strip()
-    if dia_str and thk_str:
-        parts.append(f"Ø{dia_str}x{thk_str}")
-    elif dia_str:
-        parts.append(f"Ø{dia_str}")
-    elif thk_str:
-        parts.append(f"{thk_str}mm")
+    # Build list of DNs
+    dn_list = []
+    if dns and isinstance(dns, (list, tuple)):
+        dn_list = [_clean_single_dn(d) for d in dns if str(d or "").strip()]
+    elif dn:
+        raw_dn = str(dn).strip()
+        if "/" in raw_dn:
+            dn_list = [_clean_single_dn(p) for p in raw_dn.split("/") if p.strip()]
+        else:
+            dn_list = [_clean_single_dn(raw_dn)]
+
+    if dn_list:
+        parts.append(" / ".join(dn_list))
+
+    # Build list of (diameter, thickness) pairs
+    dia_list = []
+    if diameters and isinstance(diameters, (list, tuple)):
+        dia_list = [str(d or "").strip() for d in diameters]
+    elif diameter:
+        raw_dia = str(diameter).strip()
+        dia_list = [p.strip() for p in raw_dia.split("/")] if "/" in raw_dia else [raw_dia]
+
+    thk_list = []
+    if thicknesses and isinstance(thicknesses, (list, tuple)):
+        thk_list = [str(t or "").strip() for t in thicknesses]
+    elif thickness:
+        raw_thk = str(thickness).strip()
+        thk_list = [p.strip() for p in raw_thk.split("/")] if "/" in raw_thk else [raw_thk]
+
+    max_len = max(len(dia_list), len(thk_list))
+    if max_len > 0:
+        pairs = []
+        for i in range(max_len):
+            d_val = dia_list[i] if i < len(dia_list) else ""
+            t_val = thk_list[i] if i < len(thk_list) else ""
+            p_str = _format_dim_pair(d_val, t_val)
+            if p_str:
+                pairs.append(p_str)
+        if pairs:
+            parts.append(" / ".join(pairs))
 
     if material_code:
         parts.append(str(material_code).strip())

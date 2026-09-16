@@ -159,6 +159,10 @@ function normalizeMaterial(m) {
   if (!m.heatNo && m.heat_no) m.heatNo = m.heat_no;
   if (!m.wazNo && m.waz_no) m.wazNo = m.waz_no;
   if (!m.wazPdfUrl && m.waz_pdf_url) m.wazPdfUrl = m.waz_pdf_url;
+  if (!m.diameter2 && m.diameter_2) m.diameter2 = m.diameter_2;
+  if (!m.diameter3 && m.diameter_3) m.diameter3 = m.diameter_3;
+  if (!m.thickness2 && m.thickness_2) m.thickness2 = m.thickness_2;
+  if (!m.thickness3 && m.thickness_3) m.thickness3 = m.thickness_3;
   if (m.startOfPlumbing === undefined && m.start_of_plumbing !== undefined) m.startOfPlumbing = m.start_of_plumbing;
   if (m.endOfPlumbing === undefined && m.end_of_plumbing !== undefined) m.endOfPlumbing = m.end_of_plumbing;
   if (m.pipelineId === undefined && m.pipeline_id !== undefined) m.pipelineId = m.pipeline_id;
@@ -283,6 +287,28 @@ const PIECE_HAS_THICKNESS = {
 };
 function hasDiameter(piece) { return PIECE_HAS_DIAMETER[(piece || '').toLowerCase()] !== false; }
 function hasThickness(piece) { return PIECE_HAS_THICKNESS[(piece || '').toLowerCase()] !== false; }
+function requiredDiameterCount(piece) {
+  if (!hasDiameter(piece)) return 0;
+  const p = (piece || '').toLowerCase();
+  if (p === 'welding wire') return 1;
+  return requiredDns(piece);
+}
+function requiredThicknessCount(piece) {
+  if (!hasThickness(piece)) return 0;
+  return requiredDns(piece);
+}
+function formatMaterialDiameter(m) {
+  if (!m) return '';
+  const dias = [m.diameter, m.diameter2, m.diameter3].filter(Boolean);
+  if (!dias.length) return '';
+  return dias.map(d => fmtDia(d)).join(' / ');
+}
+function formatMaterialThickness(m) {
+  if (!m) return '';
+  const thks = [m.thickness, m.thickness2, m.thickness3].filter(Boolean);
+  if (!thks.length) return '';
+  return thks.map(t => String(t).trim()).join(' / ');
+}
 const DIMENSION_OPTIONS = ["DN 8", "DN 10", "DN 15", "DN 20", "DN 25", "DN 32", "DN 40", "DN 50", "DN 65", "DN 80", "DN 100", "DN 125", "DN 150", "DN 200", "DN 250", "DN 300", "DN 350", "DN 400", "DN 450", "DN 500", "DN 550", "DN 600", "DN 700", "DN 800", "DN 900"];
 const CERT_OPTIONS = ["EN 10204 3.1", "EN 10204 3.2", "EN 10204 2.2"];
 const PROC_OPTIONS = ["141", "147"];
@@ -1052,8 +1078,8 @@ function mountModals() {
       <div id="dn-fields-container"><div class="field" id="dn1-field"><span class="lbl" id="dn1-label">DN <span class="req">*</span></span><select id="input-mat-dimension" onchange="onDnChange()"></select><input type="text" id="input-mat-dimension-new" class="select-other-text" style="display:none" placeholder="Type DN…" data-i18n-placeholder="type_dn"></div></div>
       <div class="field"><span class="lbl" data-i18n="din_en_number">DIN EN Number</span><select id="input-mat-dien" onchange="onDienChange()"></select><input type="text" id="input-mat-dien-new" class="select-other-text" style="display:none" placeholder="Type DIN EN…" data-i18n-placeholder="type_din_en"></div>
       <div class="field"><span class="lbl" data-i18n="material_code">Material code <span class="req">*</span></span><select id="input-mat-code" onchange="onMatCodeChange()"></select><input type="text" id="input-mat-code-new" class="select-other-text" style="display:none" placeholder="Type material code…" data-i18n-placeholder="type_material_code"></div>
-      <div class="field" id="diameter-field"><span class="lbl" data-i18n="outer_diameter">Outer diameter <span class="req">*</span></span><select id="input-mat-diameter" onchange="onDiameterChange()"></select><input type="text" id="input-mat-diameter-new" class="select-other-text" style="display:none" placeholder="Type diameter…" data-i18n-placeholder="type_diameter"></div>
-      <div class="field" id="thickness-field"><span class="lbl" data-i18n="thickness">Thickness <span class="req">*</span></span><select id="input-mat-thickness" onchange="onThicknessChange()"></select><input type="text" id="input-mat-thickness-new" class="select-other-text" style="display:none" placeholder="Type thickness…" data-i18n-placeholder="type_thickness"></div>
+      <div id="dia-fields-container"><div class="field" id="diameter-field"><span class="lbl" id="dia1-label" data-i18n="outer_diameter">Outer diameter <span class="req">*</span></span><select id="input-mat-diameter" onchange="onDiameterChange()"></select><input type="text" id="input-mat-diameter-new" class="select-other-text" style="display:none" placeholder="Type diameter…" data-i18n-placeholder="type_diameter"></div></div>
+      <div id="thk-fields-container"><div class="field" id="thickness-field"><span class="lbl" id="thk1-label" data-i18n="thickness">Thickness <span class="req">*</span></span><select id="input-mat-thickness" onchange="onThicknessChange()"></select><input type="text" id="input-mat-thickness-new" class="select-other-text" style="display:none" placeholder="Type thickness…" data-i18n-placeholder="type_thickness"></div></div>
       <div class="field"><span class="lbl" data-i18n="surface">Surface</span><select id="input-mat-surface" onchange="onSurfaceChange()"></select><input type="text" id="input-mat-surface-new" class="select-other-text" style="display:none" placeholder="Type surface…" data-i18n-placeholder="type_surface"></div>
       <div class="field"><span class="lbl" data-i18n="th_certificate">Certificate</span><select id="input-mat-certificate" onchange="onMatCertificateChange()"></select><input type="text" id="input-mat-certificate-new" class="select-other-text" style="display:none" placeholder="Type certificate No.…" data-i18n-placeholder="type_cert_no"></div>
       <div class="field wide" id="mat-waz-doc-field"><span class="lbl"><span data-i18n="waz_doc_sp">WAZ document (→ SharePoint)</span></span>
@@ -1162,7 +1188,7 @@ function mountModals() {
       <div class="field"><span class="lbl" data-i18n="cert_no">Certificate No.</span><input type="text" id="input-waz-cert-edit" placeholder="Type certificate No.…" data-i18n-placeholder="type_cert_no"></div>
       <div class="field"><span class="lbl" data-i18n="heat_melt_no">Heat / melt No.</span><input type="text" id="input-waz-heat-edit" oninput="onWazHeatEditInput()" placeholder="Type heat/melt No.…" data-i18n-placeholder="type_heat_no"></div>
       <div class="modal-note" id="waz-shared-warning" style="display:none;color:var(--copper);grid-column:1/-1;" data-i18n="waz_shared_warning">⚠ Any changes here will apply to every combination of heat number and certificate number under this project.</div>
-      <div class="field wide"><span class="lbl"><span data-i18n="waz_doc_sp">WAZ document (→ SharePoint)</span> <span class="req">*</span></span>
+      <div class="field wide"><span class="lbl"><span data-i18n="waz_doc_sp">WAZ document (→ SharePoint)</span></span>
         <div id="waz-current-doc"></div>
         <input type="file" id="input-waz-file" accept="application/pdf">
       </div>
@@ -1179,8 +1205,8 @@ function mountModals() {
       <div id="mp-dn-container"><div class="field" id="mp-dn1-field"><span class="lbl" id="mp-dn1-label">DN <span class="req">*</span></span><select id="mp-dimension" onchange="toggleSelectOther('mp-dimension','mp-dimension-new')"></select><input type="text" id="mp-dimension-new" class="select-other-text" style="display:none" placeholder="Type DN…" data-i18n-placeholder="type_dn"></div></div>
       <div class="field"><span class="lbl" data-i18n="din_en_number">DIN EN Number</span><select id="mp-dien" onchange="toggleSelectOther('mp-dien','mp-dien-new')"></select><input type="text" id="mp-dien-new" class="select-other-text" style="display:none" placeholder="Type DIN EN…" data-i18n-placeholder="type_din_en"></div>
       <div class="field"><span class="lbl" data-i18n="material_code">Material code <span class="req">*</span></span><select id="mp-code" onchange="toggleSelectOther('mp-code','mp-code-new')"></select><input type="text" id="mp-code-new" class="select-other-text" style="display:none" placeholder="Type code…" data-i18n-placeholder="type_code"></div>
-      <div class="field" id="mp-diameter-field"><span class="lbl" data-i18n="outer_diameter">Outer diameter <span class="req">*</span></span><select id="mp-diameter" onchange="toggleSelectOther('mp-diameter','mp-diameter-new')"></select><input type="text" id="mp-diameter-new" class="select-other-text" style="display:none" placeholder="Type diameter…" data-i18n-placeholder="type_diameter"></div>
-      <div class="field" id="mp-thickness-field"><span class="lbl" data-i18n="thickness">Thickness <span class="req">*</span></span><select id="mp-thickness" onchange="toggleSelectOther('mp-thickness','mp-thickness-new')"></select><input type="text" id="mp-thickness-new" class="select-other-text" style="display:none" placeholder="Type thickness…" data-i18n-placeholder="type_thickness"></div>
+      <div id="mp-dia-container"><div class="field" id="mp-dia1-field"><span class="lbl" id="mp-dia1-label" data-i18n="outer_diameter">Outer diameter <span class="req">*</span></span><select id="mp-diameter" onchange="toggleSelectOther('mp-diameter','mp-diameter-new')"></select><input type="text" id="mp-diameter-new" class="select-other-text" style="display:none" placeholder="Type diameter…" data-i18n-placeholder="type_diameter"></div></div>
+      <div id="mp-thk-container"><div class="field" id="mp-thk1-field"><span class="lbl" id="mp-thk1-label" data-i18n="thickness">Thickness <span class="req">*</span></span><select id="mp-thickness" onchange="toggleSelectOther('mp-thickness','mp-thickness-new')"></select><input type="text" id="mp-thickness-new" class="select-other-text" style="display:none" placeholder="Type thickness…" data-i18n-placeholder="type_thickness"></div></div>
       <div class="field"><span class="lbl" data-i18n="surface">Surface</span><select id="mp-surface" onchange="toggleSelectOther('mp-surface','mp-surface-new')"></select><input type="text" id="mp-surface-new" class="select-other-text" style="display:none" placeholder="Type surface…" data-i18n-placeholder="type_surface"></div>
     </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-mat-props')" data-i18n="cancel">Cancel</button><button type="submit" class="btn btn-primary" data-i18n="save">Save</button></div></form>
   </div></div>
@@ -1447,6 +1473,8 @@ function attachFormHandlers() {
     const isWire = (piece || '').toLowerCase() === 'welding wire';
     const dimension = readSelectOther('input-mat-dimension', 'input-mat-dimension-new');
     const dnCount = requiredDns(piece);
+    const diaCount = requiredDiameterCount(piece);
+    const thkCount = requiredThicknessCount(piece);
     /* read all extra DN values dynamically */
     const extraDns = [];
     for (let i = 2; i <= dnCount; i++) {
@@ -1454,6 +1482,20 @@ function attachFormHandlers() {
       const txt = document.getElementById(`input-mat-dimension${i}-new`);
       if (sel && txt) extraDns.push(readSelectOther(`input-mat-dimension${i}`, `input-mat-dimension${i}-new`));
       else extraDns.push('');
+    }
+    const extraDias = [];
+    for (let i = 2; i <= diaCount; i++) {
+      const sel = document.getElementById(`input-mat-diameter${i}`);
+      const txt = document.getElementById(`input-mat-diameter${i}-new`);
+      if (sel && txt) extraDias.push(readSelectOther(`input-mat-diameter${i}`, `input-mat-diameter${i}-new`));
+      else extraDias.push('');
+    }
+    const extraThks = [];
+    for (let i = 2; i <= thkCount; i++) {
+      const sel = document.getElementById(`input-mat-thickness${i}`);
+      const txt = document.getElementById(`input-mat-thickness${i}-new`);
+      if (sel && txt) extraThks.push(readSelectOther(`input-mat-thickness${i}`, `input-mat-thickness${i}-new`));
+      else extraThks.push('');
     }
     const dienNo = readSelectOther('input-mat-dien', 'input-mat-dien-new');
     const matCode = readSelectOther('input-mat-code', 'input-mat-code-new');
@@ -1468,9 +1510,15 @@ function attachFormHandlers() {
         if (!extraDns[i]) { err.textContent = t('dn_x_required', 'DN ' + (i + 2) + ' is required.').replace('{x}', i + 2); err.classList.add('show'); return; }
       }
     }
-    if (hasThickness(piece) && !isWire && !thickness) { err.textContent = t('thickness_required', 'Thickness is required.'); err.classList.add('show'); return; }
+    if (diaCount > 0 && !diameter) { err.textContent = t('diameter_required', 'Outer diameter is required.'); err.classList.add('show'); return; }
+    for (let i = 0; i < extraDias.length; i++) {
+      if (!extraDias[i]) { err.textContent = `${t('outer_diameter', 'Outer diameter')} ${i + 2} is required.`; err.classList.add('show'); return; }
+    }
+    if (thkCount > 0 && !isWire && !thickness) { err.textContent = t('thickness_required', 'Thickness is required.'); err.classList.add('show'); return; }
+    for (let i = 0; i < extraThks.length; i++) {
+      if (!extraThks[i]) { err.textContent = `${t('thickness', 'Thickness')} ${i + 2} is required.`; err.classList.add('show'); return; }
+    }
     if (!matCode) { err.textContent = t('material_code_required', 'Material code is required.'); err.classList.add('show'); return; }
-    if (hasDiameter(piece) && !diameter) { err.textContent = t('diameter_required', 'Outer diameter is required.'); err.classList.add('show'); return; }
 
     const certificate = readSelectOther('input-mat-certificate', 'input-mat-certificate-new');
     const heatNo = readSelectOther('input-mat-heat', 'input-mat-heat-new');
@@ -1484,6 +1532,8 @@ function attachFormHandlers() {
       pipelineId: PAGE.pipelineId, position: posNum,
       piece, dimension, materialCode: matCode, itemDescription: itemDesc || piece,
       diameter, thickness, dienNo, surface,
+      diameter2: extraDias[0] || '', diameter3: extraDias[1] || '',
+      thickness2: extraThks[0] || '', thickness3: extraThks[1] || '',
       certificate, heatNo,
       wazNo: existingMat ? existingMat.wazNo : '', wazPdfUrl: attachedWazPdfUrl,
       connections: uniqueConns, startOfPlumbing: start, endOfPlumbing: end
@@ -1506,21 +1556,10 @@ function attachFormHandlers() {
       const dupMatch = findDuplicateProjectMaterial(currentProjectId, heatNo, specsObj, isEditingMat && existingMat ? existingMat.projectMaterialId : null);
 
       if (dupMatch) {
-        // SCENARIO 1: Exact matching project material already exists in project -> Merge/link confirmation
-        const specsSummary = formatMaterialSpecsStr({ category: piece, dn1: dimension, diameter, thickness, materialCode: matCode, ...dnsObj });
-        const descText = heatNo
-          ? t('matching_pipe_material_exists_desc', 'A material with heat number {heat} and these exact specifications ({specs}) already exists in this project. Updating will link to the existing material.').replace('{heat}', `<strong>${escapeHtml(heatNo)}</strong>`).replace('{specs}', `<em>${escapeHtml(specsSummary)}</em>`)
-          : t('matching_pipe_material_no_heat_exists_desc', 'A material with these exact specifications ({specs}) already exists in this project without a heat number. Updating will link to the existing material.').replace('{specs}', `<em>${escapeHtml(specsSummary)}</em>`);
-
-        promptHeatConflictModal({
-          mode: 'duplicate_merge',
-          title: t('matching_material_exists_title', 'Matching Material Already Exists'),
-          desc: descText,
-          updateBtnText: t('update', 'Update'),
-          onUpdateExisting: async () => {
-            await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: editingMaterialId, forceNew: false, targetProjectMaterialId: dupMatch.projectMaterial.id });
-          }
-        });
+        /* SCENARIO 1: Exact matching project material already exists in this project.
+           Adding it to a pipeline does not create a new material, it only links the
+           existing one, so save silently without any confirmation dialog. */
+        await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: editingMaterialId, forceNew: false, targetProjectMaterialId: dupMatch.projectMaterial.id });
         return;
       }
 
@@ -1630,7 +1669,10 @@ function attachFormHandlers() {
   if (matFormEl) {
     matFormEl.addEventListener('input', e => {
       if (e.target && e.target.classList.contains('select-other-text')) {
-        _updateAllPipelineMatBadges();
+        /* A hand-typed heat has to go through the cascade too: if it turns out to be a heat
+           that exists in this project, the form must switch to project-only filtering. */
+        if (e.target.id === 'input-mat-heat-new') _refreshPipelineMatCombinations('heat');
+        else _updateAllPipelineMatBadges();
       }
     });
   }
@@ -1657,7 +1699,13 @@ async function doSavePipelineMaterial(params) {
     }).filter(Boolean);
 
     // Step 1: Create/find global material
-    const gmData = { category: data.piece, itemDescription: data.itemDescription, materialCode: data.materialCode, dn1: data.dimension, diameter: data.diameter, thickness: data.thickness, dienNo: data.dienNo, surface: data.surface || '' };
+    const gmData = {
+      category: data.piece, itemDescription: data.itemDescription, materialCode: data.materialCode,
+      dn1: data.dimension, diameter: data.diameter, thickness: data.thickness,
+      diameter2: data.diameter2 || '', diameter3: data.diameter3 || '',
+      thickness2: data.thickness2 || '', thickness3: data.thickness3 || '',
+      dienNo: data.dienNo, surface: data.surface || ''
+    };
     for (let i = 2; i <= 6; i++) if (data[`dimension${i}`]) gmData[`dn${i}`] = data[`dimension${i}`];
     const gmResult = await apiPost('/global-materials', gmData);
 
@@ -2382,8 +2430,18 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   }
   let curDien = readSelectOther('input-mat-dien', 'input-mat-dien-new');
   let curCode = readSelectOther('input-mat-code', 'input-mat-code-new');
+  const diaCount = requiredDiameterCount(curPiece);
+  const thkCount = requiredThicknessCount(curPiece);
   let curDia = readSelectOther('input-mat-diameter', 'input-mat-diameter-new');
+  const curExtraDias = {};
+  for (let i = 2; i <= diaCount; i++) {
+    curExtraDias[i] = readSelectOther(`input-mat-diameter${i}`, `input-mat-diameter${i}-new`);
+  }
   let curThk = readSelectOther('input-mat-thickness', 'input-mat-thickness-new');
+  const curExtraThks = {};
+  for (let i = 2; i <= thkCount; i++) {
+    curExtraThks[i] = readSelectOther(`input-mat-thickness${i}`, `input-mat-thickness${i}-new`);
+  }
   let curSurf = readSelectOther('input-mat-surface', 'input-mat-surface-new');
 
   const triggerSelId = triggerField === 'piece' ? 'input-mat-piece' :
@@ -2395,52 +2453,115 @@ function _refreshPipelineMatCombinations(triggerField = null) {
               triggerField === 'dien' ? 'input-mat-dien' :
                 triggerField === 'code' ? 'input-mat-code' :
                   triggerField === 'diameter' ? 'input-mat-diameter' :
-                    triggerField === 'thickness' ? 'input-mat-thickness' :
-                      triggerField === 'surface' ? 'input-mat-surface' : null;
+                    (triggerField && triggerField.startsWith('diameter')) ? `input-mat-diameter${triggerField.replace('diameter', '')}` :
+                      triggerField === 'thickness' ? 'input-mat-thickness' :
+                        (triggerField && triggerField.startsWith('thickness')) ? `input-mat-thickness${triggerField.replace('thickness', '')}` :
+                          triggerField === 'surface' ? 'input-mat-surface' : null;
   const isTriggerOther = triggerSelId ? (document.getElementById(triggerSelId)?.value === '__other__') : false;
 
+  const _catMatch = (item) => !curPiece || (item.category || item.piece || '').toLowerCase() === curPiece.toLowerCase();
+  const _isProjectHeat = (h) => Boolean(
+    h && h !== '__other__' &&
+    projMats.some(pm => _catMatch(pm) && (pm.heatNo || '').trim().toLowerCase() === h.trim().toLowerCase())
+  );
+  /* A heat TYPED into '+ Other' that exists in this project must behave exactly like one picked
+     from the dropdown - including clearing the specs that belonged to the previous heat. */
+  const typedHeatIsProject = Boolean(triggerField === 'heat' && isTriggerOther && _isProjectHeat(curHeat));
+
   // Clear downstream sub-attributes when parent/trigger fields change, unless typing custom '+ Other'
-  if (!isTriggerOther) {
+  if (!isTriggerOther || typedHeatIsProject) {
     if (triggerField === 'piece') {
       curDesc = ''; curHeat = ''; curCert = ''; curDn = '';
       for (let i = 2; i <= 6; i++) curExtraDns[i] = '';
       curDien = ''; curCode = ''; curDia = ''; curThk = ''; curSurf = '';
+      for (let i = 2; i <= 6; i++) { curExtraDias[i] = ''; curExtraThks[i] = ''; }
     } else if (triggerField === 'desc') {
       curHeat = ''; curCert = ''; curDn = '';
       for (let i = 2; i <= 6; i++) curExtraDns[i] = '';
       curDien = ''; curCode = ''; curDia = ''; curThk = ''; curSurf = '';
+      for (let i = 2; i <= 6; i++) { curExtraDias[i] = ''; curExtraThks[i] = ''; }
     } else if (triggerField === 'heat') {
       curCert = ''; curDn = '';
       for (let i = 2; i <= 6; i++) curExtraDns[i] = '';
       curDien = ''; curCode = ''; curDia = ''; curThk = ''; curSurf = '';
+      for (let i = 2; i <= 6; i++) { curExtraDias[i] = ''; curExtraThks[i] = ''; }
     } else if (triggerField === 'dn' || (triggerField && triggerField.startsWith('dn'))) {
-      curDia = ''; curThk = '';
+      /* A different DN means a different material: the heat and everything derived from it
+         must be re-resolved, otherwise the pools below are still built from the old heat. */
+      curHeat = ''; curCert = ''; curDien = ''; curCode = ''; curDia = ''; curThk = ''; curSurf = '';
+      for (let i = 2; i <= 6; i++) { curExtraDias[i] = ''; curExtraThks[i] = ''; }
     } else if (triggerField === 'diameter') {
       curThk = '';
+    } else if (triggerField && triggerField.startsWith('diameter')) {
+      const idx = triggerField.replace('diameter', '');
+      curExtraThks[idx] = '';
     }
   }
+
+  /* Adopt the previous material's DN(s) as an ACTIVE FILTER (not just a display value),
+     but only when the chosen category really has materials with that DN. Doing this here,
+     before any option pool is built, lets DN narrow description / heat / certificate too. */
+  const _dnOf = (item, i) => (i === 1 ? (item.dn1 || item.dimension) : (item[`dimension${i}`] || item[`dn${i}`])) || '';
+  const _dnTriggered = Boolean(triggerField && /^dn\d*$/.test(triggerField));
+  if (!isTriggerOther && !_dnTriggered && !_isProjectHeat(curHeat) && _prefillAllDns && _prefillAllDns.length) {
+    const catPool = [...projMats.filter(_catMatch), ...globalMats.filter(_catMatch)];
+    if (!curDn && _prefillAllDns[0] && catPool.some(item => _dnOf(item, 1) === _prefillAllDns[0])) {
+      curDn = _prefillAllDns[0];
+    }
+    for (let i = 2; i <= dnCount; i++) {
+      const pref = _prefillAllDns[i - 1];
+      if (!curExtraDns[i] && pref && catPool.some(item => _dnOf(item, i) === pref)) {
+        curExtraDns[i] = pref;
+      }
+    }
+  }
+
+  /* Shared predicate: does this project/global material match the current category + DN selection? */
+  function matchesCatDn(item) {
+    if (!_catMatch(item)) return false;
+    if (curDn && curDn !== '__other__') {
+      const v = _dnOf(item, 1);
+      if (v && v !== curDn) return false;
+    }
+    for (let i = 2; i <= dnCount; i++) {
+      const sel = curExtraDns[i];
+      if (!sel || sel === '__other__') continue;
+      const v = _dnOf(item, i);
+      if (v && v !== sel) return false;
+    }
+    return true;
+  }
+  const descMatches = (item) => {
+    if (!curDesc || curDesc === '__other__') return true;
+    return (item.itemDescription || item.description || '').toLowerCase() === curDesc.toLowerCase();
+  };
 
   // Pre-cascade auto-fills from Category -> Description -> Heat (if single matching value)
   if (!isTriggerOther) {
     if (triggerField === 'piece') {
-      const pDescs = [...new Set(projMats.filter(pm => !curPiece || (pm.category || pm.piece || '').toLowerCase() === curPiece.toLowerCase()).map(pm => pm.itemDescription || pm.description).filter(Boolean))];
+      const pDescs = [...new Set(projMats.filter(matchesCatDn).map(pm => pm.itemDescription || pm.description).filter(Boolean))];
       if (pDescs.length === 1) {
         curDesc = pDescs[0];
       }
     }
-    if (triggerField === 'piece' || triggerField === 'desc') {
-      const pHeats = [...new Set(projMats.filter(pm => {
-        if (curPiece && (pm.category || pm.piece || '').toLowerCase() !== curPiece.toLowerCase()) return false;
-        if (curDesc && curDesc !== '__other__' && (pm.itemDescription || pm.description || '').toLowerCase() !== curDesc.toLowerCase()) return false;
-        return true;
-      }).map(pm => pm.heatNo).filter(Boolean))];
+    if (triggerField === 'piece' || triggerField === 'desc' || _dnTriggered) {
+      const pHeats = [...new Set(projMats.filter(pm => matchesCatDn(pm) && descMatches(pm)).map(pm => pm.heatNo).filter(Boolean))];
       if (pHeats.length === 1) {
         curHeat = pHeats[0];
       }
     }
   }
 
-  const isHeatSelected = Boolean(curHeat && curHeat !== '__other__');
+  /* A heat counts as "selected from the project" when it exists on a project material of the
+     SAME category - whether it was picked from the dropdown or typed into '+ Other'. */
+  const isExistingProjectHeat = Boolean(
+    curHeat &&
+    curHeat !== '__other__' &&
+    projMats.some(pm => _catMatch(pm) && (pm.heatNo || '').trim().toLowerCase() === curHeat.trim().toLowerCase())
+  );
+  const isHeatSelected = isExistingProjectHeat;
+  /* Heat typed by hand that is NOT in the project -> purely global cascade, no count badges. */
+  const isUnknownHeat = Boolean(curHeat && curHeat !== '__other__' && !isExistingProjectHeat);
 
   let candidates = [];
   let baseHeatCandidates = [];
@@ -2448,14 +2569,23 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   let pool = [];
 
   if (isHeatSelected) {
-    // -------------------------------------------------------------
-    // RULE 2: HEAT NUMBER IS SELECTED -> STRICTLY PROJECT MATERIALS ONLY
-    // -------------------------------------------------------------
     baseHeatCandidates = projMats.filter(pm => {
       if ((pm.heatNo || '').trim().toLowerCase() !== curHeat.trim().toLowerCase()) return false;
       if (curPiece && (pm.category || pm.piece || '').toLowerCase() !== curPiece.toLowerCase()) return false;
       return true;
     });
+
+    /* The heat identifies the material, so it also decides the DN. The DN dropdown still
+       lists every DN of the category (see section 5), so the user can switch away. */
+    if (!curDn) {
+      const heatDns = [...new Set(baseHeatCandidates.map(pm => _dnOf(pm, 1)).filter(Boolean))];
+      if (heatDns.length === 1) curDn = heatDns[0];
+    }
+    for (let i = 2; i <= dnCount; i++) {
+      if (curExtraDns[i]) continue;
+      const heatExtraDns = [...new Set(baseHeatCandidates.map(pm => _dnOf(pm, i)).filter(Boolean))];
+      if (heatExtraDns.length === 1) curExtraDns[i] = heatExtraDns[0];
+    }
 
     candidates = baseHeatCandidates.filter(pm => {
       if (curDesc && curDesc !== '__other__' && (pm.itemDescription || pm.description || '').toLowerCase() !== curDesc.toLowerCase()) return false;
@@ -2482,35 +2612,23 @@ function _refreshPipelineMatCombinations(triggerField = null) {
 
     pool = candidates;
   } else {
-    // -------------------------------------------------------------
-    // RULE 1: ONLY CATEGORY (OR NO HEAT) -> PROJECT FIRST, THEN GLOBAL
-    // -------------------------------------------------------------
+    /* DN now always filters - even right after a category change, because the DN was
+       resolved above from the previous material. */
     candidates = projMats.filter(pm => {
-      if (curPiece && (pm.category || pm.piece || '').toLowerCase() !== curPiece.toLowerCase()) return false;
-      if (triggerField !== 'piece' && curDesc && curDesc !== '__other__' && (pm.itemDescription || pm.description || '').toLowerCase() !== curDesc.toLowerCase()) return false;
-      if (triggerField !== 'piece' && curDn && curDn !== '__other__' && pm.dn1 && pm.dn1 !== curDn) return false;
-      for (let i = 2; i <= dnCount; i++) {
-        const extraVal = curExtraDns[i];
-        if (triggerField !== 'piece' && extraVal && extraVal !== '__other__' && (pm[`dimension${i}`] || pm[`dn${i}`]) && (pm[`dimension${i}`] || pm[`dn${i}`]) !== extraVal) return false;
-      }
+      if (!matchesCatDn(pm)) return false;
+      if (triggerField !== 'piece' && !descMatches(pm)) return false;
       return true;
     });
 
     gmFiltered = globalMats.filter(g => {
-      if (curPiece && (g.category || g.piece || '').toLowerCase() !== curPiece.toLowerCase()) return false;
-      if (triggerField !== 'piece' && curDesc && curDesc !== '__other__' && (g.itemDescription || g.description || '').toLowerCase() !== curDesc.toLowerCase()) return false;
-      if (triggerField !== 'piece' && curDn && curDn !== '__other__' && (g.dn1 || g.dimension) && (g.dn1 || g.dimension) !== curDn) return false;
-      for (let i = 2; i <= dnCount; i++) {
-        const extraVal = curExtraDns[i];
-        if (triggerField !== 'piece' && extraVal && extraVal !== '__other__' && (g[`dimension${i}`] || g[`dn${i}`]) && (g[`dimension${i}`] || g[`dn${i}`]) !== extraVal) return false;
-      }
+      if (!matchesCatDn(g)) return false;
+      if (triggerField !== 'piece' && !descMatches(g)) return false;
       return true;
     });
 
     pool = candidates.length ? candidates : (gmFiltered.length ? gmFiltered : src.filter(i => !curPiece || i.piece.toLowerCase() === curPiece.toLowerCase()));
   }
 
-  // Helper to build options list: project materials first, then extra from global materials
   function makeOpts(pmVals, gmVals) {
     if (isHeatSelected) {
       return [...new Set(pmVals.filter(Boolean))];
@@ -2537,106 +2655,137 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   toggleDnFields(curPiece);
   toggleDiameterThicknessFields(curPiece);
 
+  /* Category + DN filtered sets. If a DN narrows a list down to nothing, fall back to the
+     category-only list so the user is never left with an empty dropdown. */
+  const catOnlyPms = projMats.filter(_catMatch);
+  const catOnlyGms = globalMats.filter(_catMatch);
+  const catDnPms = projMats.filter(matchesCatDn);
+  const catDnGms = globalMats.filter(matchesCatDn);
+  const scopedPms = catDnPms.length ? catDnPms : catOnlyPms;
+  const scopedGms = catDnGms.length ? catDnGms : catOnlyGms;
+
   // 2. Item Description
-  const pmDescs = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : candidates) : (curPiece ? projMats.filter(pm => (pm.category || pm.piece || '').toLowerCase() === curPiece.toLowerCase()) : projMats)).map(pm => pm.itemDescription || pm.description);
-  const gmDescs = (curPiece ? globalMats.filter(g => (g.category || g.piece || '').toLowerCase() === curPiece.toLowerCase()) : globalMats).map(g => g.itemDescription || g.description);
+  const pmDescs = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : candidates) : scopedPms).map(pm => pm.itemDescription || pm.description);
+  const gmDescs = scopedGms.map(g => g.itemDescription || g.description);
   const availDescs = makeOpts(pmDescs, gmDescs);
 
   // 3. Heat Number
-  const pmHeats = (curPiece ? projMats.filter(pm => {
-    if ((pm.category || pm.piece || '').toLowerCase() !== curPiece.toLowerCase()) return false;
-    if (curDesc && curDesc !== '__other__' && (pm.itemDescription || pm.description || '').toLowerCase() !== curDesc.toLowerCase()) return false;
-    return true;
-  }) : projMats).map(pm => pm.heatNo);
+  const heatPmsDn = scopedPms.filter(descMatches);
+  const heatPmsNoDn = catOnlyPms.filter(descMatches);
+  const pmHeats = (heatPmsDn.some(pm => pm.heatNo) ? heatPmsDn : heatPmsNoDn).map(pm => pm.heatNo);
   const availHeats = [...new Set(pmHeats.filter(Boolean))];
+  const availHeatsCount = availHeats.length;   /* snapshot: availHeats is mutated by unshift below */
 
   // 4. Certificate
-  const pmCerts = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : candidates) : (curPiece ? projMats.filter(pm => (pm.category || pm.piece || '').toLowerCase() === curPiece.toLowerCase()) : projMats)).map(pm => pm.certificate);
+  const pmCerts = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : candidates) : scopedPms.filter(descMatches)).map(pm => pm.certificate);
   const availCerts = isHeatSelected ? [...new Set(pmCerts.filter(Boolean))] : makeOpts(pmCerts, CERT_OPTIONS);
 
-  // 5. DN1
-  const pmDns = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : pool).map(m => m.dn1 || m.dimension);
-  const gmDns = gmFiltered.map(g => g.dn1 || g.dimension);
+  /* 5. DN1 - a field must never be narrowed by its OWN value, nor by the heat that the DN
+     itself selected, otherwise the user gets locked into the first DN and can never switch
+     to another DN of the same category. Scope: category (+ description) only. */
+  const dnScopePms = catOnlyPms.filter(descMatches);
+  const dnScopeGms = catOnlyGms.filter(descMatches);
+  const pmDns = dnScopePms.map(m => _dnOf(m, 1));
+  const gmDns = dnScopeGms.map(g => _dnOf(g, 1));
   const availDns = isHeatSelected ? [...new Set(pmDns.filter(Boolean))] : makeOpts(pmDns, gmDns);
+  const availDnsCount = [...new Set(pmDns.filter(Boolean))].length;
 
   // 6. DIN EN
-  const dienSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : pool;
+  const dienSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : (gmFiltered.length ? gmFiltered : pool);
   const pmDiens = dienSource.map(m => m.dienNo || m.dien);
   const gmDiens = gmFiltered.map(g => g.dienNo || g.dien);
   const availDiens = makeOpts(pmDiens, gmDiens);
 
   // 7. Material Code
-  const codeSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : pool;
+  const codeSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : (gmFiltered.length ? gmFiltered : pool);
   const pmCodes = codeSource.map(m => m.materialCode || m.code);
   const gmCodes = gmFiltered.map(g => g.materialCode || g.code);
   const availCodes = makeOpts(pmCodes, gmCodes);
 
-  // 8. Diameter
-  // Keep all diameter options available under the heat visible
-  const diaSource = isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : pool;
-  const pmDias = diaSource.map(m => m.diameter);
-  const gmDias = gmFiltered.map(g => g.diameter);
+  // 8. Diameter (Port 1)
+  const diaSource = isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : (gmFiltered.length ? gmFiltered : pool);
+  let pmDias = diaSource.map(m => m.diameter);
+  let gmDias = gmFiltered.map(g => g.diameter);
+  if (!isHeatSelected && curDn && curDn !== '__other__' && !pmDias.filter(Boolean).length && !gmDias.filter(Boolean).length) {
+    gmDias = globalMats.filter(g => (g.dn1 || g.dimension) === curDn).map(g => g.diameter);
+  }
   const availDias = makeOpts(pmDias, gmDias);
 
-  // 9. Thickness
-  // Thickness options strictly matching currently active diameter (or all under heat if no diameter selected)
-  const thkSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : pool;
-  const pmThks = thkSource.map(m => m.thickness);
-  const gmThks = gmFiltered.map(g => g.thickness);
+  // 9. Thickness (Port 1)
+  const thkSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : (curDia && curDia !== '__other__' ? gmFiltered.filter(g => !g.diameter || g.diameter === curDia) : (gmFiltered.length ? gmFiltered : pool));
+  let pmThks = thkSource.map(m => m.thickness);
+  let gmThks = thkSource.map(g => g.thickness);
+  if (!isHeatSelected && curDn && curDn !== '__other__' && !pmThks.filter(Boolean).length && !gmThks.filter(Boolean).length) {
+    gmThks = globalMats.filter(g => (g.dn1 || g.dimension) === curDn && (!curDia || curDia === '__other__' || g.diameter === curDia)).map(g => g.thickness);
+  }
   const availThks = makeOpts(pmThks, gmThks);
 
   // 10. Surface
-  const surfSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : pool;
+  const surfSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : (gmFiltered.length ? gmFiltered : pool);
   const pmSurfs = surfSource.map(m => m.surface);
   const gmSurfs = gmFiltered.map(g => g.surface);
   const availSurfs = makeOpts(pmSurfs, gmSurfs);
 
-  // Helper to determine field value:
+  const isDnTrigger = Boolean(triggerField && (triggerField === 'dn' || /^dn\d+$/.test(triggerField)));
+
   function getFieldValue(fieldKey, curVal, availVals, selId) {
     const selEl = selId ? document.getElementById(selId) : null;
     const isOtherSelected = selEl && selEl.value === '__other__';
     if (triggerField === fieldKey) return isOtherSelected ? '__other__' : curVal;
-    if (isTriggerOther) return isOtherSelected ? '__other__' : curVal;
-    if (isOtherSelected) return curVal || '__other__';
+    if (isTriggerOther && isOtherSelected) return '__other__';
+    if (isOtherSelected) return '__other__';
     if (curVal && availVals.includes(curVal)) return curVal;
-    if (availVals.length === 1) return availVals[0];
-    return '';
+    if (availVals.length === 1 && !curVal) return availVals[0];
+    return curVal || '';
   }
 
+  /* With a project heat selected we must never fall back to static / global catalogs -
+     only values that really exist on this project's materials may be offered. */
   // 2. Item Description
   const catSrcDescs = [...new Set(src.filter(i => !curPiece || (i.piece || '').toLowerCase() === curPiece.toLowerCase()).map(i => i.description).filter(Boolean))];
-  let descOpts = availDescs.length ? availDescs : catSrcDescs;
-  if (!descOpts.length && curPiece) {
+  let descOpts = availDescs.length ? availDescs : (isHeatSelected ? [] : catSrcDescs);
+  if (!descOpts.length && curPiece && !isHeatSelected) {
     descOpts = [curPiece.toLowerCase()];
   }
   const targetDesc = getFieldValue('desc', curDesc, descOpts, 'input-mat-desc');
-  if (targetDesc && targetDesc !== '__other__' && !descOpts.includes(targetDesc)) descOpts.unshift(targetDesc);
+  const isDescOther = document.getElementById('input-mat-desc') && document.getElementById('input-mat-desc').value === '__other__';
+  if (targetDesc && targetDesc !== '__other__' && !isDescOther && !descOpts.includes(targetDesc)) descOpts.unshift(targetDesc);
   if (triggerField !== 'desc') {
     buildSelectOther('input-mat-desc', 'input-mat-desc-new', descOpts, targetDesc);
   }
 
   // 3. Heat Number
   const heatOpts = availHeats;
-  const targetHeat = getFieldValue('heat', curHeat, availHeats, 'input-mat-heat');
-  if (targetHeat && targetHeat !== '__other__' && !heatOpts.includes(targetHeat)) heatOpts.unshift(targetHeat);
+  let targetHeat = getFieldValue('heat', curHeat, availHeats, 'input-mat-heat');
+  /* Changing a DN can invalidate the heat that was chosen for the old DN - drop it. */
+  if (isDnTrigger && targetHeat && targetHeat !== '__other__' && !availHeats.includes(targetHeat)) {
+    targetHeat = availHeats.length === 1 ? availHeats[0] : '';
+  }
+  const isHeatOther = document.getElementById('input-mat-heat') && document.getElementById('input-mat-heat').value === '__other__';
+  if (targetHeat && targetHeat !== '__other__' && !isHeatOther && !heatOpts.includes(targetHeat)) heatOpts.unshift(targetHeat);
   if (triggerField !== 'heat') {
     buildSelectOther('input-mat-heat', 'input-mat-heat-new', heatOpts, targetHeat);
   }
 
   // 4. Certificate
-  const certOpts = availCerts.length ? availCerts : CERT_OPTIONS;
-  const targetCert = getFieldValue('cert', curCert, availCerts, 'input-mat-certificate');
-  if (targetCert && targetCert !== '__other__' && !certOpts.includes(targetCert)) certOpts.unshift(targetCert);
+  const certOpts = availCerts.length ? availCerts : (isHeatSelected ? [] : CERT_OPTIONS);
+  let targetCert = getFieldValue('cert', curCert, certOpts, 'input-mat-certificate');
+  if (isDnTrigger && targetCert && targetCert !== '__other__' && !certOpts.includes(targetCert)) {
+    targetCert = certOpts.length === 1 ? certOpts[0] : '';
+  }
+  const isCertOther = document.getElementById('input-mat-certificate') && document.getElementById('input-mat-certificate').value === '__other__';
+  if (targetCert && targetCert !== '__other__' && !isCertOther && !certOpts.includes(targetCert)) certOpts.unshift(targetCert);
   if (triggerField !== 'cert') {
     buildSelectOther('input-mat-certificate', 'input-mat-certificate-new', certOpts, targetCert);
   }
 
   // 5. DN1
-  const dnOpts = availDns.length ? availDns : DIMENSION_OPTIONS;
-  let targetDn = getFieldValue('dn', curDn, availDns, 'input-mat-dimension');
+  const dnOpts = availDns.length ? availDns : (isHeatSelected ? [] : DIMENSION_OPTIONS);
+  let targetDn = getFieldValue('dn', curDn, dnOpts, 'input-mat-dimension');
   if (!targetDn && availDns.length === 1) targetDn = availDns[0];
   if (!targetDn && _prefillAllDns && _prefillAllDns[0] && dnOpts.includes(_prefillAllDns[0])) targetDn = _prefillAllDns[0];
-  if (targetDn && targetDn !== '__other__' && !dnOpts.includes(targetDn)) dnOpts.unshift(targetDn);
+  const isDnOther = document.getElementById('input-mat-dimension') && document.getElementById('input-mat-dimension').value === '__other__';
+  if (targetDn && targetDn !== '__other__' && !isDnOther && !dnOpts.includes(targetDn)) dnOpts.unshift(targetDn);
   if (triggerField !== 'dn') {
     buildSelectOther('input-mat-dimension', 'input-mat-dimension-new', dnOpts, targetDn);
   }
@@ -2645,14 +2794,15 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   for (let i = 2; i <= dnCount; i++) {
     const sel = document.getElementById(`input-mat-dimension${i}`);
     if (sel) {
-      const pmExtraDns = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : pool).map(m => m[`dimension${i}`] || m[`dn${i}`]);
-      const gmExtraDns = gmFiltered.map(g => g[`dimension${i}`] || g[`dn${i}`]);
+      const pmExtraDns = dnScopePms.map(m => _dnOf(m, i));
+      const gmExtraDns = dnScopeGms.map(g => _dnOf(g, i));
       const availExtraDns = isHeatSelected ? [...new Set(pmExtraDns.filter(Boolean))] : makeOpts(pmExtraDns, gmExtraDns);
-      const extraDnOpts = availExtraDns.length ? availExtraDns : DIMENSION_OPTIONS;
-      let targetExtraDn = getFieldValue(`dn${i}`, curExtraDns[i], availExtraDns, `input-mat-dimension${i}`);
+      const extraDnOpts = availExtraDns.length ? availExtraDns : (isHeatSelected ? [] : DIMENSION_OPTIONS);
+      let targetExtraDn = getFieldValue(`dn${i}`, curExtraDns[i], extraDnOpts, `input-mat-dimension${i}`);
       if (!targetExtraDn && availExtraDns.length === 1) targetExtraDn = availExtraDns[0];
       if (!targetExtraDn && _prefillAllDns && _prefillAllDns[i - 1] && extraDnOpts.includes(_prefillAllDns[i - 1])) targetExtraDn = _prefillAllDns[i - 1];
-      if (targetExtraDn && targetExtraDn !== '__other__' && !extraDnOpts.includes(targetExtraDn)) extraDnOpts.unshift(targetExtraDn);
+      const isExtraDnOther = sel.value === '__other__';
+      if (targetExtraDn && targetExtraDn !== '__other__' && !isExtraDnOther && !extraDnOpts.includes(targetExtraDn)) extraDnOpts.unshift(targetExtraDn);
       if (triggerField !== `dn${i}`) {
         buildSelectOther(`input-mat-dimension${i}`, `input-mat-dimension${i}-new`, extraDnOpts, targetExtraDn);
       }
@@ -2662,7 +2812,8 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   // 6. DIN EN
   const dienOpts = availDiens;
   const targetDien = getFieldValue('dien', curDien, availDiens, 'input-mat-dien');
-  if (targetDien && targetDien !== '__other__' && !dienOpts.includes(targetDien)) dienOpts.unshift(targetDien);
+  const isDienOther = document.getElementById('input-mat-dien') && document.getElementById('input-mat-dien').value === '__other__';
+  if (targetDien && targetDien !== '__other__' && !isDienOther && !dienOpts.includes(targetDien)) dienOpts.unshift(targetDien);
   if (triggerField !== 'dien') {
     buildSelectOther('input-mat-dien', 'input-mat-dien-new', dienOpts, targetDien);
   }
@@ -2670,31 +2821,76 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   // 7. Material Code
   const codeOpts = availCodes;
   const targetCode = getFieldValue('code', curCode, availCodes, 'input-mat-code');
-  if (targetCode && targetCode !== '__other__' && !codeOpts.includes(targetCode)) codeOpts.unshift(targetCode);
+  const isCodeOther = document.getElementById('input-mat-code') && document.getElementById('input-mat-code').value === '__other__';
+  if (targetCode && targetCode !== '__other__' && !isCodeOther && !codeOpts.includes(targetCode)) codeOpts.unshift(targetCode);
   if (triggerField !== 'code') {
     buildSelectOther('input-mat-code', 'input-mat-code-new', codeOpts, targetCode);
   }
 
-  // 8. Diameter
+  // 8. Diameter (Port 1)
   const diaOpts = availDias;
   const targetDia = getFieldValue('diameter', curDia, availDias, 'input-mat-diameter');
-  if (targetDia && targetDia !== '__other__' && !diaOpts.includes(targetDia)) diaOpts.unshift(targetDia);
+  const isDiaOther = document.getElementById('input-mat-diameter') && document.getElementById('input-mat-diameter').value === '__other__';
+  if (targetDia && targetDia !== '__other__' && !isDiaOther && !diaOpts.includes(targetDia)) diaOpts.unshift(targetDia);
   if (triggerField !== 'diameter') {
     buildSelectOther('input-mat-diameter', 'input-mat-diameter-new', diaOpts, targetDia);
   }
 
-  // 9. Thickness
+  // 8b. Extra Diameters (Port 2 .. diaCount)
+  for (let i = 2; i <= diaCount; i++) {
+    const sel = document.getElementById(`input-mat-diameter${i}`);
+    if (sel) {
+      const portDn = curExtraDns[i];
+      let pmExtraDias = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : pool).map(m => m[`diameter${i}`] || (portDn && (m[`dimension${i}`] || m[`dn${i}`]) === portDn ? m.diameter : ''));
+      let gmExtraDias = gmFiltered.map(g => g[`diameter${i}`] || (portDn && (g[`dimension${i}`] || g[`dn${i}`]) === portDn ? g.diameter : ''));
+      if (!isHeatSelected && portDn && portDn !== '__other__' && !pmExtraDias.filter(Boolean).length && !gmExtraDias.filter(Boolean).length) {
+        gmExtraDias = globalMats.filter(g => (g.dn1 || g.dimension) === portDn).map(g => g.diameter);
+      }
+      const availExtraDias = isHeatSelected ? [...new Set(pmExtraDias.filter(Boolean))] : makeOpts(pmExtraDias, gmExtraDias);
+      let targetExtraDia = getFieldValue(`diameter${i}`, curExtraDias[i], availExtraDias, `input-mat-diameter${i}`);
+      const isExtraDiaOther = sel.value === '__other__';
+      if (targetExtraDia && targetExtraDia !== '__other__' && !isExtraDiaOther && !availExtraDias.includes(targetExtraDia)) availExtraDias.unshift(targetExtraDia);
+      if (triggerField !== `diameter${i}`) {
+        buildSelectOther(`input-mat-diameter${i}`, `input-mat-diameter${i}-new`, availExtraDias, targetExtraDia);
+      }
+    }
+  }
+
+  // 9. Thickness (Port 1)
   const thkOpts = availThks;
   const targetThk = getFieldValue('thickness', curThk, availThks, 'input-mat-thickness');
-  if (targetThk && targetThk !== '__other__' && !thkOpts.includes(targetThk)) thkOpts.unshift(targetThk);
+  const isThkOther = document.getElementById('input-mat-thickness') && document.getElementById('input-mat-thickness').value === '__other__';
+  if (targetThk && targetThk !== '__other__' && !isThkOther && !thkOpts.includes(targetThk)) thkOpts.unshift(targetThk);
   if (triggerField !== 'thickness') {
     buildSelectOther('input-mat-thickness', 'input-mat-thickness-new', thkOpts, targetThk);
+  }
+
+  // 9b. Extra Thicknesses (Port 2 .. thkCount)
+  for (let i = 2; i <= thkCount; i++) {
+    const sel = document.getElementById(`input-mat-thickness${i}`);
+    if (sel) {
+      const portDn = curExtraDns[i];
+      const portDia = curExtraDias[i];
+      let pmExtraThks = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : pool).map(m => m[`thickness${i}`] || (portDn && (m[`dimension${i}`] || m[`dn${i}`]) === portDn ? m.thickness : ''));
+      let gmExtraThks = gmFiltered.map(g => g[`thickness${i}`] || (portDn && (g[`dimension${i}`] || g[`dn${i}`]) === portDn ? g.thickness : ''));
+      if (!isHeatSelected && portDn && portDn !== '__other__' && !pmExtraThks.filter(Boolean).length && !gmExtraThks.filter(Boolean).length) {
+        gmExtraThks = globalMats.filter(g => (g.dn1 || g.dimension) === portDn && (!portDia || portDia === '__other__' || g.diameter === portDia)).map(g => g.thickness);
+      }
+      const availExtraThks = isHeatSelected ? [...new Set(pmExtraThks.filter(Boolean))] : makeOpts(pmExtraThks, gmExtraThks);
+      let targetExtraThk = getFieldValue(`thickness${i}`, curExtraThks[i], availExtraThks, `input-mat-thickness${i}`);
+      const isExtraThkOther = sel.value === '__other__';
+      if (targetExtraThk && targetExtraThk !== '__other__' && !isExtraThkOther && !availExtraThks.includes(targetExtraThk)) availExtraThks.unshift(targetExtraThk);
+      if (triggerField !== `thickness${i}`) {
+        buildSelectOther(`input-mat-thickness${i}`, `input-mat-thickness${i}-new`, availExtraThks, targetExtraThk);
+      }
+    }
   }
 
   // 10. Surface
   const surfOpts = availSurfs;
   const targetSurf = getFieldValue('surface', curSurf, availSurfs, 'input-mat-surface');
-  if (targetSurf && targetSurf !== '__other__' && !surfOpts.includes(targetSurf)) surfOpts.unshift(targetSurf);
+  const isSurfOther = document.getElementById('input-mat-surface') && document.getElementById('input-mat-surface').value === '__other__';
+  if (targetSurf && targetSurf !== '__other__' && !isSurfOther && !surfOpts.includes(targetSurf)) surfOpts.unshift(targetSurf);
   if (triggerField !== 'surface') {
     buildSelectOther('input-mat-surface', 'input-mat-surface-new', surfOpts, targetSurf);
   }
@@ -2716,14 +2912,47 @@ function _refreshPipelineMatCombinations(triggerField = null) {
       _matAttachedWazPdfUrl = '';
       _renderMatWazDoc();
     }
-  } else if (!isTriggerOther) {
+  } else if (!isTriggerOther || isUnknownHeat) {
+    /* A brand new heat has no WAZ certificate of its own - drop the one that belonged to the
+       previous heat rather than carrying it over to a different material. */
     _matAttachedWazPdfUrl = '';
     _renderMatWazDoc();
   }
 
+  /* Count badges must reflect PROJECT materials only, never global/static catalog values.
+     Build those counts here, where the filtered project scope is already known. */
+  const badgeScope = isHeatSelected
+    ? (baseHeatCandidates.length ? baseHeatCandidates : candidates)
+    : scopedPms.filter(descMatches);
+  const countOf = (getter) => [...new Set(badgeScope.map(getter).filter(Boolean))].length;
+  _pipelineMatPmCounts = {
+    'input-mat-piece': [...new Set(projMats.map(pm => pm.category || pm.piece).filter(Boolean))].length,
+    'input-mat-desc': countOf(pm => pm.itemDescription || pm.description),
+    'input-mat-heat': availHeatsCount,
+    'input-mat-certificate': countOf(pm => pm.certificate),
+    'input-mat-dimension': availDnsCount,
+    'input-mat-dien': countOf(pm => pm.dienNo || pm.dien),
+    'input-mat-code': countOf(pm => pm.materialCode || pm.code),
+    'input-mat-diameter': countOf(pm => pm.diameter),
+    'input-mat-thickness': countOf(pm => pm.thickness),
+    'input-mat-surface': countOf(pm => pm.surface),
+  };
+  for (let i = 2; i <= dnCount; i++) {
+    _pipelineMatPmCounts[`input-mat-dimension${i}`] = [...new Set(dnScopePms.map(pm => _dnOf(pm, i)).filter(Boolean))].length;
+  }
+  for (let i = 2; i <= diaCount; i++) _pipelineMatPmCounts[`input-mat-diameter${i}`] = countOf(pm => pm[`diameter${i}`]);
+  for (let i = 2; i <= thkCount; i++) _pipelineMatPmCounts[`input-mat-thickness${i}`] = countOf(pm => pm[`thickness${i}`]);
+  /* A hand-typed heat that is not in this project means we are on the pure global cascade,
+     so there is nothing meaningful to count - hide every badge. */
+  _pipelineMatBadgesOff = isUnknownHeat;
+
   updateConnHint();
   _updateAllPipelineMatBadges();
 }
+
+/* Project-material option counts for the badges, filled in by _refreshPipelineMatCombinations. */
+let _pipelineMatPmCounts = {};
+let _pipelineMatBadgesOff = false;
 
 function _updateAllPipelineMatBadges() {
   const projMats = DB.projectMaterials || [];
@@ -2734,8 +2963,18 @@ function _updateAllPipelineMatBadges() {
   const dn1 = readSelectOther('input-mat-dimension', 'input-mat-dimension-new');
   const dien = readSelectOther('input-mat-dien', 'input-mat-dien-new');
   const code = readSelectOther('input-mat-code', 'input-mat-code-new');
+  const diaCount = requiredDiameterCount(piece);
+  const thkCount = requiredThicknessCount(piece);
   const dia = readSelectOther('input-mat-diameter', 'input-mat-diameter-new');
+  const extraDias = {};
+  for (let i = 2; i <= diaCount; i++) {
+    extraDias[i] = readSelectOther(`input-mat-diameter${i}`, `input-mat-diameter${i}-new`);
+  }
   const thk = readSelectOther('input-mat-thickness', 'input-mat-thickness-new');
+  const extraThks = {};
+  for (let i = 2; i <= thkCount; i++) {
+    extraThks[i] = readSelectOther(`input-mat-thickness${i}`, `input-mat-thickness${i}-new`);
+  }
   const surf = readSelectOther('input-mat-surface', 'input-mat-surface-new');
 
   const dnCount = requiredDns(piece);
@@ -2746,7 +2985,16 @@ function _updateAllPipelineMatBadges() {
     if (extraDns[i]) anyExtraDn = true;
   }
 
-  const isAnySelected = Boolean(editingMaterialId !== null || piece || desc || heat || cert || dn1 || dien || code || dia || thk || surf || anyExtraDn);
+  let anyExtraDia = false;
+  for (let i = 2; i <= diaCount; i++) {
+    if (extraDias[i]) anyExtraDia = true;
+  }
+  let anyExtraThk = false;
+  for (let i = 2; i <= thkCount; i++) {
+    if (extraThks[i]) anyExtraThk = true;
+  }
+
+  const isAnySelected = Boolean(editingMaterialId !== null || piece || desc || heat || cert || dn1 || dien || code || dia || thk || surf || anyExtraDn || anyExtraDia || anyExtraThk);
 
   // Check if current category / selection exists in Project Materials
   const hasPm = Boolean(
@@ -2755,12 +3003,25 @@ function _updateAllPipelineMatBadges() {
       : (heat && heat !== '__other__' ? projMats.some(pm => (pm.heatNo || '').toLowerCase() === heat.toLowerCase()) : false)
   );
 
-  const shouldShowBadges = isAnySelected && hasPm;
+  /* A heat that is not on any project material of this category means we are on the pure
+     global cascade - there is nothing from the project to count, so hide every badge. */
+  const heatIsUnknown = Boolean(
+    heat && heat !== '__other__' &&
+    !projMats.some(pm =>
+      (!piece || (pm.category || pm.piece || '').toLowerCase() === piece.toLowerCase()) &&
+      (pm.heatNo || '').trim().toLowerCase() === heat.trim().toLowerCase()
+    )
+  );
+  const shouldShowBadges = isAnySelected && hasPm && !_pipelineMatBadgesOff && !heatIsUnknown;
 
+  /* Count only values that exist on this project's materials. Before a heat is picked the
+     dropdown may also offer global/static values, but those must not be counted. */
   function getOptsCount(selId) {
     const sel = document.getElementById(selId);
     if (!sel) return 0;
-    return [...sel.options].filter(o => o.value && o.value !== '__other__').length;
+    const optCount = [...sel.options].filter(o => o.value && o.value !== '__other__').length;
+    const pmCount = _pipelineMatPmCounts[selId];
+    return pmCount === undefined ? optCount : Math.min(pmCount, optCount);
   }
 
   updateDropdownCountBadge('input-mat-piece', getOptsCount('input-mat-piece'), Boolean(piece), shouldShowBadges);
@@ -2775,7 +3036,15 @@ function _updateAllPipelineMatBadges() {
   updateDropdownCountBadge('input-mat-dien', getOptsCount('input-mat-dien'), Boolean(dien), shouldShowBadges);
   updateDropdownCountBadge('input-mat-code', getOptsCount('input-mat-code'), Boolean(code), shouldShowBadges);
   updateDropdownCountBadge('input-mat-diameter', getOptsCount('input-mat-diameter'), Boolean(dia), shouldShowBadges);
+  for (let i = 2; i <= diaCount; i++) {
+    const extraVal = extraDias[i];
+    updateDropdownCountBadge(`input-mat-diameter${i}`, getOptsCount(`input-mat-diameter${i}`), Boolean(extraVal), shouldShowBadges);
+  }
   updateDropdownCountBadge('input-mat-thickness', getOptsCount('input-mat-thickness'), Boolean(thk), shouldShowBadges);
+  for (let i = 2; i <= thkCount; i++) {
+    const extraVal = extraThks[i];
+    updateDropdownCountBadge(`input-mat-thickness${i}`, getOptsCount(`input-mat-thickness${i}`), Boolean(extraVal), shouldShowBadges);
+  }
   updateDropdownCountBadge('input-mat-surface', getOptsCount('input-mat-surface'), Boolean(surf), shouldShowBadges);
 }
 
@@ -2836,10 +3105,74 @@ function onExtraDnChange(i) {
   _refreshPipelineMatCombinations(`dn${i}`);
 }
 function toggleDiameterThicknessFields(piece) {
-  const diaField = document.getElementById('diameter-field');
-  const thkField = document.getElementById('thickness-field');
-  if (diaField) diaField.style.display = hasDiameter(piece) ? '' : 'none';
-  if (thkField) thkField.style.display = hasThickness(piece) ? '' : 'none';
+  const diaCount = requiredDiameterCount(piece);
+  const thkCount = requiredThicknessCount(piece);
+
+  const diaContainer = document.getElementById('dia-fields-container');
+  if (diaContainer) {
+    if (diaCount <= 0) {
+      diaContainer.style.display = 'none';
+    } else {
+      diaContainer.style.display = '';
+      const dia1Field = document.getElementById('diameter-field');
+      const dia1Label = document.getElementById('dia1-label');
+      if (dia1Field) dia1Field.style.display = '';
+      if (dia1Label) dia1Label.innerHTML = (diaCount > 1 ? (t('outer_diameter', 'Outer diameter') + ' 1') : t('outer_diameter', 'Outer diameter')) + ' <span class="req">*</span>';
+
+      for (let i = diaCount + 1; i <= 6; i++) {
+        const el = document.getElementById(`dia${i}-field`);
+        if (el) el.remove();
+      }
+      for (let i = 2; i <= diaCount; i++) {
+        let div = document.getElementById(`dia${i}-field`);
+        if (!div) {
+          div = document.createElement('div');
+          div.className = 'field dia-extra-field';
+          div.id = `dia${i}-field`;
+          div.innerHTML = `<span class="lbl">${t('outer_diameter', 'Outer diameter')} ${i} <span class="req">*</span></span><select id="input-mat-diameter${i}" onchange="onExtraDiameterChange(${i})"></select><input type="text" id="input-mat-diameter${i}-new" class="select-other-text" style="display:none" placeholder="Type diameter ${i}…">`;
+          diaContainer.appendChild(div);
+          buildSelectOther(`input-mat-diameter${i}`, `input-mat-diameter${i}-new`, [], '');
+        }
+      }
+    }
+  }
+
+  const thkContainer = document.getElementById('thk-fields-container');
+  if (thkContainer) {
+    if (thkCount <= 0) {
+      thkContainer.style.display = 'none';
+    } else {
+      thkContainer.style.display = '';
+      const thk1Field = document.getElementById('thickness-field');
+      const thk1Label = document.getElementById('thk1-label');
+      if (thk1Field) thk1Field.style.display = '';
+      if (thk1Label) thk1Label.innerHTML = (thkCount > 1 ? (t('thickness', 'Thickness') + ' 1') : t('thickness', 'Thickness')) + ' <span class="req">*</span>';
+
+      for (let i = thkCount + 1; i <= 6; i++) {
+        const el = document.getElementById(`thk${i}-field`);
+        if (el) el.remove();
+      }
+      for (let i = 2; i <= thkCount; i++) {
+        let div = document.getElementById(`thk${i}-field`);
+        if (!div) {
+          div = document.createElement('div');
+          div.className = 'field thk-extra-field';
+          div.id = `thk${i}-field`;
+          div.innerHTML = `<span class="lbl">${t('thickness', 'Thickness')} ${i} <span class="req">*</span></span><select id="input-mat-thickness${i}" onchange="onExtraThicknessChange(${i})"></select><input type="text" id="input-mat-thickness${i}-new" class="select-other-text" style="display:none" placeholder="Type thickness ${i}…">`;
+          thkContainer.appendChild(div);
+          buildSelectOther(`input-mat-thickness${i}`, `input-mat-thickness${i}-new`, [], '');
+        }
+      }
+    }
+  }
+}
+function onExtraDiameterChange(i) {
+  toggleSelectOther(`input-mat-diameter${i}`, `input-mat-diameter${i}-new`);
+  _refreshPipelineMatCombinations(`diameter${i}`);
+}
+function onExtraThicknessChange(i) {
+  toggleSelectOther(`input-mat-thickness${i}`, `input-mat-thickness${i}-new`);
+  _refreshPipelineMatCombinations(`thickness${i}`);
 }
 function toggleWireFields(piece) {
   const isWire = (piece || '').toLowerCase() === 'welding wire';
@@ -2915,7 +3248,9 @@ function _renderMatWazDoc() {
     </div>`;
   } else {
     fileEl.style.display = '';
-    docDiv.innerHTML = _matWazDocRemoved ? `<div class="muted small" style="margin-bottom:6px;">${t('doc_removed_upload_new', 'Document removed — select a file to upload a new one:')}</div>` : '';
+    docDiv.innerHTML = _matWazDocRemoved
+      ? `<div class="muted small" style="margin-bottom:6px;">${t('doc_removed_upload_new', 'Document removed — select a file to upload a new one:')}</div>`
+      : `<div class="waz-doc-none">${escapeHtml(t('waz_no_document_yet', 'No WAZ document uploaded yet.'))}</div>`;
   }
 }
 function _removeMatCurrentWazDoc() {
@@ -3001,8 +3336,18 @@ function openMaterialModal(id = null, returnToWeld = false) {
   document.getElementById('dn-fields-container').querySelectorAll('.dn-extra-field').forEach(el => el.remove());
   document.getElementById('dn1-label').innerHTML = 'DN <span class="req">*</span>';
   document.getElementById('dn-fields-container').style.display = '';
-  document.getElementById('diameter-field').style.display = '';
-  document.getElementById('thickness-field').style.display = '';
+  const diaContainer = document.getElementById('dia-fields-container');
+  if (diaContainer) {
+    diaContainer.querySelectorAll('.dia-extra-field').forEach(el => el.remove());
+    document.getElementById('dia1-label').innerHTML = (t('outer_diameter', 'Outer diameter')) + ' <span class="req">*</span>';
+    diaContainer.style.display = '';
+  }
+  const thkContainer = document.getElementById('thk-fields-container');
+  if (thkContainer) {
+    thkContainer.querySelectorAll('.thk-extra-field').forEach(el => el.remove());
+    document.getElementById('thk1-label').innerHTML = (t('thickness', 'Thickness')) + ' <span class="req">*</span>';
+    thkContainer.style.display = '';
+  }
   if (editingMaterialId !== null) {
     const m = getMaterial(editingMaterialId); document.getElementById('modal-material-title').textContent = t('edit_material', 'Edit material');
     _prefillDn = ''; _prefillCode = ''; _prefillAllDns = [];
@@ -3038,6 +3383,18 @@ function openMaterialModal(id = null, returnToWeld = false) {
       const savedVal = m[`dimension${i}`] || '';
       const sel = document.getElementById(`input-mat-dimension${i}`);
       if (sel) buildSelectOther(`input-mat-dimension${i}`, `input-mat-dimension${i}-new`, DIMENSION_OPTIONS, savedVal);
+    }
+    const diaCount = requiredDiameterCount(m.piece);
+    for (let i = 2; i <= diaCount; i++) {
+      const savedVal = m[`diameter${i}`] || '';
+      const sel = document.getElementById(`input-mat-diameter${i}`);
+      if (sel) buildSelectOther(`input-mat-diameter${i}`, `input-mat-diameter${i}-new`, allDiameters, savedVal);
+    }
+    const thkCount = requiredThicknessCount(m.piece);
+    for (let i = 2; i <= thkCount; i++) {
+      const savedVal = m[`thickness${i}`] || '';
+      const sel = document.getElementById(`input-mat-thickness${i}`);
+      if (sel) buildSelectOther(`input-mat-thickness${i}`, `input-mat-thickness${i}-new`, allThicknesses, savedVal);
     }
     buildSelectOther('input-mat-dien', 'input-mat-dien-new', allDiens, m.dienNo || '');
     buildSelectOther('input-mat-code', 'input-mat-code-new', allCodes, m.materialCode);
@@ -4264,9 +4621,13 @@ function renderMaterialsList() {
   const isWire = m => (m.piece || m.category || '').toLowerCase() === 'welding wire';
   const rows = allRows.filter(m => !isWire(m));
   const wireRows = allRows.filter(m => isWire(m));
-  /* find the max number of DN fields used by any material */
-  let maxDn = 1;
-  rows.forEach(m => { for (let i = 2; i <= 6; i++) { if (m[`dimension${i}`]) maxDn = Math.max(maxDn, i); } });
+  /* find the max number of DN, Diameter, Thickness fields used by any material */
+  let maxDn = 1, maxDia = 1, maxThk = 1;
+  rows.forEach(m => {
+    for (let i = 2; i <= 6; i++) { if (m[`dimension${i}`]) maxDn = Math.max(maxDn, i); }
+    for (let i = 2; i <= 3; i++) { if (m[`diameter${i}`]) maxDia = Math.max(maxDia, i); }
+    for (let i = 2; i <= 3; i++) { if (m[`thickness${i}`]) maxThk = Math.max(maxThk, i); }
+  });
   tbody.innerHTML = rows.length ? rows.map(m => {
     const flags = [m.startOfPlumbing ? 'start' : '', m.endOfPlumbing ? 'end' : ''].filter(Boolean).join(' · ');
     const hasErr = materialConnError(m, rows);
@@ -4283,28 +4644,40 @@ function renderMaterialsList() {
     for (let i = 2; i <= maxDn; i++) {
       extraDnCells += `<td class="col-mono">${m[`dimension${i}`] ? escapeHtml(m[`dimension${i}`]) : '<span class="muted">—</span>'}</td>`;
     }
+    let extraDiaCells = '';
+    for (let i = 2; i <= maxDia; i++) {
+      extraDiaCells += `<td class="col-mono">${m[`diameter${i}`] ? fmtDia(m[`diameter${i}`]) : '<span class="muted">—</span>'}</td>`;
+    }
+    let extraThkCells = '';
+    for (let i = 2; i <= maxThk; i++) {
+      extraThkCells += `<td class="col-mono">${escapeHtml(m[`thickness${i}`]) || '<span class="muted">—</span>'}</td>`;
+    }
     return `<tr${hasErr ? ' class="row-error"' : ''} data-mat-id="${m.id}" ${canDrag ? 'draggable="true" ondragstart="onMatDragStart(event,' + m.id + ')"' : ''} ondragover="onMatDragOver(event)" ondrop="onMatDrop(event,${m.id})">
       <td class="col-mono">${canDrag ? '<span class="drag-handle" title="Drag to reorder">⠿</span> ' : ''}${posLetter(m.position)}${flags ? `<span class="person-sub">${flags}</span>` : ''}</td>
       <td>${escapeHtml(piece)}</td>
       <td><a class="cell-link" href="material-detail.html?id=${m.id}">${escapeHtml(m.itemDescription)}</a></td>
       <td class="col-mono${dnWarn ? ' dn-warn' : ''}">${escapeHtml(m.dimension)}</td>${extraDnCells}
-      <td class="col-mono">${m.diameter ? fmtDia(m.diameter) : '<span class="muted">—</span>'}</td>
-      <td class="col-mono">${escapeHtml(m.thickness) || '<span class="muted">—</span>'}</td>
+      <td class="col-mono">${m.diameter ? fmtDia(m.diameter) : '<span class="muted">—</span>'}</td>${extraDiaCells}
+      <td class="col-mono">${escapeHtml(m.thickness) || '<span class="muted">—</span>'}</td>${extraThkCells}
       <td class="col-mono">${escapeHtml(m.dienNo) || '<span class="muted">—</span>'}</td>
       <td class="col-mono">${escapeHtml(m.surface) || '<span class="muted">—</span>'}</td>
       <td class="col-mono">${escapeHtml(m.materialCode)}</td><td>${escapeHtml(m.certificate)}</td>
       <td class="col-mono">${escapeHtml(m.heatNo)}</td>
-      <td>${m.wazNo ? `<button class="doc-chip doc-weld" onclick="showWaz(${m.id})" title="View WAZ PDF">${escapeHtml(m.wazNo)}</button><button class="btn-link btn-edit-inline" onclick="openEditWazModal(${m.id})" title="Edit WAZ">✎</button>` : `<button class="btn btn-primary btn-sm" onclick="openAddWazModal(${m.id})">+</button>`}</td>
+      <td>${wazCellHtml(m)}</td>
       <td><a class="img-btn" href="material-detail.html?id=${m.id}">${t('welds', 'Welds')}</a></td>
       <td class="col-actions"><button class="btn-link" onclick="openMaterialModal(${m.id})">${t('edit', 'Edit')}</button>${archiveBtn('material', m.id)}</td>
     </tr>`;
-  }).join('') : `<tr class="empty-row"><td colspan="${14 + (maxDn - 1)}">${t('no_materials_yet', 'No project materials yet. Click "+ Add material" to add one.')}</td></tr>`;
-  /* update table header to include DN columns dynamically */
+  }).join('') : `<tr class="empty-row"><td colspan="${14 + (maxDn - 1) + (maxDia - 1) + (maxThk - 1)}">${t('no_materials_yet', 'No project materials yet. Click "+ Add material" to add one.')}</td></tr>`;
+  /* update table header to include DN, Diameter, Thickness columns dynamically */
   const thead = tbody.closest('table').querySelector('thead tr');
   if (thead) {
     let dnHeader = maxDn > 1 ? '<th>DN 1</th>' : '<th>DN</th>';
     for (let i = 2; i <= maxDn; i++) dnHeader += `<th>DN ${i}</th>`;
-    thead.innerHTML = `<th>${t('th_pos', 'Pos.')}</th><th>${t('th_category', 'Category')}</th><th>${t('th_item_description', 'Item description')}</th>${dnHeader}<th>${t('th_diameter', 'Diameter')}</th><th>${t('th_thickness', 'Thickness')}</th><th>${t('th_din_en_no', 'DIN EN No.')}</th><th>${t('th_surface', 'Surface')}</th><th>${t('th_material', 'Material')}</th><th>${t('th_certificate', 'Certificate')}</th><th>${t('th_heat_no', 'Heat No.')}</th><th>${t('th_waz_no', 'WAZ No.')}</th><th>${t('th_welds', 'Welds')}</th><th></th>`;
+    let diaHeader = maxDia > 1 ? `<th>${t('th_diameter', 'Diameter')} 1</th>` : `<th>${t('th_diameter', 'Diameter')}</th>`;
+    for (let i = 2; i <= maxDia; i++) diaHeader += `<th>${t('th_diameter', 'Diameter')} ${i}</th>`;
+    let thkHeader = maxThk > 1 ? `<th>${t('th_thickness', 'Thickness')} 1</th>` : `<th>${t('th_thickness', 'Thickness')}</th>`;
+    for (let i = 2; i <= maxThk; i++) thkHeader += `<th>${t('th_thickness', 'Thickness')} ${i}</th>`;
+    thead.innerHTML = `<th>${t('th_pos', 'Pos.')}</th><th>${t('th_category', 'Category')}</th><th>${t('th_item_description', 'Item description')}</th>${dnHeader}${diaHeader}${thkHeader}<th>${t('th_din_en_no', 'DIN EN No.')}</th><th>${t('th_surface', 'Surface')}</th><th>${t('th_material', 'Material')}</th><th>${t('th_certificate', 'Certificate')}</th><th>${t('th_heat_no', 'Heat No.')}</th><th>${t('th_waz_no', 'WAZ No.')}</th><th>${t('th_welds', 'Welds')}</th><th></th>`;
   }
   // Welding Wire table
   const wireSection = document.getElementById('welding-wire-section');
@@ -4317,7 +4690,7 @@ function renderMaterialsList() {
       <td class="col-mono">${escapeHtml(m.surface) || '<span class="muted">—</span>'}</td>
       <td>${escapeHtml(m.certificate)}</td>
       <td class="col-mono">${escapeHtml(m.heatNo)}</td>
-      <td>${m.wazNo ? `<button class="doc-chip doc-weld" onclick="showWaz(${m.id})" title="View WAZ PDF">${escapeHtml(m.wazNo)}</button><button class="btn-link btn-edit-inline" onclick="openEditWazModal(${m.id})" title="Edit WAZ">✎</button>` : `<button class="btn btn-primary btn-sm" onclick="openAddWazModal(${m.id})">+</button>`}</td>
+      <td>${wazCellHtml(m)}</td>
       <td class="col-actions"><button class="btn-link" onclick="openMaterialModal(${m.id})">${t('edit', 'Edit')}</button>${archiveBtn('material', m.id)}</td>
     </tr>`).join('')}</tbody></table></div>` : '';
   }
@@ -4710,6 +5083,23 @@ function onInlinePersonChange(weldId, role, wrapperId) {
   wrap.classList.remove('open');
   renderWeldList();
 }
+/* WAZ cell: a WAZ number with no uploaded document must look clearly different from one
+   that has its certificate, so a missing document is visible at a glance in the table. */
+function wazCellHtml(m) {
+  if (!m.wazNo) {
+    return `<button class="btn btn-primary btn-sm" onclick="openAddWazModal(${m.id})">+</button>`;
+  }
+  const hasDoc = Boolean(m.wazPdfUrl || m.wazPackageUrl);
+  const chipClass = hasDoc ? 'doc-chip doc-weld' : 'doc-chip doc-missing';
+  const chipTitle = hasDoc
+    ? t('view_document', 'View WAZ PDF')
+    : t('waz_no_document', 'No WAZ document uploaded yet - click to add one');
+  const onClick = hasDoc ? `showWaz(${m.id})` : `openEditWazModal(${m.id})`;
+  const warn = hasDoc ? '' : '<span class="doc-missing-mark" aria-hidden="true">!</span>';
+  return `<button class="${chipClass}" onclick="${onClick}" title="${escapeHtml(chipTitle)}">${warn}${escapeHtml(m.wazNo)}</button>`
+    + `<button class="btn-link btn-edit-inline" onclick="openEditWazModal(${m.id})" title="${escapeHtml(t('edit_waz', 'Edit WAZ'))}">✎</button>`;
+}
+
 function showWaz(matId) {
   const m = getMaterial(matId);
   if (!m) return;
@@ -4842,13 +5232,13 @@ function toggleWazFileVisibility() {
     docDiv.innerHTML = `<div class="waz-doc-current"><a class="doc-chip doc-iso" href="${escapeHtml(_wazProjectPdfUrl)}" target="_blank" rel="noopener" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</a> <span class="muted">(from project)</span><button type="button" class="btn-link waz-doc-remove" onclick="removeWazCurrentDoc()">Remove</button></div>`;
   } else if (!wazDocRemoved) {
     fileEl.style.display = '';
-    docDiv.innerHTML = '';
+    docDiv.innerHTML = `<div class="waz-doc-none">${escapeHtml(t('waz_no_document_yet', 'No WAZ document uploaded yet.'))}</div>`;
   } else {
     fileEl.style.display = '';
   }
 }
 function removeWazCurrentDoc() {
-  document.getElementById('waz-current-doc').innerHTML = '<span class="muted">Document removed \u2014 upload a new one.</span>';
+  document.getElementById('waz-current-doc').innerHTML = '<span class="muted">Document removed — upload a new one.</span>';
   wazDocRemoved = true;
   _wazProjectPdfUrl = '';
   document.getElementById('input-waz-file').style.display = '';
@@ -4952,12 +5342,8 @@ function confirmAddWaz() {
   const file = fileInput ? (fileInput.files[0] || null) : null;
   const errEl = document.getElementById('waz-err');
 
-  const existingWithDoc = pipelineMaterials(m.pipelineId).find(x => x.wazNo === wazNo && x.wazPdfUrl);
-  const hasExistingDoc = (existingWithDoc && !wazDocRemoved) || (_wazProjectPdfUrl && !wazDocRemoved) || (m.wazPdfUrl && !wazDocRemoved && m.wazNo === wazNo);
-
   if (!certificate) { errEl.textContent = t('cert_required', 'Certificate number is required.'); errEl.classList.add('show'); return; }
   if (!heatNo) { errEl.textContent = t('heat_required', 'Heat number is required.'); errEl.classList.add('show'); return; }
-  if (!file && !hasExistingDoc) { errEl.textContent = t('waz_file_required', 'WAZ PDF document is required.'); errEl.classList.add('show'); return; }
   errEl.classList.remove('show');
   setButtonLoading(submitBtn, true, t('saving', 'Saving…'));
 
@@ -5074,7 +5460,7 @@ function renderMaterialDetail() {
   const flags = [m.startOfPlumbing ? 'Start of plumbing' : '', m.endOfPlumbing ? 'End of plumbing' : ''].filter(Boolean).join(' · ') || '—';
   let dnInfoHtml = item('DN', escapeHtml(m.dimension), true);
   for (let i = 2; i <= 6; i++) { if (m[`dimension${i}`]) dnInfoHtml += item(`DN ${i}`, escapeHtml(m[`dimension${i}`]), true); }
-  document.getElementById('material-info').innerHTML = item('Category', escapeHtml(m.piece)) + dnInfoHtml + item('Outer diameter', m.diameter ? fmtDia(m.diameter) : '—', true) + item('Thickness', escapeHtml(m.thickness) || '—', true) + item('Material code', escapeHtml(m.materialCode), true) + item('Certificate', escapeHtml(m.certificate)) + item('Heat / melt No.', escapeHtml(m.heatNo), true) + item('WAZ No.', m.wazNo ? `<button class="doc-chip doc-weld" onclick="showWaz(${m.id})">${escapeHtml(m.wazNo)} PDF</button>` : '—') + item('Plumbing', flags);
+  document.getElementById('material-info').innerHTML = item('Category', escapeHtml(m.piece)) + dnInfoHtml + item('Outer diameter', formatMaterialDiameter(m) || '—', true) + item('Thickness', formatMaterialThickness(m) || '—', true) + item('Material code', escapeHtml(m.materialCode), true) + item('Certificate', escapeHtml(m.certificate)) + item('Heat / melt No.', escapeHtml(m.heatNo), true) + item('WAZ No.', m.wazNo ? `<button class="doc-chip doc-weld" onclick="showWaz(${m.id})">${escapeHtml(m.wazNo)} PDF</button>` : '—') + item('Plumbing', flags);
   const conns = (m.connections || []).map(cid => getMaterial(cid)).filter(Boolean);
   document.getElementById('material-connections').innerHTML = conns.length ? conns.map(c => `<a class="chip-link" href="material-detail.html?id=${c.id}">Pos ${c.position} · ${escapeHtml(c.piece)} · ${escapeHtml(c.itemDescription)}</a>`).join('') : '<span class="muted">No connections recorded.</span>';
   const mw = materialWelds(m.id); const tbody = document.getElementById('material-welds-tbody');
@@ -5170,12 +5556,16 @@ function renderMaterialUsagePage() {
   document.getElementById('mu-subtitle').textContent = subtitleParts.join(' · ');
   /* info panel */
   const item = (k, v, mono) => `<div class="info-item"><div class="k">${k}</div><div class="v ${mono ? 'mono' : ''}">${v}</div></div>`;
+  const sampleMat = matching[0] || {};
   let infoHtml = item('Category', escapeHtml(p.piece));
-  infoHtml += item('DN', escapeHtml(p.dn) || '—', true);
-  if (p.dia) infoHtml += item('Outer diameter', fmtDia(p.dia), true);
-  if (p.thk) infoHtml += item('Thickness', escapeHtml(p.thk), true);
-  if (p.dien) infoHtml += item('DIN EN No.', escapeHtml(p.dien), true);
-  infoHtml += item('Material code', escapeHtml(p.code) || '—', true);
+  const dns = [sampleMat.dimension || p.dn, sampleMat.dimension2, sampleMat.dimension3, sampleMat.dimension4, sampleMat.dimension5, sampleMat.dimension6].filter(Boolean);
+  infoHtml += item(dns.length > 1 ? 'Dimensions' : 'DN', dns.length ? dns.map(escapeHtml).join(' / ') : (escapeHtml(p.dn) || '—'), true);
+  const dias = [sampleMat.diameter || p.dia, sampleMat.diameter2, sampleMat.diameter3].filter(Boolean);
+  if (dias.length) infoHtml += item(dias.length > 1 ? 'Outer diameters' : 'Outer diameter', dias.map(fmtDia).join(' / '), true);
+  const thks = [sampleMat.thickness || p.thk, sampleMat.thickness2, sampleMat.thickness3].filter(Boolean);
+  if (thks.length) infoHtml += item(thks.length > 1 ? 'Thicknesses' : 'Thickness', thks.map(t => escapeHtml(String(t).trim())).join(' / '), true);
+  if (sampleMat.dienNo || p.dien) infoHtml += item('DIN EN No.', escapeHtml(sampleMat.dienNo || p.dien), true);
+  infoHtml += item('Material code', escapeHtml(sampleMat.materialCode || p.code) || '—', true);
   document.getElementById('mu-info').innerHTML = infoHtml;
   /* stats */
   const uniquePipelines = [...new Set(matching.map(m => m.pipelineId))];
@@ -5759,7 +6149,7 @@ function clearMaterialsFilters() {
   renderMaterialsPage();
 }
 function matSpecKey(m) {
-  let k = `${m.piece || ''}|${m.itemDescription || m.piece || ''}|${m.dimension || ''}|${m.dienNo || ''}|${m.diameter || ''}|${m.thickness || ''}|${m.surface || ''}|${m.materialCode || ''}`;
+  let k = `${m.piece || ''}|${m.itemDescription || m.piece || ''}|${m.dimension || ''}|${m.dienNo || ''}|${m.diameter || ''}|${m.diameter2 || ''}|${m.diameter3 || ''}|${m.thickness || ''}|${m.thickness2 || ''}|${m.thickness3 || ''}|${m.surface || ''}|${m.materialCode || ''}`;
   for (let i = 2; i <= 6; i++) {
     k += `|${m['dimension' + i] || m['dn' + i] || ''}`;
   }
@@ -5795,7 +6185,11 @@ function renderMaterialsPage() {
         dimension6: m.dimension6 || m.dn6 || '',
         dienNo: m.dienNo || '',
         diameter: m.diameter || '',
+        diameter2: m.diameter2 || '',
+        diameter3: m.diameter3 || '',
         thickness: m.thickness || '',
+        thickness2: m.thickness2 || '',
+        thickness3: m.thickness3 || '',
         surface: m.surface || '',
         materialCode: m.materialCode || '',
         allIds: [m.id],
@@ -5840,15 +6234,24 @@ function renderMaterialsPage() {
     tile(totalUsages, t('total_used', 'Total used'), 't-neutral') +
     tile(totalHeatSet.size, t('heat_numbers', 'Heat numbers'), 't-success');
 
-  // 5. Max DN for multi-DN pieces
-  let maxDn = 1;
-  filteredGroups.forEach(g => { for (let i = 2; i <= 6; i++) { if (g[`dimension${i}`]) maxDn = Math.max(maxDn, i); } });
+  // 5. Max DN, Diameter, Thickness for multi-port pieces
+  // On the global materials page, always show at least 2 columns for Diameter & Thickness
+  let maxDn = 1, maxDia = 2, maxThk = 2;
+  filteredGroups.forEach(g => {
+    for (let i = 2; i <= 6; i++) { if (g[`dimension${i}`]) maxDn = Math.max(maxDn, i); }
+    for (let i = 2; i <= 3; i++) { if (g[`diameter${i}`]) maxDia = Math.max(maxDia, i); }
+    for (let i = 2; i <= 3; i++) { if (g[`thickness${i}`]) maxThk = Math.max(maxThk, i); }
+  });
 
   // 6. Render table rows
   const tbody = document.getElementById('materials-page-tbody');
   tbody.innerHTML = filteredGroups.length ? filteredGroups.map((g, idx) => {
     let extraDnCells = '';
     for (let i = 2; i <= maxDn; i++) extraDnCells += `<td class="col-mono">${g[`dimension${i}`] ? escapeHtml(g[`dimension${i}`]) : '<span class="muted">—</span>'}</td>`;
+    let extraDiaCells = '';
+    for (let i = 2; i <= maxDia; i++) extraDiaCells += `<td class="col-mono">${g[`diameter${i}`] ? fmtDia(g[`diameter${i}`]) : '<span class="muted">—</span>'}</td>`;
+    let extraThkCells = '';
+    for (let i = 2; i <= maxThk; i++) extraThkCells += `<td class="col-mono">${escapeHtml(g[`thickness${i}`]) || '<span class="muted">—</span>'}</td>`;
 
     let heatChips = '<span class="muted">—</span>';
     if (g.heatEntries.length) {
@@ -5875,14 +6278,14 @@ function renderMaterialsPage() {
       <td class="td-mat-desc"><a class="cell-link text-truncate-desc" href="material-usage.html?piece=${encodeURIComponent(g.piece)}&desc=${encodeURIComponent(g.itemDescription)}&dn=${encodeURIComponent(g.dimension)}&dien=${encodeURIComponent(g.dienNo || '')}&dia=${encodeURIComponent(g.diameter || '')}&thk=${encodeURIComponent(g.thickness || '')}&code=${encodeURIComponent(g.materialCode)}" title="${escapeHtml(g.itemDescription)}">${escapeHtml(g.itemDescription)}</a></td>
       <td class="col-mono">${escapeHtml(g.dimension)}</td>${extraDnCells}
       <td class="col-mono">${escapeHtml(g.dienNo || '')}</td>
-      <td class="col-mono">${g.diameter ? fmtDia(g.diameter) : ''}</td>
-      <td class="col-mono">${escapeHtml(g.thickness || '')}</td>
+      <td class="col-mono">${g.diameter ? fmtDia(g.diameter) : '<span class="muted">—</span>'}</td>${extraDiaCells}
+      <td class="col-mono">${escapeHtml(g.thickness) || '<span class="muted">—</span>'}</td>${extraThkCells}
       <td class="col-mono">${escapeHtml(g.surface || '')}</td>
       <td class="col-mono">${escapeHtml(g.materialCode)}</td>
       <td class="td-waz-cell">${heatChips}</td>
       <td class="col-actions"><button class="btn-link" onclick="openMaterialsPageEdit(${g.id})">${t('edit', 'Edit')}</button></td>
     </tr>`;
-  }).join('') : `<tr class="empty-row"><td colspan="${10 + (maxDn - 1)}">${t('no_materials_match', 'No materials match these filters.')}</td></tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="${10 + (maxDn - 1) + (maxDia - 1) + (maxThk - 1)}">${t('no_materials_match', 'No materials match these filters.')}</td></tr>`;
 
   // 7. Update column filter headers
   const allPieces = [...new Set(allGroups.map(g => g.piece).filter(Boolean))].sort();
@@ -5900,8 +6303,10 @@ function renderMaterialsPage() {
     hdr += colFilterTh(maxDn > 1 ? 'DN 1' : 'DN', 'dn', allDnOpts, matFilters.dn);
     for (let i = 2; i <= maxDn; i++) hdr += `<th>DN ${i}</th>`;
     hdr += colFilterTh(t('th_din_en_no', 'DIN EN No.'), 'dien', allDienOpts, matFilters.dien);
-    hdr += colFilterTh(t('th_diameter', 'Diameter'), 'diameter', allDiaOpts, matFilters.diameter);
-    hdr += colFilterTh(t('th_thickness', 'Thickness'), 'thickness', allThkOpts, matFilters.thickness);
+    hdr += colFilterTh(maxDia > 1 ? `${t('th_diameter', 'Diameter')} 1` : t('th_diameter', 'Diameter'), 'diameter', allDiaOpts, matFilters.diameter);
+    for (let i = 2; i <= maxDia; i++) hdr += `<th>${t('th_diameter', 'Diameter')} ${i}</th>`;
+    hdr += colFilterTh(maxThk > 1 ? `${t('th_thickness', 'Thickness')} 1` : t('th_thickness', 'Thickness'), 'thickness', allThkOpts, matFilters.thickness);
+    for (let i = 2; i <= maxThk; i++) hdr += `<th>${t('th_thickness', 'Thickness')} ${i}</th>`;
     hdr += `<th>${t('th_surface', 'Surface')}</th>`;
     hdr += colFilterTh(t('th_material', 'Material'), 'code', allCodeOpts, matFilters.code);
     hdr += colFilterTh(t('th_heat_no', 'Heat No.'), 'heat', allHeatOpts, matFilters.heat);
@@ -5918,7 +6323,10 @@ function openMaterialsPageEdit(id) {
   /* Save original values to find matching materials later */
   _mpOriginal = {
     piece: m.piece, itemDescription: m.itemDescription, dimension: m.dimension,
-    dienNo: m.dienNo || '', materialCode: m.materialCode, diameter: m.diameter || '', thickness: m.thickness || '', surface: m.surface || ''
+    dienNo: m.dienNo || '', materialCode: m.materialCode, diameter: m.diameter || '',
+    diameter2: m.diameter2 || '', diameter3: m.diameter3 || '',
+    thickness: m.thickness || '', thickness2: m.thickness2 || '', thickness3: m.thickness3 || '',
+    surface: m.surface || ''
   };
   for (let i = 2; i <= 6; i++) _mpOriginal[`dimension${i}`] = m[`dimension${i}`] || '';
   const src = matSource();
@@ -5927,8 +6335,8 @@ function openMaterialsPageEdit(id) {
   const allDns = [...new Set(src.map(i => i.dimension).filter(Boolean))];
   const allDiens = [...new Set(src.map(i => i.dien).filter(Boolean))];
   const allCodes = [...new Set(src.map(i => i.code).filter(Boolean))];
-  const allDiameters = [...new Set(src.map(i => i.diameter).filter(Boolean))];
-  const allThicknesses = [...new Set(src.map(i => i.thickness).filter(Boolean))];
+  const allDiameters = [...new Set(src.flatMap(i => [i.diameter, i.diameter2, i.diameter3]).filter(Boolean))];
+  const allThicknesses = [...new Set(src.flatMap(i => [i.thickness, i.thickness2, i.thickness3]).filter(Boolean))];
   /* populate dropdowns */
   document.getElementById('mp-piece').innerHTML = allPieces.map(p => `<option value="${escapeHtml(p)}" ${p === m.piece ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('');
   buildSelectOther('mp-desc', 'mp-desc-new', allDescs, m.itemDescription);
@@ -5939,9 +6347,7 @@ function openMaterialsPageEdit(id) {
   buildSelectOther('mp-thickness', 'mp-thickness-new', allThicknesses, m.thickness || '');
   const allSurfaces = [...new Set(materials().map(x => x.surface).filter(Boolean))];
   buildSelectOther('mp-surface', 'mp-surface-new', allSurfaces, m.surface || '');
-  /* show/hide diameter/thickness based on category */
-  document.getElementById('mp-diameter-field').style.display = hasDiameter(m.piece) ? '' : 'none';
-  document.getElementById('mp-thickness-field').style.display = hasThickness(m.piece) ? '' : 'none';
+
   /* DN fields */
   const dnCount = requiredDns(m.piece);
   const container = document.getElementById('mp-dn-container');
@@ -5955,12 +6361,43 @@ function openMaterialsPageEdit(id) {
     container.appendChild(div);
     buildSelectOther(`mp-dimension${i}`, `mp-dimension${i}-new`, DIMENSION_OPTIONS, m[`dimension${i}`] || '');
   }
+
+  /* Diameter fields */
+  const diaCount = requiredDiameterCount(m.piece);
+  const diaContainer = document.getElementById('mp-dia-container');
+  if (diaContainer) {
+    diaContainer.querySelectorAll('.dia-extra-field').forEach(el => el.remove());
+    diaContainer.style.display = diaCount > 0 ? '' : 'none';
+    document.getElementById('mp-dia1-label').innerHTML = (diaCount > 1 ? (t('outer_diameter_1', 'Outer diameter 1') || 'Outer diameter 1') : (t('outer_diameter', 'Outer diameter') || 'Outer diameter')) + ' <span class="req">*</span>';
+    for (let i = 2; i <= diaCount; i++) {
+      const div = document.createElement('div');
+      div.className = 'field dia-extra-field';
+      div.innerHTML = `<span class="lbl">${t('outer_diameter', 'Outer diameter')} ${i} <span class="req">*</span></span><select id="mp-diameter${i}" onchange="toggleSelectOther('mp-diameter${i}','mp-diameter${i}-new')"></select><input type="text" id="mp-diameter${i}-new" class="select-other-text" style="display:none" placeholder="Type diameter ${i}…">`;
+      diaContainer.appendChild(div);
+      buildSelectOther(`mp-diameter${i}`, `mp-diameter${i}-new`, allDiameters, m[`diameter${i}`] || '');
+    }
+  }
+
+  /* Thickness fields */
+  const thkCount = requiredThicknessCount(m.piece);
+  const thkContainer = document.getElementById('mp-thk-container');
+  if (thkContainer) {
+    thkContainer.querySelectorAll('.thk-extra-field').forEach(el => el.remove());
+    thkContainer.style.display = thkCount > 0 ? '' : 'none';
+    document.getElementById('mp-thk1-label').innerHTML = (thkCount > 1 ? (t('thickness_1', 'Thickness 1') || 'Thickness 1') : (t('thickness', 'Thickness') || 'Thickness')) + ' <span class="req">*</span>';
+    for (let i = 2; i <= thkCount; i++) {
+      const div = document.createElement('div');
+      div.className = 'field thk-extra-field';
+      div.innerHTML = `<span class="lbl">${t('thickness', 'Thickness')} ${i} <span class="req">*</span></span><select id="mp-thickness${i}" onchange="toggleSelectOther('mp-thickness${i}','mp-thickness${i}-new')"></select><input type="text" id="mp-thickness${i}-new" class="select-other-text" style="display:none" placeholder="Type thickness ${i}…">`;
+      thkContainer.appendChild(div);
+      buildSelectOther(`mp-thickness${i}`, `mp-thickness${i}-new`, allThicknesses, m[`thickness${i}`] || '');
+    }
+  }
+
   openModal('modal-mat-props');
 }
 function onMpCategoryChange() {
   const piece = document.getElementById('mp-piece').value;
-  document.getElementById('mp-diameter-field').style.display = hasDiameter(piece) ? '' : 'none';
-  document.getElementById('mp-thickness-field').style.display = hasThickness(piece) ? '' : 'none';
   const dnCount = requiredDns(piece);
   const container = document.getElementById('mp-dn-container');
   container.querySelectorAll('.dn-extra-field').forEach(el => el.remove());
@@ -5972,6 +6409,40 @@ function onMpCategoryChange() {
     div.innerHTML = `<span class="lbl">DN ${i} <span class="req">*</span></span><select id="mp-dimension${i}" onchange="toggleSelectOther('mp-dimension${i}','mp-dimension${i}-new')"></select><input type="text" id="mp-dimension${i}-new" class="select-other-text" style="display:none" placeholder="Type DN ${i}…">`;
     container.appendChild(div);
     buildSelectOther(`mp-dimension${i}`, `mp-dimension${i}-new`, DIMENSION_OPTIONS, '');
+  }
+
+  const src = matSource();
+  const allDiameters = [...new Set(src.flatMap(i => [i.diameter, i.diameter2, i.diameter3]).filter(Boolean))];
+  const allThicknesses = [...new Set(src.flatMap(i => [i.thickness, i.thickness2, i.thickness3]).filter(Boolean))];
+
+  const diaCount = requiredDiameterCount(piece);
+  const diaContainer = document.getElementById('mp-dia-container');
+  if (diaContainer) {
+    diaContainer.querySelectorAll('.dia-extra-field').forEach(el => el.remove());
+    diaContainer.style.display = diaCount > 0 ? '' : 'none';
+    document.getElementById('mp-dia1-label').innerHTML = (diaCount > 1 ? (t('outer_diameter_1', 'Outer diameter 1') || 'Outer diameter 1') : (t('outer_diameter', 'Outer diameter') || 'Outer diameter')) + ' <span class="req">*</span>';
+    for (let i = 2; i <= diaCount; i++) {
+      const div = document.createElement('div');
+      div.className = 'field dia-extra-field';
+      div.innerHTML = `<span class="lbl">${t('outer_diameter', 'Outer diameter')} ${i} <span class="req">*</span></span><select id="mp-diameter${i}" onchange="toggleSelectOther('mp-diameter${i}','mp-diameter${i}-new')"></select><input type="text" id="mp-diameter${i}-new" class="select-other-text" style="display:none" placeholder="Type diameter ${i}…">`;
+      diaContainer.appendChild(div);
+      buildSelectOther(`mp-diameter${i}`, `mp-diameter${i}-new`, allDiameters, '');
+    }
+  }
+
+  const thkCount = requiredThicknessCount(piece);
+  const thkContainer = document.getElementById('mp-thk-container');
+  if (thkContainer) {
+    thkContainer.querySelectorAll('.thk-extra-field').forEach(el => el.remove());
+    thkContainer.style.display = thkCount > 0 ? '' : 'none';
+    document.getElementById('mp-thk1-label').innerHTML = (thkCount > 1 ? (t('thickness_1', 'Thickness 1') || 'Thickness 1') : (t('thickness', 'Thickness') || 'Thickness')) + ' <span class="req">*</span>';
+    for (let i = 2; i <= thkCount; i++) {
+      const div = document.createElement('div');
+      div.className = 'field thk-extra-field';
+      div.innerHTML = `<span class="lbl">${t('thickness', 'Thickness')} ${i} <span class="req">*</span></span><select id="mp-thickness${i}" onchange="toggleSelectOther('mp-thickness${i}','mp-thickness${i}-new')"></select><input type="text" id="mp-thickness${i}-new" class="select-other-text" style="display:none" placeholder="Type thickness ${i}…">`;
+      thkContainer.appendChild(div);
+      buildSelectOther(`mp-thickness${i}`, `mp-thickness${i}-new`, allThicknesses, '');
+    }
   }
 }
 function onMpDescChange() { toggleSelectOther('mp-desc', 'mp-desc-new'); }
@@ -5990,8 +6461,24 @@ function saveMaterialProps(e) {
   for (let i = dnCount + 1; i <= 6; i++) m[`dimension${i}`] = '';
   m.dienNo = readSelectOther('mp-dien', 'mp-dien-new');
   m.materialCode = readSelectOther('mp-code', 'mp-code-new');
-  m.diameter = hasDiameter(m.piece) ? readSelectOther('mp-diameter', 'mp-diameter-new') : '';
-  m.thickness = hasThickness(m.piece) ? readSelectOther('mp-thickness', 'mp-thickness-new') : '';
+  const diaCount = requiredDiameterCount(m.piece);
+  m.diameter = diaCount > 0 ? readSelectOther('mp-diameter', 'mp-diameter-new') : '';
+  for (let i = 2; i <= diaCount; i++) {
+    const sel = document.getElementById(`mp-diameter${i}`);
+    const txt = document.getElementById(`mp-diameter${i}-new`);
+    if (sel && txt) m[`diameter${i}`] = readSelectOther(`mp-diameter${i}`, `mp-diameter${i}-new`);
+  }
+  for (let i = diaCount + 1; i <= 3; i++) m[`diameter${i}`] = '';
+
+  const thkCount = requiredThicknessCount(m.piece);
+  m.thickness = thkCount > 0 ? readSelectOther('mp-thickness', 'mp-thickness-new') : '';
+  for (let i = 2; i <= thkCount; i++) {
+    const sel = document.getElementById(`mp-thickness${i}`);
+    const txt = document.getElementById(`mp-thickness${i}-new`);
+    if (sel && txt) m[`thickness${i}`] = readSelectOther(`mp-thickness${i}`, `mp-thickness${i}-new`);
+  }
+  for (let i = thkCount + 1; i <= 3; i++) m[`thickness${i}`] = '';
+
   m.surface = readSelectOther('mp-surface', 'mp-surface-new');
   closeModal('modal-mat-props');
   /* Show warning before saving global material */
@@ -6016,7 +6503,11 @@ async function confirmGlobalEdit() {
       dienNo: m.dienNo,
       materialCode: m.materialCode,
       diameter: m.diameter,
+      diameter2: m.diameter2 || '',
+      diameter3: m.diameter3 || '',
       thickness: m.thickness,
+      thickness2: m.thickness2 || '',
+      thickness3: m.thickness3 || '',
       surface: m.surface || ''
     };
 
@@ -6047,7 +6538,11 @@ async function confirmGlobalEdit() {
           (mat.dienNo || '') === (_mpOriginal.dienNo || '') &&
           mat.materialCode === _mpOriginal.materialCode &&
           (mat.diameter || '') === (_mpOriginal.diameter || '') &&
+          (mat.diameter2 || '') === (_mpOriginal.diameter2 || '') &&
+          (mat.diameter3 || '') === (_mpOriginal.diameter3 || '') &&
           (mat.thickness || '') === (_mpOriginal.thickness || '') &&
+          (mat.thickness2 || '') === (_mpOriginal.thickness2 || '') &&
+          (mat.thickness3 || '') === (_mpOriginal.thickness3 || '') &&
           (mat.surface || '') === (_mpOriginal.surface || '');
         if (isMatch || (gmId && mat.globalMaterialId === gmId)) {
           mat.piece = m.piece;
@@ -6057,7 +6552,11 @@ async function confirmGlobalEdit() {
           mat.dienNo = m.dienNo;
           mat.materialCode = m.materialCode;
           mat.diameter = m.diameter;
+          mat.diameter2 = m.diameter2 || '';
+          mat.diameter3 = m.diameter3 || '';
           mat.thickness = m.thickness;
+          mat.thickness2 = m.thickness2 || '';
+          mat.thickness3 = m.thickness3 || '';
           mat.surface = m.surface;
         }
       });
@@ -6084,8 +6583,14 @@ function cancelGlobalEdit() {
   if (m && _mpOriginal) {
     m.piece = _mpOriginal.piece; m.itemDescription = _mpOriginal.itemDescription;
     m.dimension = _mpOriginal.dimension; m.dienNo = _mpOriginal.dienNo;
-    m.materialCode = _mpOriginal.materialCode; m.diameter = _mpOriginal.diameter;
-    m.thickness = _mpOriginal.thickness; m.surface = _mpOriginal.surface || '';
+    m.materialCode = _mpOriginal.materialCode;
+    m.diameter = _mpOriginal.diameter;
+    m.diameter2 = _mpOriginal.diameter2 || '';
+    m.diameter3 = _mpOriginal.diameter3 || '';
+    m.thickness = _mpOriginal.thickness;
+    m.thickness2 = _mpOriginal.thickness2 || '';
+    m.thickness3 = _mpOriginal.thickness3 || '';
+    m.surface = _mpOriginal.surface || '';
     for (let i = 2; i <= 6; i++) m[`dimension${i}`] = _mpOriginal[`dimension${i}`] || '';
   }
   closeModal('modal-apply-all'); _materialsPageEditId = null; _mpOriginal = null; renderMaterialsPage();
@@ -6165,25 +6670,33 @@ function renderProjectMaterialsTable() {
     if (pmFilters.code && (gm.materialCode || '') !== pmFilters.code) return false;
     return true;
   });
-  /* Find max DN count across all project materials */
-  let maxDn = 1;
+  /* Find max DN, Diameter, Thickness count across all project materials */
+  let maxDn = 1, maxDia = 1, maxThk = 1;
   const allGmsForDn = allMats.map(pm => (DB.globalMaterials || []).find(g => g.id === pm.globalMaterialId) || {});
-  allGmsForDn.forEach(g => { for (let i = 2; i <= 6; i++) { if (g[`dn${i}`]) maxDn = Math.max(maxDn, i); } });
+  allGmsForDn.forEach(g => {
+    for (let i = 2; i <= 6; i++) { if (g[`dn${i}`]) maxDn = Math.max(maxDn, i); }
+    for (let i = 2; i <= 3; i++) { if (g[`diameter${i}`]) maxDia = Math.max(maxDia, i); }
+    for (let i = 2; i <= 3; i++) { if (g[`thickness${i}`]) maxThk = Math.max(maxThk, i); }
+  });
 
-  const colCount = 12 + maxDn; /* #, category, desc, dn1..maxDn, diameter, thickness, dien, surface, material, cert, heat, waz, edit */
+  const colCount = 12 + (maxDn - 1) + (maxDia - 1) + (maxThk - 1); /* #, category, desc, dn1..maxDn, dia1..maxDia, thk1..maxThk, dien, surface, material, cert, heat, waz, edit */
   if (!mats.length) { tbody.innerHTML = `<tr><td colspan="${colCount}" class="empty">${allMats.length ? t('no_materials_match_filters', 'No materials match these filters.') : t('no_materials_yet', 'No project materials yet. Click "+ Add material" to add one.')}</td></tr>`; }
   else {
     tbody.innerHTML = mats.map((pm, i) => {
       const gm = (DB.globalMaterials || []).find(g => g.id === pm.globalMaterialId) || {};
       let extraDnCells = '';
       for (let d = 2; d <= maxDn; d++) extraDnCells += `<td class="col-mono">${gm[`dn${d}`] ? escapeHtml(gm[`dn${d}`]) : '<span class="muted">—</span>'}</td>`;
+      let extraDiaCells = '';
+      for (let d = 2; d <= maxDia; d++) extraDiaCells += `<td class="col-mono">${gm[`diameter${d}`] ? fmtDia(gm[`diameter${d}`]) : '<span class="muted">—</span>'}</td>`;
+      let extraThkCells = '';
+      for (let d = 2; d <= maxThk; d++) extraThkCells += `<td class="col-mono">${escapeHtml(gm[`thickness${d}`]) || '<span class="muted">—</span>'}</td>`;
       return `<tr>
       <td>${i + 1}</td>
       <td>${escapeHtml(gm.category || '')}</td>
       <td>${escapeHtml(gm.itemDescription || '')}</td>
       <td class="col-mono">${escapeHtml(gm.dn1 || '')}</td>${extraDnCells}
-      <td class="col-mono">${escapeHtml(gm.diameter || '')}</td>
-      <td class="col-mono">${escapeHtml(gm.thickness || '')}</td>
+      <td class="col-mono">${gm.diameter ? fmtDia(gm.diameter) : '<span class="muted">—</span>'}</td>${extraDiaCells}
+      <td class="col-mono">${escapeHtml(gm.thickness) || '<span class="muted">—</span>'}</td>${extraThkCells}
       <td class="col-mono">${escapeHtml(gm.dienNo || '')}</td>
       <td class="col-mono">${escapeHtml(gm.surface || '')}</td>
       <td class="col-mono">${escapeHtml(gm.materialCode || '')}</td>
@@ -6205,8 +6718,10 @@ function renderProjectMaterialsTable() {
     hdr += `<th>${t('th_item_description', 'Item description')}</th>`;
     hdr += pmfTh(maxDn > 1 ? 'DN 1' : 'DN', 'dn', opts('dn1'));
     for (let d = 2; d <= maxDn; d++) hdr += `<th>DN ${d}</th>`;
-    hdr += pmfTh(t('th_diameter', 'Diameter'), 'diameter', opts('diameter'));
-    hdr += pmfTh(t('th_thickness', 'Thickness'), 'thickness', opts('thickness'));
+    hdr += pmfTh(maxDia > 1 ? `${t('th_diameter', 'Diameter')} 1` : t('th_diameter', 'Diameter'), 'diameter', opts('diameter'));
+    for (let d = 2; d <= maxDia; d++) hdr += `<th>${t('th_diameter', 'Diameter')} ${d}</th>`;
+    hdr += pmfTh(maxThk > 1 ? `${t('th_thickness', 'Thickness')} 1` : t('th_thickness', 'Thickness'), 'thickness', opts('thickness'));
+    for (let d = 2; d <= maxThk; d++) hdr += `<th>${t('th_thickness', 'Thickness')} ${d}</th>`;
     hdr += pmfTh(t('th_din_en_no', 'DIN EN No.'), 'dien', opts('dienNo'));
     hdr += `<th>${t('th_surface', 'Surface')}</th>`;
     hdr += pmfTh(t('th_material', 'Material'), 'code', opts('materialCode'));
@@ -6228,8 +6743,10 @@ function formatMaterialSpecsStr(mat) {
     const val = mat[`dn${i}`] || mat[`dimension${i}`];
     if (val) parts.push(`DN ${i} ${val}`);
   }
-  if (mat.diameter) parts.push(mat.diameter + ' mm');
-  if (mat.thickness) parts.push(mat.thickness + ' mm');
+  const diaStr = formatMaterialDiameter(mat);
+  if (diaStr) parts.push(diaStr + ' mm');
+  const thkStr = formatMaterialThickness(mat);
+  if (thkStr) parts.push(thkStr + ' mm');
   if (mat.materialCode) parts.push(mat.materialCode);
   return parts.filter(Boolean).join(', ');
 }
@@ -6247,7 +6764,11 @@ function findDuplicateProjectMaterial(projectId, heatNo, specs, excludePmId) {
     const matchDesc = norm(gm.itemDescription || gm.category) === norm(specs.itemDescription || specs.category);
     const matchDn1 = norm(gm.dn1) === norm(specs.dn1 || specs.dimension);
     const matchDia = norm(gm.diameter) === norm(specs.diameter);
+    const matchDia2 = norm(gm.diameter2) === norm(specs.diameter2);
+    const matchDia3 = norm(gm.diameter3) === norm(specs.diameter3);
     const matchThk = norm(gm.thickness) === norm(specs.thickness);
+    const matchThk2 = norm(gm.thickness2) === norm(specs.thickness2);
+    const matchThk3 = norm(gm.thickness3) === norm(specs.thickness3);
     const matchDien = norm(gm.dienNo) === norm(specs.dienNo);
     const matchSurf = norm(gm.surface) === norm(specs.surface);
     const matchCode = norm(gm.materialCode) === norm(specs.materialCode);
@@ -6263,7 +6784,7 @@ function findDuplicateProjectMaterial(projectId, heatNo, specs, excludePmId) {
       }
     }
 
-    if (matchCat && matchDesc && matchDn1 && matchDia && matchThk && matchDien && matchSurf && matchCode && matchCert && matchExtraDns) {
+    if (matchCat && matchDesc && matchDn1 && matchDia && matchDia2 && matchDia3 && matchThk && matchThk2 && matchThk3 && matchDien && matchSurf && matchCode && matchCert && matchExtraDns) {
       return { projectMaterial: pm, globalMaterial: gm };
     }
   }
@@ -6284,8 +6805,14 @@ function findMandatoryMatchingProjectMaterials(projectId, specs, excludePmId) {
     const matchDesc = norm(gm.itemDescription || gm.category) === norm(specs.itemDescription || specs.category);
     const matchDn1 = norm(gm.dn1) === norm(specs.dn1 || specs.dimension);
     const matchCode = norm(gm.materialCode) === norm(specs.materialCode);
-    const matchDia = hasDiameter(specs.category) ? norm(gm.diameter) === norm(specs.diameter) : true;
-    const matchThk = hasThickness(specs.category) ? norm(gm.thickness) === norm(specs.thickness) : true;
+    const diaCount = requiredDiameterCount(specs.category);
+    const matchDia = diaCount > 0 ? norm(gm.diameter) === norm(specs.diameter) : true;
+    const matchDia2 = diaCount >= 2 ? norm(gm.diameter2) === norm(specs.diameter2) : true;
+    const matchDia3 = diaCount >= 3 ? norm(gm.diameter3) === norm(specs.diameter3) : true;
+    const thkCount = requiredThicknessCount(specs.category);
+    const matchThk = thkCount > 0 ? norm(gm.thickness) === norm(specs.thickness) : true;
+    const matchThk2 = thkCount >= 2 ? norm(gm.thickness2) === norm(specs.thickness2) : true;
+    const matchThk3 = thkCount >= 3 ? norm(gm.thickness3) === norm(specs.thickness3) : true;
 
     let matchExtraDns = true;
     const dnCount = requiredDns(specs.category);
@@ -6298,7 +6825,7 @@ function findMandatoryMatchingProjectMaterials(projectId, specs, excludePmId) {
       }
     }
 
-    if (matchCat && matchDesc && matchDn1 && matchDia && matchThk && matchCode && matchExtraDns) {
+    if (matchCat && matchDesc && matchDn1 && matchDia && matchDia2 && matchDia3 && matchThk && matchThk2 && matchThk3 && matchCode && matchExtraDns) {
       matches.push({ projectMaterial: pm, globalMaterial: gm });
     }
   }
@@ -6312,7 +6839,11 @@ function getMaterialDiffs(existingPm, existingGm, newSpecs) {
     { key: 'itemDescription', label: t('th_item_description', 'Item description'), exist: existingGm.itemDescription || '', cur: newSpecs.itemDescription || newSpecs.category || newSpecs.piece || '' },
     { key: 'dn1', label: t('dn', 'DN'), exist: existingGm.dn1 || existingGm.dimension || '', cur: newSpecs.dn1 || newSpecs.dimension || '' },
     { key: 'diameter', label: t('th_diameter', 'Diameter'), exist: existingGm.diameter || '', cur: newSpecs.diameter || '' },
+    { key: 'diameter2', label: (t('outer_diameter', 'Outer diameter')) + ' 2', exist: existingGm.diameter2 || '', cur: newSpecs.diameter2 || '' },
+    { key: 'diameter3', label: (t('outer_diameter', 'Outer diameter')) + ' 3', exist: existingGm.diameter3 || '', cur: newSpecs.diameter3 || '' },
     { key: 'thickness', label: t('th_thickness', 'Thickness'), exist: existingGm.thickness || '', cur: newSpecs.thickness || '' },
+    { key: 'thickness2', label: (t('thickness', 'Thickness')) + ' 2', exist: existingGm.thickness2 || '', cur: newSpecs.thickness2 || '' },
+    { key: 'thickness3', label: (t('thickness', 'Thickness')) + ' 3', exist: existingGm.thickness3 || '', cur: newSpecs.thickness3 || '' },
     { key: 'dienNo', label: t('th_din_en_no', 'DIN EN No.'), exist: existingGm.dienNo || '', cur: newSpecs.dienNo || '' },
     { key: 'surface', label: t('th_surface', 'Surface'), exist: existingGm.surface || '', cur: newSpecs.surface || '' },
     { key: 'materialCode', label: t('th_material', 'Material'), exist: existingGm.materialCode || '', cur: newSpecs.materialCode || '' },
@@ -6477,8 +7008,8 @@ function openProjectMaterialModal(editId) {
   const allDescs = [...new Set(allGm.map(g => g.itemDescription).filter(Boolean))];
   const allDiens = [...new Set(allGm.map(g => g.dienNo).filter(Boolean))];
   const allCodes = [...new Set(allGm.map(g => g.materialCode).filter(Boolean))];
-  const allDiameters = [...new Set(allGm.map(g => g.diameter).filter(Boolean))];
-  const allThicknesses = [...new Set(allGm.map(g => g.thickness).filter(Boolean))];
+  const allDiameters = [...new Set(allGm.flatMap(g => [g.diameter, g.diameter2, g.diameter3]).filter(Boolean))];
+  const allThicknesses = [...new Set(allGm.flatMap(g => [g.thickness, g.thickness2, g.thickness3]).filter(Boolean))];
 
   let modal = document.getElementById('modal-proj-material');
   if (!modal) {
@@ -6495,8 +7026,8 @@ function openProjectMaterialModal(editId) {
         <div id="pm-dn-container" style="display:contents"><div class="field" id="pm-dn1-field"><span class="lbl" id="pm-dn1-label">DN <span class="req">*</span></span><select id="pm-dn1" onchange="onPmDnChange()"></select><input type="text" id="pm-dn1-new" class="select-other-text" style="display:none" placeholder="${t('type_dn', 'Type DN…')}"></div></div>
         <div class="field"><span class="lbl">${t('material_code', 'Material code')} <span class="req">*</span></span><select id="pm-code" onchange="onPmCodeChange()"></select><input type="text" id="pm-code-new" class="select-other-text" style="display:none" placeholder="${t('type_material_code', 'Type code…')}"></div>
         <div class="field"><span class="lbl">${t('din_en_number', 'DIN EN Number')}</span><select id="pm-dien" onchange="onPmDienChange()"></select><input type="text" id="pm-dien-new" class="select-other-text" style="display:none" placeholder="${t('type_din_en', 'Type DIN EN…')}"></div>
-        <div class="field" id="pm-diameter-field"><span class="lbl">${t('outer_diameter', 'Outer diameter')} <span class="req">*</span></span><select id="pm-diameter" onchange="onPmDiameterChange()"></select><input type="text" id="pm-diameter-new" class="select-other-text" style="display:none" placeholder="${t('type_diameter', 'Type diameter…')}"></div>
-        <div class="field" id="pm-thickness-field"><span class="lbl">${t('th_thickness', 'Thickness')} <span class="req">*</span></span><select id="pm-thickness" onchange="onPmThicknessChange()"></select><input type="text" id="pm-thickness-new" class="select-other-text" style="display:none" placeholder="${t('type_thickness', 'Type thickness…')}"></div>
+        <div id="pm-dia-container" style="display:contents"><div class="field" id="pm-dia1-field"><span class="lbl" id="pm-dia1-label">${t('outer_diameter', 'Outer diameter')} <span class="req">*</span></span><select id="pm-diameter" onchange="onPmDiameterChange()"></select><input type="text" id="pm-diameter-new" class="select-other-text" style="display:none" placeholder="${t('type_diameter', 'Type diameter…')}"></div></div>
+        <div id="pm-thk-container" style="display:contents"><div class="field" id="pm-thk1-field"><span class="lbl" id="pm-thk1-label">${t('th_thickness', 'Thickness')} <span class="req">*</span></span><select id="pm-thickness" onchange="onPmThicknessChange()"></select><input type="text" id="pm-thickness-new" class="select-other-text" style="display:none" placeholder="${t('type_thickness', 'Type thickness…')}"></div></div>
         <div class="field"><span class="lbl">${t('surface', 'Surface')}</span><select id="pm-surface" onchange="onPmSurfaceChange()"></select><input type="text" id="pm-surface-new" class="select-other-text" style="display:none" placeholder="${t('type_surface', 'Type surface…')}"></div>
         <div class="field-separator wide"></div>
         <div class="field"><span class="lbl">${t('cert_no', 'Certificate number')}</span><select id="pm-certificate" onchange="onPmCertificateChange()"></select><input type="text" id="pm-certificate-new" class="select-other-text" style="display:none" placeholder="${t('type_cert_no', 'Type cert no…')}"></div>
@@ -6509,8 +7040,10 @@ function openProjectMaterialModal(editId) {
   }
   document.getElementById('modal-proj-material-title').textContent = title;
 
+  const cat = gm ? gm.category : '';
+
   /* Populate dropdowns */
-  buildSelectOther('pm-category', 'pm-category-new', [...new Set([...allPieces, ...PIECE_OPTIONS])], gm ? gm.category : '');
+  buildSelectOther('pm-category', 'pm-category-new', [...new Set([...allPieces, ...PIECE_OPTIONS])], cat);
   buildSelectOther('pm-desc', 'pm-desc-new', allDescs, gm ? gm.itemDescription : '');
   buildSelectOther('pm-dn1', 'pm-dn1-new', DIMENSION_OPTIONS, gm ? gm.dn1 : '');
   buildSelectOther('pm-dien', 'pm-dien-new', allDiens, gm ? gm.dienNo : '');
@@ -6528,7 +7061,6 @@ function openProjectMaterialModal(editId) {
   }
 
   /* DN fields */
-  const cat = gm ? gm.category : '';
   const dnCount = requiredDns(cat);
   const container = document.getElementById('pm-dn-container');
   container.querySelectorAll('.dn-extra-field').forEach(el => el.remove());
@@ -6540,12 +7072,42 @@ function openProjectMaterialModal(editId) {
     div.className = 'field dn-extra-field';
     div.innerHTML = `<span class="lbl">DN ${i} <span class="req">*</span></span><select id="pm-dn${i}" onchange="onPmExtraDnChange(${i})"></select><input type="text" id="pm-dn${i}-new" class="select-other-text" style="display:none" placeholder="${t('type_dn', 'Type DN…')}">`;
     container.appendChild(div);
-    buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, DIMENSION_OPTIONS, gm ? gm[`dn${i}`] : '');
+    buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, DIMENSION_OPTIONS, gm ? (gm[`dn${i}`] || '') : '');
   }
 
-  /* Show/hide diameter/thickness */
-  document.getElementById('pm-diameter-field').style.display = hasDiameter(cat) ? '' : 'none';
-  document.getElementById('pm-thickness-field').style.display = hasThickness(cat) ? '' : 'none';
+  /* Diameter fields */
+  const diaCount = requiredDiameterCount(cat);
+  const diaContainer = document.getElementById('pm-dia-container');
+  if (diaContainer) {
+    diaContainer.querySelectorAll('.dia-extra-field').forEach(el => el.remove());
+    diaContainer.style.display = diaCount > 0 ? 'contents' : 'none';
+    document.getElementById('pm-dia1-field').style.display = diaCount > 0 ? '' : 'none';
+    document.getElementById('pm-dia1-label').innerHTML = (diaCount > 1 ? (t('outer_diameter_1', 'Outer diameter 1') || 'Outer diameter 1') : (t('outer_diameter', 'Outer diameter') || 'Outer diameter')) + ' <span class="req">*</span>';
+    for (let i = 2; i <= diaCount; i++) {
+      const div = document.createElement('div');
+      div.className = 'field dia-extra-field';
+      div.innerHTML = `<span class="lbl">${t('outer_diameter', 'Outer diameter')} ${i} <span class="req">*</span></span><select id="pm-diameter${i}" onchange="onPmExtraDiameterChange(${i})"></select><input type="text" id="pm-diameter${i}-new" class="select-other-text" style="display:none" placeholder="${t('type_diameter', 'Type diameter…')}">`;
+      diaContainer.appendChild(div);
+      buildSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`, allDiameters, gm ? (gm[`diameter${i}`] || '') : '');
+    }
+  }
+
+  /* Thickness fields */
+  const thkCount = requiredThicknessCount(cat);
+  const thkContainer = document.getElementById('pm-thk-container');
+  if (thkContainer) {
+    thkContainer.querySelectorAll('.thk-extra-field').forEach(el => el.remove());
+    thkContainer.style.display = thkCount > 0 ? 'contents' : 'none';
+    document.getElementById('pm-thk1-field').style.display = thkCount > 0 ? '' : 'none';
+    document.getElementById('pm-thk1-label').innerHTML = (thkCount > 1 ? (t('thickness_1', 'Thickness 1') || 'Thickness 1') : (t('thickness', 'Thickness') || 'Thickness')) + ' <span class="req">*</span>';
+    for (let i = 2; i <= thkCount; i++) {
+      const div = document.createElement('div');
+      div.className = 'field thk-extra-field';
+      div.innerHTML = `<span class="lbl">${t('thickness', 'Thickness')} ${i} <span class="req">*</span></span><select id="pm-thickness${i}" onchange="onPmExtraThicknessChange(${i})"></select><input type="text" id="pm-thickness${i}-new" class="select-other-text" style="display:none" placeholder="${t('type_thickness', 'Type thickness…')}">`;
+      thkContainer.appendChild(div);
+      buildSelectOther(`pm-thickness${i}`, `pm-thickness${i}-new`, allThicknesses, gm ? (gm[`thickness${i}`] || '') : '');
+    }
+  }
 
   /* Certificate and Heat dropdowns */
   _pmAttachedWazPdfUrl = existing ? (existing.wazPdfUrl || '') : '';
@@ -6626,7 +7188,7 @@ function _refreshPmHeatAndCerts(presetExisting = null, autoFillIfSingle = false)
   const curHeat = presetExisting ? (presetExisting.heatNo || '') : readSelectOther('pm-heat', 'pm-heat-new');
 
   const isAnyFieldOther = [
-    'pm-category', 'pm-desc', 'pm-heat', 'pm-dn1', 'pm-dien', 'pm-code', 'pm-diameter', 'pm-thickness', 'pm-surface', 'pm-certificate'
+    'pm-category', 'pm-desc', 'pm-heat', 'pm-dn1', 'pm-dien', 'pm-code', 'pm-diameter', 'pm-diameter2', 'pm-diameter3', 'pm-thickness', 'pm-thickness2', 'pm-thickness3', 'pm-surface', 'pm-certificate'
   ].some(id => document.getElementById(id)?.value === '__other__') ||
   Array.from({ length: 5 }, (_, k) => document.getElementById(`pm-dn${k + 2}`)?.value === '__other__').some(Boolean);
 
@@ -6649,11 +7211,21 @@ function _refreshPmHeatAndCerts(presetExisting = null, autoFillIfSingle = false)
     const codes = [...new Set((cat ? allGm.filter(g => g.category === cat) : allGm).map(g => g.materialCode).filter(Boolean))];
     buildSelectOther('pm-code', 'pm-code-new', codes, single.materialCode || '');
 
-    const dias = [...new Set((cat ? allGm.filter(g => g.category === cat) : allGm).map(g => g.diameter).filter(Boolean))];
+    const dias = [...new Set((cat ? allGm.filter(g => g.category === cat) : allGm).flatMap(g => [g.diameter, g.diameter2, g.diameter3]).filter(Boolean))];
     buildSelectOther('pm-diameter', 'pm-diameter-new', dias, single.diameter || '');
+    const diaCount = requiredDiameterCount(cat);
+    for (let i = 2; i <= diaCount; i++) {
+      const sel = document.getElementById(`pm-diameter${i}`);
+      if (sel && sel.value !== '__other__') buildSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`, dias, single[`diameter${i}`] || '');
+    }
 
-    const thks = [...new Set((cat ? allGm.filter(g => g.category === cat) : allGm).map(g => g.thickness).filter(Boolean))];
+    const thks = [...new Set((cat ? allGm.filter(g => g.category === cat) : allGm).flatMap(g => [g.thickness, g.thickness2, g.thickness3]).filter(Boolean))];
     buildSelectOther('pm-thickness', 'pm-thickness-new', thks, single.thickness || '');
+    const thkCount = requiredThicknessCount(cat);
+    for (let i = 2; i <= thkCount; i++) {
+      const sel = document.getElementById(`pm-thickness${i}`);
+      if (sel && sel.value !== '__other__') buildSelectOther(`pm-thickness${i}`, `pm-thickness${i}-new`, thks, single[`thickness${i}`] || '');
+    }
 
     const surfs = [...new Set(allGm.map(g => g.surface).filter(Boolean))];
     buildSelectOther('pm-surface', 'pm-surface-new', surfs, single.surface || '');
@@ -6764,11 +7336,11 @@ function onPmHeatChange() {
         buildSelectOther('pm-code', 'pm-code-new', codes, hit.materialCode);
       }
       if (hit.diameter) {
-        const dias = [...new Set(allGm.map(g => g.diameter).filter(Boolean))];
+        const dias = [...new Set(allGm.flatMap(g => [g.diameter, g.diameter2, g.diameter3]).filter(Boolean))];
         buildSelectOther('pm-diameter', 'pm-diameter-new', dias, hit.diameter);
       }
       if (hit.thickness) {
-        const thks = [...new Set(allGm.map(g => g.thickness).filter(Boolean))];
+        const thks = [...new Set(allGm.flatMap(g => [g.thickness, g.thickness2, g.thickness3]).filter(Boolean))];
         buildSelectOther('pm-thickness', 'pm-thickness-new', thks, hit.thickness);
       }
       if (hit.surface) {
@@ -6811,8 +7383,45 @@ function onPmCategoryChange() {
     container.appendChild(div);
     buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, DIMENSION_OPTIONS, '');
   }
-  document.getElementById('pm-diameter-field').style.display = hasDiameter(cat) ? '' : 'none';
-  document.getElementById('pm-thickness-field').style.display = hasThickness(cat) ? '' : 'none';
+
+  const allGm = DB.globalMaterials || [];
+  const allDiameters = [...new Set(allGm.flatMap(g => [g.diameter, g.diameter2, g.diameter3]).filter(Boolean))];
+  const allThicknesses = [...new Set(allGm.flatMap(g => [g.thickness, g.thickness2, g.thickness3]).filter(Boolean))];
+
+  /* Diameter fields */
+  const diaCount = requiredDiameterCount(cat);
+  const diaContainer = document.getElementById('pm-dia-container');
+  if (diaContainer) {
+    diaContainer.querySelectorAll('.dia-extra-field').forEach(el => el.remove());
+    diaContainer.style.display = diaCount > 0 ? 'contents' : 'none';
+    document.getElementById('pm-dia1-field').style.display = diaCount > 0 ? '' : 'none';
+    document.getElementById('pm-dia1-label').innerHTML = (diaCount > 1 ? (t('outer_diameter_1', 'Outer diameter 1') || 'Outer diameter 1') : (t('outer_diameter', 'Outer diameter') || 'Outer diameter')) + ' <span class="req">*</span>';
+    for (let i = 2; i <= diaCount; i++) {
+      const div = document.createElement('div');
+      div.className = 'field dia-extra-field';
+      div.innerHTML = `<span class="lbl">${t('outer_diameter', 'Outer diameter')} ${i} <span class="req">*</span></span><select id="pm-diameter${i}" onchange="onPmExtraDiameterChange(${i})"></select><input type="text" id="pm-diameter${i}-new" class="select-other-text" style="display:none" placeholder="${t('type_diameter', 'Type diameter…')}">`;
+      diaContainer.appendChild(div);
+      buildSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`, allDiameters, '');
+    }
+  }
+
+  /* Thickness fields */
+  const thkCount = requiredThicknessCount(cat);
+  const thkContainer = document.getElementById('pm-thk-container');
+  if (thkContainer) {
+    thkContainer.querySelectorAll('.thk-extra-field').forEach(el => el.remove());
+    thkContainer.style.display = thkCount > 0 ? 'contents' : 'none';
+    document.getElementById('pm-thk1-field').style.display = thkCount > 0 ? '' : 'none';
+    document.getElementById('pm-thk1-label').innerHTML = (thkCount > 1 ? (t('thickness_1', 'Thickness 1') || 'Thickness 1') : (t('thickness', 'Thickness') || 'Thickness')) + ' <span class="req">*</span>';
+    for (let i = 2; i <= thkCount; i++) {
+      const div = document.createElement('div');
+      div.className = 'field thk-extra-field';
+      div.innerHTML = `<span class="lbl">${t('thickness', 'Thickness')} ${i} <span class="req">*</span></span><select id="pm-thickness${i}" onchange="onPmExtraThicknessChange(${i})"></select><input type="text" id="pm-thickness${i}-new" class="select-other-text" style="display:none" placeholder="${t('type_thickness', 'Type thickness…')}">`;
+      thkContainer.appendChild(div);
+      buildSelectOther(`pm-thickness${i}`, `pm-thickness${i}-new`, allThicknesses, '');
+    }
+  }
+
   /* Cascade: filter description by category */
   pmCascadeDesc();
   _refreshPmHeatAndCerts(null, true);
@@ -6906,6 +7515,7 @@ function pmCascadeDiameter() {
   const desc = readSelectOther('pm-desc', 'pm-desc-new');
   const dn = readSelectOther('pm-dn1', 'pm-dn1-new');
   const dnCount = requiredDns(cat);
+  const diaCount = requiredDiameterCount(cat);
   const allGm = DB.globalMaterials || [];
   let filtered = allGm;
   if (cat) filtered = filtered.filter(g => g.category === cat);
@@ -6921,14 +7531,30 @@ function pmCascadeDiameter() {
     const curDia = readSelectOther('pm-diameter', 'pm-diameter-new');
     buildSelectOther('pm-diameter', 'pm-diameter-new', diameters, curDia || (diameters.length === 1 ? diameters[0] : ''));
   }
+
+  for (let i = 2; i <= diaCount; i++) {
+    const sel = document.getElementById(`pm-diameter${i}`);
+    if (sel && sel.value !== '__other__') {
+      const portDn = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
+      let extraDias = [...new Set(filtered.map(g => g[`diameter${i}`]).filter(Boolean))];
+      if (!extraDias.length && portDn && portDn !== '__other__') {
+        extraDias = [...new Set(allGm.filter(g => (g.dn1 || g.dimension) === portDn).map(g => g.diameter).filter(Boolean))];
+      }
+      const curExtraDia = readSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`);
+      buildSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`, extraDias, curExtraDia || (extraDias.length === 1 ? extraDias[0] : ''));
+    }
+  }
+
   pmCascadeThickness();
 }
 function onPmDiameterChange() { toggleSelectOther('pm-diameter', 'pm-diameter-new'); pmCascadeThickness(); }
+function onPmExtraDiameterChange(idx) { toggleSelectOther(`pm-diameter${idx}`, `pm-diameter${idx}-new`); pmCascadeThickness(); }
 function pmCascadeThickness() {
   const cat = readSelectOther('pm-category', 'pm-category-new');
   const desc = readSelectOther('pm-desc', 'pm-desc-new');
   const dn = readSelectOther('pm-dn1', 'pm-dn1-new');
   const dnCount = requiredDns(cat);
+  const thkCount = requiredThicknessCount(cat);
   const diameter = readSelectOther('pm-diameter', 'pm-diameter-new');
   const allGm = DB.globalMaterials || [];
   let filtered = allGm;
@@ -6946,11 +7572,30 @@ function pmCascadeThickness() {
     const curThk = readSelectOther('pm-thickness', 'pm-thickness-new');
     buildSelectOther('pm-thickness', 'pm-thickness-new', thicknesses, curThk || (thicknesses.length === 1 ? thicknesses[0] : ''));
   }
+
+  for (let i = 2; i <= thkCount; i++) {
+    const sel = document.getElementById(`pm-thickness${i}`);
+    if (sel && sel.value !== '__other__') {
+      const portDn = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
+      const portDia = readSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`);
+      let extraThks = [...new Set(filtered.map(g => g[`thickness${i}`]).filter(Boolean))];
+      if (!extraThks.length && portDn && portDn !== '__other__') {
+        extraThks = [...new Set(allGm.filter(g => (g.dn1 || g.dimension) === portDn && (!portDia || portDia === '__other__' || g.diameter === portDia)).map(g => g.thickness).filter(Boolean))];
+      }
+      const curExtraThk = readSelectOther(`pm-thickness${i}`, `pm-thickness${i}-new`);
+      buildSelectOther(`pm-thickness${i}`, `pm-thickness${i}-new`, extraThks, curExtraThk || (extraThks.length === 1 ? extraThks[0] : ''));
+    }
+  }
+
   _updateAllPmBadges();
 }
 
 function onPmThicknessChange() {
   toggleSelectOther('pm-thickness', 'pm-thickness-new');
+  _updateAllPmBadges();
+}
+function onPmExtraThicknessChange(idx) {
+  toggleSelectOther(`pm-thickness${idx}`, `pm-thickness${idx}-new`);
   _updateAllPmBadges();
 }
 
@@ -6968,8 +7613,18 @@ function _updateAllPmBadges() {
   const dn1 = readSelectOther('pm-dn1', 'pm-dn1-new');
   const dien = readSelectOther('pm-dien', 'pm-dien-new');
   const code = readSelectOther('pm-code', 'pm-code-new');
+  const diaCount = requiredDiameterCount(cat);
+  const thkCount = requiredThicknessCount(cat);
   const dia = readSelectOther('pm-diameter', 'pm-diameter-new');
+  const extraDias = {};
+  for (let i = 2; i <= diaCount; i++) {
+    extraDias[i] = readSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`);
+  }
   const thk = readSelectOther('pm-thickness', 'pm-thickness-new');
+  const extraThks = {};
+  for (let i = 2; i <= thkCount; i++) {
+    extraThks[i] = readSelectOther(`pm-thickness${i}`, `pm-thickness${i}-new`);
+  }
   const surf = readSelectOther('pm-surface', 'pm-surface-new');
 
   const dnCount = requiredDns(cat);
@@ -6980,7 +7635,16 @@ function _updateAllPmBadges() {
     if (extraDns[i]) anyExtraDn = true;
   }
 
-  const isAnySelected = Boolean(_projMatEditId || cat || desc || heat || cert || dn1 || dien || code || dia || thk || surf || anyExtraDn);
+  let anyExtraDia = false;
+  for (let i = 2; i <= diaCount; i++) {
+    if (extraDias[i]) anyExtraDia = true;
+  }
+  let anyExtraThk = false;
+  for (let i = 2; i <= thkCount; i++) {
+    if (extraThks[i]) anyExtraThk = true;
+  }
+
+  const isAnySelected = Boolean(_projMatEditId || cat || desc || heat || cert || dn1 || dien || code || dia || thk || surf || anyExtraDn || anyExtraDia || anyExtraThk);
 
   const hasPm = Boolean(
     cat
@@ -7008,7 +7672,15 @@ function _updateAllPmBadges() {
   updateDropdownCountBadge('pm-dien', getOptsCount('pm-dien'), Boolean(dien), shouldShowBadges);
   updateDropdownCountBadge('pm-code', getOptsCount('pm-code'), Boolean(code), shouldShowBadges);
   updateDropdownCountBadge('pm-diameter', getOptsCount('pm-diameter'), Boolean(dia), shouldShowBadges);
+  for (let i = 2; i <= diaCount; i++) {
+    const extraVal = extraDias[i];
+    updateDropdownCountBadge(`pm-diameter${i}`, getOptsCount(`pm-diameter${i}`), Boolean(extraVal), shouldShowBadges);
+  }
   updateDropdownCountBadge('pm-thickness', getOptsCount('pm-thickness'), Boolean(thk), shouldShowBadges);
+  for (let i = 2; i <= thkCount; i++) {
+    const extraVal = extraThks[i];
+    updateDropdownCountBadge(`pm-thickness${i}`, getOptsCount(`pm-thickness${i}`), Boolean(extraVal), shouldShowBadges);
+  }
   updateDropdownCountBadge('pm-surface', getOptsCount('pm-surface'), Boolean(surf), shouldShowBadges);
 }
 
@@ -7030,8 +7702,14 @@ async function saveProjectMaterial(e) {
   }
   const dienNo = readSelectOther('pm-dien', 'pm-dien-new');
   const materialCode = readSelectOther('pm-code', 'pm-code-new');
-  const diameter = readSelectOther('pm-diameter', 'pm-diameter-new');
-  const thickness = readSelectOther('pm-thickness', 'pm-thickness-new');
+  const diaCount = requiredDiameterCount(category);
+  const diameter = diaCount > 0 ? readSelectOther('pm-diameter', 'pm-diameter-new') : '';
+  const diameter2 = diaCount >= 2 ? readSelectOther('pm-diameter2', 'pm-diameter2-new') : '';
+  const diameter3 = diaCount >= 3 ? readSelectOther('pm-diameter3', 'pm-diameter3-new') : '';
+  const thkCount = requiredThicknessCount(category);
+  const thickness = thkCount > 0 ? readSelectOther('pm-thickness', 'pm-thickness-new') : '';
+  const thickness2 = thkCount >= 2 ? readSelectOther('pm-thickness2', 'pm-thickness2-new') : '';
+  const thickness3 = thkCount >= 3 ? readSelectOther('pm-thickness3', 'pm-thickness3-new') : '';
   const surface = readSelectOther('pm-surface', 'pm-surface-new');
   const certificate = readSelectOther('pm-certificate', 'pm-certificate-new');
   const heatNo = readSelectOther('pm-heat', 'pm-heat-new');
@@ -7048,8 +7726,12 @@ async function saveProjectMaterial(e) {
     if (!dns[`dn${i}`]) { err.textContent = t('dn_x_required', 'DN ' + i + ' is required.').replace('{x}', i); err.classList.add('show'); return; }
   }
   if (!materialCode) { err.textContent = t('material_code_required', 'Material code is required.'); err.classList.add('show'); return; }
-  if (hasDiameter(category) && !diameter) { err.textContent = t('diameter_required', 'Outer diameter is required.'); err.classList.add('show'); return; }
-  if (hasThickness(category) && !thickness) { err.textContent = t('thickness_required', 'Thickness is required.'); err.classList.add('show'); return; }
+  if (diaCount > 0 && !diameter) { err.textContent = t('diameter_required', 'Outer diameter is required.'); err.classList.add('show'); return; }
+  if (diaCount >= 2 && !diameter2) { err.textContent = (t('outer_diameter', 'Outer diameter')) + ' 2 ' + (t('is_required', 'is required.')); err.classList.add('show'); return; }
+  if (diaCount >= 3 && !diameter3) { err.textContent = (t('outer_diameter', 'Outer diameter')) + ' 3 ' + (t('is_required', 'is required.')); err.classList.add('show'); return; }
+  if (thkCount > 0 && !thickness) { err.textContent = t('thickness_required', 'Thickness is required.'); err.classList.add('show'); return; }
+  if (thkCount >= 2 && !thickness2) { err.textContent = (t('thickness', 'Thickness')) + ' 2 ' + (t('is_required', 'is required.')); err.classList.add('show'); return; }
+  if (thkCount >= 3 && !thickness3) { err.textContent = (t('thickness', 'Thickness')) + ' 3 ' + (t('is_required', 'is required.')); err.classList.add('show'); return; }
 
   /* Conflict check before saving */
   const existingPm = _projMatEditId ? (DB.projectMaterials || []).find(m => m.id === _projMatEditId) : null;
@@ -7058,12 +7740,12 @@ async function saveProjectMaterial(e) {
 
   if (!_bypassHeatConflict) {
     // Check Scenario 1: Does ANOTHER material in this project already have this heatNo (or both have no heatNo) AND exact matching specs?
-    const specsObj = { category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, ...dns };
+    const specsObj = { category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, ...dns };
     const dupMatch = findDuplicateProjectMaterial(currentProjectId, heatNo, specsObj, isEditingPm ? _projMatEditId : null);
 
     if (dupMatch) {
       // SCENARIO 1: Exact specs match already exists in project -> Merge confirmation
-      const specsSummary = formatMaterialSpecsStr({ category, dn1, diameter, thickness, materialCode, ...dns });
+      const specsSummary = formatMaterialSpecsStr({ category, dn1, diameter, diameter2, diameter3, thickness, thickness2, thickness3, materialCode, ...dns });
       const descText = heatNo
         ? t('matching_material_exists_desc', 'A material with heat number {heat} and these exact specifications ({specs}) already exists in this project. Updating will merge these materials together.').replace('{heat}', `<strong>${escapeHtml(heatNo)}</strong>`).replace('{specs}', `<em>${escapeHtml(specsSummary)}</em>`)
         : t('matching_material_no_heat_exists_desc', 'A material with these exact specifications ({specs}) already exists in this project without a heat number. Updating will merge these materials together.').replace('{specs}', `<em>${escapeHtml(specsSummary)}</em>`);
@@ -7074,7 +7756,7 @@ async function saveProjectMaterial(e) {
         desc: descText,
         updateBtnText: t('update', 'Update'),
         onUpdateExisting: async () => {
-          await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false, targetProjectMaterialId: dupMatch.projectMaterial.id });
+          await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false, targetProjectMaterialId: dupMatch.projectMaterial.id });
         }
       });
       return;
@@ -7098,10 +7780,10 @@ async function saveProjectMaterial(e) {
             projectMaterialId: matched.projectMaterial.id,
           },
           onAddAsNew: async () => {
-            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: true });
+            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: true });
           },
           onUpdateExisting: async () => {
-            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false, targetProjectMaterialId: matched.projectMaterial.id });
+            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false, targetProjectMaterialId: matched.projectMaterial.id });
           }
         });
         return;
@@ -7117,7 +7799,11 @@ async function saveProjectMaterial(e) {
       { key: 'itemDescription', label: t('th_item_description', 'Item description'), exist: gm.itemDescription || '', cur: itemDescription },
       { key: 'dn1', label: t('dn', 'DN'), exist: gm.dn1 || '', cur: dn1 },
       { key: 'diameter', label: t('th_diameter', 'Diameter'), exist: gm.diameter || '', cur: diameter },
+      { key: 'diameter2', label: (t('outer_diameter', 'Outer diameter')) + ' 2', exist: gm.diameter2 || '', cur: diameter2 },
+      { key: 'diameter3', label: (t('outer_diameter', 'Outer diameter')) + ' 3', exist: gm.diameter3 || '', cur: diameter3 },
       { key: 'thickness', label: t('th_thickness', 'Thickness'), exist: gm.thickness || '', cur: thickness },
+      { key: 'thickness2', label: (t('thickness', 'Thickness')) + ' 2', exist: gm.thickness2 || '', cur: thickness2 },
+      { key: 'thickness3', label: (t('thickness', 'Thickness')) + ' 3', exist: gm.thickness3 || '', cur: thickness3 },
       { key: 'dienNo', label: t('th_din_en_no', 'DIN EN No.'), exist: gm.dienNo || '', cur: dienNo },
       { key: 'surface', label: t('th_surface', 'Surface'), exist: gm.surface || '', cur: surface },
       { key: 'materialCode', label: t('th_material', 'Material'), exist: gm.materialCode || '', cur: materialCode },
@@ -7158,10 +7844,10 @@ async function saveProjectMaterial(e) {
           projectMaterialId: existingPm.id,
         },
         onAddAsNew: async () => {
-          await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: true });
+          await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: true });
         },
         onUpdateExisting: async () => {
-          await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false });
+          await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false });
         }
       });
       return;
@@ -7177,7 +7863,11 @@ async function saveProjectMaterial(e) {
         materialCode,
         dienNo,
         diameter,
+        diameter2,
+        diameter3,
         thickness,
+        thickness2,
+        thickness3,
         surface,
         certificate,
         ...dns,
@@ -7193,11 +7883,11 @@ async function saveProjectMaterial(e) {
           updateBtnText: t('update_existing', 'Update Existing Material'),
           addBtnText: t('add_as_new', 'Add as New Material'),
           onAddAsNew: async () => {
-            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: true });
+            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: true });
           },
           onUpdateExisting: async () => {
             const targetPmId = checkRes.existingMaterial ? checkRes.existingMaterial.projectMaterialId : null;
-            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false, targetProjectMaterialId: targetPmId });
+            await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId, forceNew: false, targetProjectMaterialId: targetPmId });
           }
         });
         return;
@@ -7207,18 +7897,18 @@ async function saveProjectMaterial(e) {
     }
   }
 
-  await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId });
+  await doSaveProjectMaterial({ category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId });
 }
 
 async function doSaveProjectMaterial(params) {
-  const { category, itemDescription, dn1, materialCode, dienNo, diameter, thickness, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId, forceNew, targetProjectMaterialId } = params;
+  const { category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId, forceNew, targetProjectMaterialId } = params;
   const err = document.getElementById('pm-err');
   if (err) err.classList.remove('show');
   if (submitBtn) setButtonLoading(submitBtn, true, t('saving', 'Saving…'));
 
   try {
     /* Step 1: Create or find the global material */
-    const gmData = { category, itemDescription, materialCode, dienNo, diameter, thickness, surface, ...dns };
+    const gmData = { category, itemDescription, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, ...dns };
     const gmResult = await apiPost('/global-materials', gmData);
 
     /* Step 2: Create or update project material */

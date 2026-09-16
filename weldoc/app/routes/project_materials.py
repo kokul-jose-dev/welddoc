@@ -139,11 +139,17 @@ def _copy_waz_file_for_pm(m):
     from app.sharepoint import _get_app_token, _ssl_context, GRAPH_BASE, format_waz_filename, upload_waz_to_project_folder
 
     gm = m.global_material
+    dns = [getattr(gm, f"dn{i}") for i in range(1, 7) if getattr(gm, f"dn{i}")] if gm else []
+    dias = [d for d in [gm.diameter, gm.diameter2, gm.diameter3] if d] if gm else []
+    thks = [t for t in [gm.thickness, gm.thickness2, gm.thickness3] if t] if gm else []
     target_name = format_waz_filename(
         item_desc=gm.item_description if gm else "",
         dn=gm.dn1 if gm else "",
         diameter=gm.diameter if gm else "",
         thickness=gm.thickness if gm else "",
+        dns=dns,
+        diameters=dias,
+        thicknesses=thks,
         material_code=gm.material_code if gm else "",
         surface=gm.surface if gm else "",
         heat_no=m.heat_no or "",
@@ -193,11 +199,17 @@ def upload_waz(pm_id):
     from app.sharepoint import upload_waz_to_project_folder, format_waz_filename
 
     gm = m.global_material
+    dns = [getattr(gm, f"dn{i}") for i in range(1, 7) if getattr(gm, f"dn{i}")] if gm else []
+    dias = [d for d in [gm.diameter, gm.diameter2, gm.diameter3] if d] if gm else []
+    thks = [t for t in [gm.thickness, gm.thickness2, gm.thickness3] if t] if gm else []
     file_name = format_waz_filename(
         item_desc=gm.item_description if gm else "",
         dn=gm.dn1 if gm else "",
         diameter=gm.diameter if gm else "",
         thickness=gm.thickness if gm else "",
+        dns=dns,
+        diameters=dias,
+        thicknesses=thks,
         material_code=gm.material_code if gm else "",
         surface=gm.surface if gm else "",
         heat_no=m.heat_no or "",

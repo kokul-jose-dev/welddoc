@@ -30,8 +30,12 @@ def normalize_gm_data(data):
     desc = clean_str(data.get("itemDescription") or data.get("item_description") or cat)
     code = clean_str(data.get("materialCode") or data.get("material_code"))
     dien = clean_str(data.get("dienNo") or data.get("dien_no"))
-    dia = clean_dim(data.get("diameter"))
-    thk = clean_dim(data.get("thickness"))
+    dia = clean_dim(data.get("diameter") or data.get("diameter1"))
+    dia2 = clean_dim(data.get("diameter2"))
+    dia3 = clean_dim(data.get("diameter3"))
+    thk = clean_dim(data.get("thickness") or data.get("thickness1"))
+    thk2 = clean_dim(data.get("thickness2"))
+    thk3 = clean_dim(data.get("thickness3"))
     surface = clean_str(data.get("surface"))
     
     dn1 = clean_dn(data.get("dn1") or data.get("dimension"))
@@ -48,7 +52,11 @@ def normalize_gm_data(data):
         "material_code": code,
         "dien_no": dien,
         "diameter": dia,
+        "diameter2": dia2,
+        "diameter3": dia3,
         "thickness": thk,
+        "thickness2": thk2,
+        "thickness3": thk3,
         "surface": surface,
         **dns,
     }
@@ -69,7 +77,11 @@ def find_matching_global_material(norm_data, exclude_id=None):
     dien = norm_data["dien_no"].lower()
     surface = norm_data["surface"].lower()
     dia = norm_data["diameter"].lower()
+    dia2 = norm_data.get("diameter2", "").lower()
+    dia3 = norm_data.get("diameter3", "").lower()
     thk = norm_data["thickness"].lower()
+    thk2 = norm_data.get("thickness2", "").lower()
+    thk3 = norm_data.get("thickness3", "").lower()
     dn1 = norm_data["dn1"].lower()
 
     query = query.filter(
@@ -79,7 +91,11 @@ def find_matching_global_material(norm_data, exclude_id=None):
         func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.dien_no, "")))) == dien,
         func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.surface, "")))) == surface,
         func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.diameter, "")))) == dia,
+        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.diameter2, "")))) == dia2,
+        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.diameter3, "")))) == dia3,
         func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.thickness, "")))) == thk,
+        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.thickness2, "")))) == thk2,
+        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.thickness3, "")))) == thk3,
         func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.dn1, "")))) == dn1,
     )
 

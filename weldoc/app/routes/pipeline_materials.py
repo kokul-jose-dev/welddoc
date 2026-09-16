@@ -39,6 +39,15 @@ def _letter_to_pos(s):
         return 0
 
 
+def _gm_dim_props(gm):
+    if not gm:
+        return {"dns": [], "diameters": [], "thicknesses": []}
+    dns = [getattr(gm, f"dn{i}") for i in range(1, 7) if getattr(gm, f"dn{i}")]
+    dias = [d for d in [gm.diameter, gm.diameter2, gm.diameter3] if d]
+    thks = [t for t in [gm.thickness, gm.thickness2, gm.thickness3] if t]
+    return {"dns": dns, "diameters": dias, "thicknesses": thks}
+
+
 @pipeline_materials_bp.route("", methods=["GET"])
 def get_pipeline_materials():
     pipeline_id = request.args.get("pipelineId", type=int)
@@ -289,11 +298,15 @@ def upload_waz_for_pipeline_material(pm_id):
     from app.sharepoint import upload_waz_to_project_folder, upload_to_pipeline_waz_folder, format_waz_filename
 
     gm = pm.global_material
+    dims = _gm_dim_props(gm)
     proj_waz_name = format_waz_filename(
         item_desc=gm.item_description if gm else "",
         dn=gm.dn1 if gm else "",
         diameter=gm.diameter if gm else "",
         thickness=gm.thickness if gm else "",
+        dns=dims["dns"],
+        diameters=dims["diameters"],
+        thicknesses=dims["thicknesses"],
         material_code=gm.material_code if gm else "",
         surface=gm.surface if gm else "",
         heat_no=pm.heat_no or "",
@@ -431,11 +444,15 @@ def restore_pipeline_material(pm_id):
 
     if file_content and project.sharepoint_drive_id and project.sharepoint_folder_id:
         gm = pm.global_material
+        dims = _gm_dim_props(gm)
         proj_waz_name = format_waz_filename(
             item_desc=gm.item_description if gm else "",
             dn=gm.dn1 if gm else "",
             diameter=gm.diameter if gm else "",
             thickness=gm.thickness if gm else "",
+            dns=dims["dns"],
+            diameters=dims["diameters"],
+            thicknesses=dims["thicknesses"],
             material_code=gm.material_code if gm else "",
             surface=gm.surface if gm else "",
             heat_no=pm.heat_no or "",
@@ -625,11 +642,15 @@ def _delete_pipeline_waz_file_for_material(m, waz_no, waz_pkg_url=None):
             project = Project.query.get(pm.project_id)
             if project and project.sharepoint_drive_id and project.sharepoint_folder_id:
                 gm = pm.global_material
+                dims = _gm_dim_props(gm)
                 pkg_name = format_waz_filename(
                     item_desc=gm.item_description if gm else "",
                     dn=gm.dn1 if gm else "",
                     diameter=gm.diameter if gm else "",
                     thickness=gm.thickness if gm else "",
+                    dns=dims["dns"],
+                    diameters=dims["diameters"],
+                    thicknesses=dims["thicknesses"],
                     material_code=gm.material_code if gm else "",
                     surface=gm.surface if gm else "",
                     heat_no=pm.heat_no or "",
@@ -710,6 +731,7 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id, force_regenerat
         pm = primary_m.project_material
         gm = pm.global_material if pm else None
         project = Project.query.get(pm.project_id) if pm else None
+        dims = _gm_dim_props(gm)
 
         # Build target filename
         target_fname = format_waz_filename(
@@ -717,6 +739,9 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id, force_regenerat
             dn=gm.dn1 if gm else "",
             diameter=gm.diameter if gm else "",
             thickness=gm.thickness if gm else "",
+            dns=dims["dns"],
+            diameters=dims["diameters"],
+            thicknesses=dims["thicknesses"],
             material_code=gm.material_code if gm else "",
             surface=gm.surface if gm else "",
             heat_no=pm.heat_no or "",
@@ -731,6 +756,9 @@ def _resequence_pipeline_waz_numbers_and_regenerate(pipeline_id, force_regenerat
                     dn=gm.dn1 if gm else "",
                     diameter=gm.diameter if gm else "",
                     thickness=gm.thickness if gm else "",
+                    dns=dims["dns"],
+                    diameters=dims["diameters"],
+                    thicknesses=dims["thicknesses"],
                     material_code=gm.material_code if gm else "",
                     surface=gm.surface if gm else "",
                     heat_no=pm.heat_no or "",
@@ -949,8 +977,11 @@ def _build_and_save_waz_package_with_bytes(m, file_content=None):
         "item_description": gm.item_description or "" if gm else "",
         "norm": gm.dien_no or "" if gm else "",
         "dn": gm.dn1 or "" if gm else "",
+        "dns": [getattr(gm, f"dn{i}") for i in range(1, 7) if getattr(gm, f"dn{i}")] if gm else [],
         "diameter": gm.diameter or "" if gm else "",
+        "diameters": [d for d in [gm.diameter, gm.diameter2, gm.diameter3] if d] if gm else [],
         "thickness": gm.thickness or "" if gm else "",
+        "thicknesses": [t for t in [gm.thickness, gm.thickness2, gm.thickness3] if t] if gm else [],
         "surface": gm.surface or "" if gm else "",
         "heat_no": pm.heat_no or "",
     }
@@ -982,11 +1013,17 @@ def _build_and_save_waz_package_with_bytes(m, file_content=None):
     pkg_url = None
     if project.sharepoint_drive_id and project.sharepoint_folder_id:
         from app.sharepoint import format_waz_filename
+        dims_dns = [getattr(gm, f"dn{i}") for i in range(1, 7) if getattr(gm, f"dn{i}")] if gm else []
+        dims_dias = [d for d in [gm.diameter, gm.diameter2, gm.diameter3] if d] if gm else []
+        dims_thks = [t for t in [gm.thickness, gm.thickness2, gm.thickness3] if t] if gm else []
         pkg_name = format_waz_filename(
             item_desc=gm.item_description if gm else "",
             dn=gm.dn1 if gm else "",
             diameter=gm.diameter if gm else "",
             thickness=gm.thickness if gm else "",
+            dns=dims_dns,
+            diameters=dims_dias,
+            thicknesses=dims_thks,
             material_code=gm.material_code if gm else "",
             surface=gm.surface if gm else "",
             heat_no=pm.heat_no or "",

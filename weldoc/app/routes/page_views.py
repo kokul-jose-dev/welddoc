@@ -240,7 +240,8 @@ def get_project_detail_page(project_id):
         SELECT pm.id, pm.project_id, pm.global_material_id, pm.certificate,
                pm.heat_no, pm.waz_pdf_url, pm.archived,
                gm.category, gm.item_description, gm.dn1, gm.dn2, gm.dn3,
-               gm.dn4, gm.dn5, gm.dn6, gm.diameter, gm.thickness,
+               gm.dn4, gm.dn5, gm.dn6, gm.diameter, gm.diameter2, gm.diameter3,
+               gm.thickness, gm.thickness2, gm.thickness3,
                gm.surface, gm.material_code, gm.dien_no
         FROM weldoc_project_materials pm
         LEFT JOIN weldoc_global_materials gm ON pm.global_material_id = gm.id
@@ -249,8 +250,8 @@ def get_project_detail_page(project_id):
 
     # Global materials for dropdowns
     gm_rows = db.session.execute(db.text("""
-        SELECT id, category, dn1, dn2, dn3, dn4, dn5, dn6, diameter,
-               thickness, surface, item_description, material_code, dien_no, archived
+        SELECT id, category, dn1, dn2, dn3, dn4, dn5, dn6, diameter, diameter2, diameter3,
+               thickness, thickness2, thickness3, surface, item_description, material_code, dien_no, archived
         FROM weldoc_global_materials WHERE archived = 0 ORDER BY category, item_description
     """)).fetchall()
 
@@ -280,7 +281,8 @@ def get_project_detail_page(project_id):
             "category": r.category, "itemDescription": r.item_description,
             "dn1": r.dn1, "dn2": r.dn2, "dn3": r.dn3,
             "dn4": r.dn4, "dn5": r.dn5, "dn6": r.dn6,
-            "diameter": r.diameter, "thickness": r.thickness,
+            "diameter": r.diameter, "diameter2": r.diameter2, "diameter3": r.diameter3,
+            "thickness": r.thickness, "thickness2": r.thickness2, "thickness3": r.thickness3,
             "surface": r.surface, "materialCode": r.material_code,
             "dienNo": r.dien_no,
         } for r in pm_rows],
@@ -289,7 +291,8 @@ def get_project_detail_page(project_id):
             "dn1": r.dn1, "dimension": r.dn1, "dn2": r.dn2, "dimension2": r.dn2,
             "dn3": r.dn3, "dimension3": r.dn3, "dn4": r.dn4, "dimension4": r.dn4,
             "dn5": r.dn5, "dimension5": r.dn5, "dn6": r.dn6, "dimension6": r.dn6,
-            "diameter": r.diameter, "thickness": r.thickness,
+            "diameter": r.diameter, "diameter2": r.diameter2, "diameter3": r.diameter3,
+            "thickness": r.thickness, "thickness2": r.thickness2, "thickness3": r.thickness3,
             "surface": r.surface, "itemDescription": r.item_description,
             "materialCode": r.material_code, "dienNo": r.dien_no,
             "archived": r.archived,
@@ -413,8 +416,10 @@ def get_materials_page():
                pm.start_of_plumbing, pm.end_of_plumbing, pm.archived,
                proj.global_material_id,
                gm.category, gm.item_description,
-               gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6, gm.diameter,
-               gm.thickness, gm.surface, gm.material_code, gm.dien_no,
+               gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6,
+               gm.diameter, gm.diameter2, gm.diameter3,
+               gm.thickness, gm.thickness2, gm.thickness3,
+               gm.surface, gm.material_code, gm.dien_no,
                proj.certificate, proj.heat_no, proj.waz_pdf_url
         FROM weldoc_pipeline_materials pm
         LEFT JOIN weldoc_project_materials proj ON pm.project_material_id = proj.id
@@ -435,7 +440,9 @@ def get_materials_page():
             "dimension4": r.dn4 or "", "dimension5": r.dn5 or "",
             "dimension6": r.dn6 or "", "dienNo": r.dien_no or "",
             "materialCode": r.material_code or "", "diameter": r.diameter or "",
-            "thickness": r.thickness or "", "surface": r.surface or "",
+            "diameter2": r.diameter2 or "", "diameter3": r.diameter3 or "",
+            "thickness": r.thickness or "", "thickness2": r.thickness2 or "", "thickness3": r.thickness3 or "",
+            "surface": r.surface or "",
             "itemDescription": r.item_description or "", "certificate": r.certificate or "",
             "heatNo": r.heat_no or "", "wazNo": r.waz_no or "",
             "wazPdfUrl": r.waz_pdf_url or "", "wazPackageUrl": r.waz_package_url or "",
@@ -470,7 +477,8 @@ def get_archive_page():
         SELECT pm.id, pm.project_id, pm.global_material_id, pm.certificate,
                pm.heat_no, pm.waz_pdf_url, pm.archived,
                gm.category, gm.item_description, gm.dn1, gm.dn2, gm.dn3,
-               gm.dn4, gm.dn5, gm.dn6, gm.diameter, gm.thickness,
+               gm.dn4, gm.dn5, gm.dn6, gm.diameter, gm.diameter2, gm.diameter3,
+               gm.thickness, gm.thickness2, gm.thickness3,
                gm.surface, gm.material_code, gm.dien_no
         FROM weldoc_project_materials pm
         LEFT JOIN weldoc_global_materials gm ON pm.global_material_id = gm.id
@@ -480,8 +488,10 @@ def get_archive_page():
     mat_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.pipeline_id, pm.position, pm.waz_no, pm.start_of_plumbing,
                pm.end_of_plumbing, pm.archived, gm.category, gm.item_description,
-               gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6, gm.diameter,
-               gm.thickness, gm.surface, gm.material_code, gm.dien_no,
+               gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6,
+               gm.diameter, gm.diameter2, gm.diameter3,
+               gm.thickness, gm.thickness2, gm.thickness3,
+               gm.surface, gm.material_code, gm.dien_no,
                proj.id as project_material_id, proj.project_id, proj.certificate, proj.heat_no, proj.waz_pdf_url
         FROM weldoc_pipeline_materials pm
         LEFT JOIN weldoc_project_materials proj ON pm.project_material_id = proj.id
@@ -511,7 +521,8 @@ def get_archive_page():
             "category": r.category, "itemDescription": r.item_description,
             "dn1": r.dn1, "dn2": r.dn2, "dn3": r.dn3,
             "dn4": r.dn4, "dn5": r.dn5, "dn6": r.dn6,
-            "diameter": r.diameter, "thickness": r.thickness,
+            "diameter": r.diameter, "diameter2": r.diameter2, "diameter3": r.diameter3,
+            "thickness": r.thickness, "thickness2": r.thickness2, "thickness3": r.thickness3,
             "surface": r.surface, "materialCode": r.material_code,
             "dienNo": r.dien_no,
         } for r in pm_rows],
@@ -523,7 +534,9 @@ def get_archive_page():
             "dimension4": r.dn4 or "", "dimension5": r.dn5 or "",
             "dimension6": r.dn6 or "", "dienNo": r.dien_no or "",
             "materialCode": r.material_code or "", "diameter": r.diameter or "",
-            "thickness": r.thickness or "", "surface": r.surface or "",
+            "diameter2": r.diameter2 or "", "diameter3": r.diameter3 or "",
+            "thickness": r.thickness or "", "thickness2": r.thickness2 or "", "thickness3": r.thickness3 or "",
+            "surface": r.surface or "",
             "itemDescription": r.item_description or "", "certificate": r.certificate or "",
             "heatNo": r.heat_no or "", "wazNo": r.waz_no or "",
             "wazPdfUrl": r.waz_pdf_url or "", "startOfPlumbing": bool(r.start_of_plumbing),
@@ -583,8 +596,10 @@ def get_material_usage_page():
         SELECT pm.id, pm.pipeline_id, pm.position, pm.waz_no, pm.waz_package_url,
                pm.start_of_plumbing, pm.end_of_plumbing, pm.archived,
                gm.category, gm.item_description,
-               gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6, gm.diameter,
-               gm.thickness, gm.surface, gm.material_code, gm.dien_no,
+               gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6,
+               gm.diameter, gm.diameter2, gm.diameter3,
+               gm.thickness, gm.thickness2, gm.thickness3,
+               gm.surface, gm.material_code, gm.dien_no,
                proj.certificate, proj.heat_no, proj.waz_pdf_url,
                pl.no as pipeline_no, pl.project_id,
                pr.title as project_title, pr.client_id,
@@ -619,7 +634,9 @@ def get_material_usage_page():
             "dimension4": r.dn4 or "", "dimension5": r.dn5 or "",
             "dimension6": r.dn6 or "", "dienNo": r.dien_no or "",
             "materialCode": r.material_code or "", "diameter": r.diameter or "",
-            "thickness": r.thickness or "", "surface": r.surface or "",
+            "diameter2": r.diameter2 or "", "diameter3": r.diameter3 or "",
+            "thickness": r.thickness or "", "thickness2": r.thickness2 or "", "thickness3": r.thickness3 or "",
+            "surface": r.surface or "",
             "itemDescription": r.item_description or "", "certificate": r.certificate or "",
             "heatNo": r.heat_no or "", "wazNo": r.waz_no or "",
             "wazPdfUrl": r.waz_pdf_url or "", "wazPackageUrl": r.waz_package_url or "",

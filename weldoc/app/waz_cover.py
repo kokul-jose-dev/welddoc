@@ -99,18 +99,47 @@ def generate_waz_cover_page(data):
 
     field("Bezeichnung:", f"{data.get('item_description', '')} {data.get('norm', '')}", 10)
 
-    # DN line
-    dn = data.get("dn", "")
-    if dn:
-        dia = data.get("diameter", "")
-        thk = data.get("thickness", "")
-        dn_text = dn
-        if dia and thk:
-            dn_text += f" {dia}x{thk}"
-        elif dia:
-            dn_text += f" {dia}"
+    # DN line (e.g. DN25 / DN15 Ø33.7x2.0 / Ø21.3x1.6 or DN25 Ø33.7x2.0)
+    dns = data.get("dns") or []
+    if not dns and data.get("dn"):
+        raw_dn = str(data["dn"]).strip()
+        dns = [p.strip() for p in raw_dn.split("/")] if "/" in raw_dn else [raw_dn]
+
+    dias = data.get("diameters") or []
+    if not dias and data.get("diameter"):
+        raw_dia = str(data["diameter"]).strip()
+        dias = [p.strip() for p in raw_dia.split("/")] if "/" in raw_dia else [raw_dia]
+
+    thks = data.get("thicknesses") or []
+    if not thks and data.get("thickness"):
+        raw_thk = str(data["thickness"]).strip()
+        thks = [p.strip() for p in raw_thk.split("/")] if "/" in raw_thk else [raw_thk]
+
+    dn_str = " / ".join(str(d).strip() for d in dns if str(d).strip())
+    dim_pairs = []
+    max_d = max(len(dias), len(thks))
+    for i in range(max_d):
+        d_val = dias[i] if i < len(dias) else ""
+        t_val = thks[i] if i < len(thks) else ""
+        d_clean = str(d_val or "").strip().replace("Ø", "").replace("mm", "").strip()
+        t_clean = str(t_val or "").strip().replace("mm", "").strip()
+        if d_clean and t_clean:
+            dim_pairs.append(f"Ø{d_clean}x{t_clean}")
+        elif d_clean:
+            dim_pairs.append(f"Ø{d_clean}")
+        elif t_clean:
+            dim_pairs.append(f"{t_clean}mm")
+
+    dim_str = " / ".join(dim_pairs)
+    if dn_str and dim_str:
+        dn_text = f"{dn_str} {dim_str}"
+    elif dn_str:
+        dn_text = dn_str
+    elif dim_str:
+        dn_text = dim_str
     else:
         dn_text = ""
+
     field("DN Grösse:", dn_text, 10)
 
     field("Oberfläche:", data.get("surface", ""), 10)
