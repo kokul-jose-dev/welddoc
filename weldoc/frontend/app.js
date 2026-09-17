@@ -4906,40 +4906,42 @@ function renderCombinedView() {
     }
     return line;
   }
-  const mainLine = walkLine(startMat.id);
+  /* Walk every segment in order: the start material first, then anything not yet reached.
+     Each segment drains its OWN branch queue before moving on. Previously the queue was
+     drained once, right after the main line, so a branch hanging off a Tee in a SECOND
+     chain was queued too late and its junction weld never made it into the table. */
   const branchLines = [];
-  while (branches.length) {
-    const b = branches.shift();
-    if (visited.has(b.branchStartId)) continue;
-    /* find weld between junction and branch start */
-    const junctionWeld = wlds.find(wl => wl.materialIds.includes(b.fromMat.id) && wl.materialIds.includes(b.branchStartId));
-    const bLine = walkLine(b.branchStartId);
-    if (bLine.length) branchLines.push({ from: b.fromMat, junctionWeld, line: bLine });
+  const allRows = [];
+
+  function drainBranches(rows) {
+    while (branches.length) {
+      const b = branches.shift();
+      if (visited.has(b.branchStartId)) continue;
+      const junctionWeld = wlds.find(wl => wl.materialIds.includes(b.fromMat.id) && wl.materialIds.includes(b.branchStartId));
+      const bLine = walkLine(b.branchStartId);
+      if (!bLine.length) continue;
+      branchLines.push({ from: b.fromMat, junctionWeld, line: bLine });
+      if (junctionWeld) rows.push({ type: 'weld', data: junctionWeld });
+      bLine.forEach(item => rows.push(item));
+    }
   }
-  /* render as table — no branch separators, badge on junction pieces */
+
+  const seeds = [startMat].concat(
+    mats.filter(m => m.id !== startMat.id && (m.piece || '').toLowerCase() !== 'welding wire')
+  );
+  seeds.forEach(seed => {
+    if (visited.has(seed.id)) return;
+    const line = walkLine(seed.id);
+    if (!line.length) return;
+    line.forEach(item => allRows.push(item));
+    drainBranches(allRows);
+  });
+
   /* track which materials have branches */
   const branchMap = {}; /* matId -> [branch index ids] */
   branchLines.forEach((bl, idx) => {
     if (!branchMap[bl.from.id]) branchMap[bl.from.id] = [];
     branchMap[bl.from.id].push(idx);
-  });
-  /* Walk any additional segments/unvisited chains */
-  const extraLines = [];
-  mats.forEach(m => {
-    if (!visited.has(m.id) && (m.piece || '').toLowerCase() !== 'welding wire') {
-      const eLine = walkLine(m.id);
-      if (eLine.length) extraLines.push(eLine);
-    }
-  });
-
-  let allRows = [];
-  mainLine.forEach(item => allRows.push(item));
-  branchLines.forEach(bl => {
-    if (bl.junctionWeld) allRows.push({ type: 'weld', data: bl.junctionWeld });
-    bl.line.forEach(item => allRows.push(item));
-  });
-  extraLines.forEach(el => {
-    el.forEach(item => allRows.push(item));
   });
 
   /* assign row ids for scroll targets — use the junction weld id */
