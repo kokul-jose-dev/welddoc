@@ -361,7 +361,31 @@ function clients() { return DB.clients.filter(c => !c.archived); }
 function projects() { return DB.projects.filter(p => !p.archived); }
 function people() { return DB.people.filter(p => !p.archived); }
 function certificates() { return DB.certificates.filter(c => !c.archived); }
-function pipelines() { return DB.pipelines.filter(p => !p.archived); }
+/* Natural order for pipeline numbers: digits before letters, and number chunks compared as
+   numbers so 0001 < 9 < 10 < 999 and MP410 < MP411 < MP412. Keeps identical numbers adjacent,
+   which is what makes an accidentally duplicated pipeline obvious in the list. */
+function _naturalChunks(v) {
+  return String(v == null ? '' : v).match(/\d+|\D+/g) || [];
+}
+function compareByPipelineNo(a, b) {
+  const ca = _naturalChunks(a && a.no), cb = _naturalChunks(b && b.no);
+  for (let i = 0; i < Math.max(ca.length, cb.length); i++) {
+    const x = ca[i], y = cb[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const nx = /^\d/.test(x), ny = /^\d/.test(y);
+    if (nx && ny) {
+      const d = parseInt(x, 10) - parseInt(y, 10);
+      if (d) return d;
+      continue;                       /* 01 and 1 are equal in value - keep comparing */
+    }
+    if (nx !== ny) return nx ? -1 : 1;   /* numbers first, then A-Z */
+    const d = x.localeCompare(y, undefined, { sensitivity: 'base' });
+    if (d) return d;
+  }
+  return 0;
+}
+function pipelines() { return DB.pipelines.filter(p => !p.archived).sort(compareByPipelineNo); }
 function materials() { return DB.materials.filter(m => !m.archived); }
 function welds() { return DB.welds.filter(w => !w.archived); }
 function nextId(key) { return DB.counters[key]++; }
@@ -377,7 +401,7 @@ function pipelineMaterials(pid) { return materials().filter(m => m.pipelineId ==
 function pipelineWelds(pid) { return welds().filter(w => w.pipelineId === pid).sort((a, b) => Number(a.weldNo) - Number(b.weldNo)); }
 function materialWelds(mid) { const m = getMaterial(mid); return welds().filter(w => w.pipelineId === m.pipelineId && w.materialIds.includes(mid)); }
 function personCerts(pid) { return certificates().filter(c => c.personId === pid); }
-function projectPipelines(prid) { return pipelines().filter(p => p.projectId === prid); }
+function projectPipelines(prid) { return pipelines().filter(p => p.projectId === prid).sort(compareByPipelineNo); }
 function clientProjects(cid) { return projects().filter(p => p.clientId === cid); }
 function uniqueLocations() { return [...new Set(DB.projects.map(p => p.location).filter(Boolean))].sort(); }
 function uniqueHeats() { return [...new Set(DB.materials.map(m => m.heatNo).filter(Boolean))].sort(); }
@@ -3904,7 +3928,7 @@ function renderClientsPage() {
 /* ================================================================ ARCHIVE PAGE ================================================================ */
 function archivedClients() { return DB.clients.filter(c => c.archived); }
 function archivedProjects() { return DB.projects.filter(p => p.archived); }
-function archivedPipelines() { return DB.pipelines.filter(p => p.archived); }
+function archivedPipelines() { return DB.pipelines.filter(p => p.archived).sort(compareByPipelineNo); }
 function archivedMaterials() { return DB.materials.filter(m => m.archived); }
 function archivedWelds() { return DB.welds.filter(w => w.archived); }
 function allProjectsForClient(cid) { return DB.projects.filter(p => p.clientId === cid); }
