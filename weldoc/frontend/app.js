@@ -505,9 +505,9 @@ function docCell(pl) {
   }
   let builder;
   if (pl.status >= 3 && pl.docBuilder) {
-    builder = `<a class="doc-chip doc-weld" href="${escapeHtml(pl.docBuilder)}" target="_blank" rel="noopener" title="${t('doc_welder', 'Welder doc')} (SharePoint)">${t('doc_welder', 'Welder doc')}</a>`;
+    builder = `<a class="doc-chip doc-weld" href="${escapeHtml(pl.docBuilder)}" target="_blank" rel="noopener" title="${t('doc_welder', 'Welder Doc')} (SharePoint)">${t('doc_welder', 'Welder Doc')}</a>`;
   } else {
-    builder = slot(t('doc_welder', 'Welder doc'));
+    builder = slot(t('doc_welder', 'Welder Doc'));
   }
   const fin = pl.docFinal
     ? `<a class="doc-chip doc-final" href="${escapeHtml(pl.docFinal)}" target="_blank" rel="noopener" title="${t('doc_final_title', 'Final documentation package (SharePoint)')}">${t('doc_final', 'Final')}</a>`
@@ -887,7 +887,7 @@ function renderChrome(activeNav, breadcrumbHtml) {
   const nav = (key, label, href, showCount) => `<a class="nav-tab ${activeNav === key ? 'active' : ''}" href="${href}" title="${label}"><span class="nav-icon">${icon(key)}</span><span class="nav-label">${label}</span>${showCount ? `<span class="nav-count">${counts[key]}</span>` : ''}</a>`;
   const role = getRole();
   const lang = typeof getLang === 'function' ? getLang() : 'de';
-  const roleName = role === 'vendor' ? escapeHtml((getPerson(getCurrentUserId()) || {}).name || 'Vendor') : (typeof t === 'function' ? t('office_staff', 'Office staff') : 'Office staff');
+  const roleName = role === 'vendor' ? escapeHtml((getPerson(getCurrentUserId()) || {}).name || (typeof t === 'function' ? t('vendor', 'Welder') : 'Welder')) : (typeof t === 'function' ? t('office_staff', 'Office staff') : 'Office staff');
   function getUserName(auth, fallback) {
     if (auth && auth.name && auth.name.trim()) return auth.name.trim();
     if (auth && auth.email) {
@@ -5988,7 +5988,7 @@ function renderHomePage() {
   const tabs = role === 'vendor' ? vendorTabs() : officeTabs();
   if (!homeTab || !tabs.find(t => t.key === homeTab)) homeTab = tabs[0].key;
   document.getElementById('home-title').textContent = role === 'vendor' ? t('my_work', 'My work') : t('office_dashboard', 'Office dashboard');
-  document.getElementById('home-subtitle').textContent = role === 'vendor' ? `${t('signed_in_as', 'Signed in as')} ${escapeHtml((getPerson(getCurrentUserId()) || {}).name || '')} · ${t('vendor', 'Vendor')}` : t('workload_subtitle', 'Pipelines grouped by what needs to happen next — the count on each tab is the workload.');
+  document.getElementById('home-subtitle').textContent = role === 'vendor' ? `${t('signed_in_as', 'Signed in as')} ${escapeHtml((getPerson(getCurrentUserId()) || {}).name || '')} · ${t('vendor', 'Welder')}` : t('workload_subtitle', 'Pipelines grouped by what needs to happen next — the count on each tab is the workload.');
   document.getElementById('home-tabs').innerHTML = tabs.map(t => `<button class="home-tab ${t.key === homeTab ? 'active' : ''} ${t.alert && t.count ? 'alert' : ''}" onclick="setHomeTab('${t.key}')">${escapeHtml(t.label)} <span class="tab-count">${t.count}</span></button>`).join('');
   const active = tabs.find(t => t.key === homeTab);
   document.getElementById('home-desc').textContent = active.desc || '';

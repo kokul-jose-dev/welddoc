@@ -1059,6 +1059,92 @@ def _find_mat_by_id_or_pos(pipeline_id, val):
     return PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, position=str(val).strip(), archived=False).first()
 
 
+def _split_linked_pair(m, pipeline_id):
+    """Break the direct link between two of m's connections that are joined to each other.
+
+    Connecting a new material to R and S, where R-S are already welded together, means it is
+    being spliced into that segment: R-S must go so the line becomes R-m-S. Only acts when
+    exactly one such pair exists - with two of them there is no single correct answer.
+    """
+    conns = [c for c in m.connections if not c.archived and c.id != m.id]
+    pairs = []
+    for i, a in enumerate(conns):
+        for b in conns[i + 1:]:
+            if b in a.connections:
+                pairs.append((a, b))
+    if len(pairs) != 1:
+        return None
+
+    a, b = pairs[0]
+    if b in a.connections:
+        a.connections.remove(b)
+    if a in b.connections:
+        b.connections.remove(a)
+
+    Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
+        db.or_(
+            db.and_(Weld.between_a == a.position, Weld.between_b == b.position),
+            db.and_(Weld.between_a == b.position, Weld.between_b == a.position),
+        )
+    ).delete(synchronize_session=False)
+    db.session.commit()
+    return a, b
+
+
+def _reposition_by_connections(m, pipeline_id):
+    """Move m so that its position follows the materials it is connected to.
+
+    - start of plumbing        -> first slot, everything else shifts down
+    - has connections          -> immediately after its lowest-positioned connection
+    - no connections           -> left where it is
+
+    Every material is then relabelled A, B, C... over the new order and each weld's
+    between_a / between_b is remapped, because welds reference position letters, not ids.
+
+    Deliberately standalone: the existing _renumber_positions / reorder paths are untouched.
+    """
+    mats = PipelineMaterial.query.filter_by(
+        pipeline_id=pipeline_id, archived=False
+    ).all()
+    mats.sort(key=lambda x: _letter_to_pos(x.position))
+    others = [x for x in mats if x.id != m.id]
+    if not others:
+        return
+
+    if m.start_of_plumbing:
+        target_idx = 0
+    else:
+        conns = [c for c in m.connections if not c.archived and c.id != m.id]
+        if not conns:
+            return
+        anchor = min(conns, key=lambda c: _letter_to_pos(c.position))
+        other_ids = [x.id for x in others]
+        if anchor.id not in other_ids:
+            return
+        target_idx = other_ids.index(anchor.id) + 1
+
+    ordered = others[:target_idx] + [m] + others[target_idx:]
+    if [x.id for x in ordered] == [x.id for x in mats]:
+        return  # already in the right slot
+
+    pos_map = {}
+    for idx, x in enumerate(ordered, 1):
+        new_pos = _pos_letter(idx)
+        if x.position != new_pos:
+            pos_map[x.position] = new_pos
+            x.position = new_pos
+    db.session.commit()
+
+    if pos_map:
+        welds = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).all()
+        for w in welds:
+            if w.between_a in pos_map:
+                w.between_a = pos_map[w.between_a]
+            if w.between_b in pos_map:
+                w.between_b = pos_map[w.between_b]
+        db.session.commit()
+
+
 def _update_connections(m, conn_positions, pipeline_id):
     """Update connections for a pipeline material by position letters or IDs."""
     target_connected = []
@@ -1086,6 +1172,8 @@ def _update_connections(m, conn_positions, pipeline_id):
         if m in rem.connections:
             rem.connections.remove(m)
 
+    conns_changed = {c.id for c in m.connections} != {c.id for c in target_connected}
+
     # Set new connections
     m.connections = target_connected
     for connected in target_connected:
@@ -1093,6 +1181,13 @@ def _update_connections(m, conn_positions, pipeline_id):
             connected.connections.append(m)
 
     db.session.commit()
+
+    # Let the connections decide where this material sits. Only when they actually changed,
+    # so editing anything else on a material never reshuffles the pipeline.
+    if conns_changed or m.start_of_plumbing:
+        _split_linked_pair(m, pipeline_id)
+        _reposition_by_connections(m, pipeline_id)
+
     _sync_and_renumber_welds(pipeline_id)
 
 
