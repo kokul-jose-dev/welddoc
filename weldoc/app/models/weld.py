@@ -20,6 +20,8 @@ class Weld(db.Model):
     welder_id = db.Column(db.Integer, db.ForeignKey("weldoc_welders.id"), nullable=True)
     inspector_id = db.Column(db.Integer, db.ForeignKey("weldoc_welders.id"), nullable=True)
     date = db.Column(db.String(20))
+    visual = db.Column(db.String(20))
+    endoscopy = db.Column(db.String(20))
     endoscopy_video_url = db.Column(db.String(500))
     endoscopy_image_url = db.Column(db.String(500))
     remarks = db.Column(db.Text)

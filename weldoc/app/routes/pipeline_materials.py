@@ -184,6 +184,32 @@ def edit_pipeline_material(pm_id):
     m = PipelineMaterial.query.get_or_404(pm_id)
     data = request.get_json()
 
+    # The specs may already have been rewritten by the global/project material calls that run
+    # before this one, so the client sends the global material id it pointed at beforehand.
+    # Global materials are find-or-create on an exact match, so a different id means the
+    # specifications changed - and with them the WAZ cover page.
+    waz_before = _waz_fingerprint(m)
+    pkg_url_before = m.waz_package_url
+    # Editing one material can renumber OTHERS (_assign_waz_no / _sync_pipeline_waz_nos).
+    # The WAZ number is printed on the cover and baked into the filename, so any material
+    # whose number moves needs its package rebuilt too - not just the one being edited.
+    _pipeline_rows_before = PipelineMaterial.query.filter_by(
+        pipeline_id=m.pipeline_id, archived=False
+    ).all()
+    waz_nos_before = {r.id: r.waz_no for r in _pipeline_rows_before}
+    # Also remember which package files were in use. When two materials merge back onto one
+    # WAZ number the dropped number's file is left referenced by nothing, and by then the
+    # database no longer knows its URL - so it has to be captured up front.
+    pkg_urls_before = {r.waz_package_url for r in _pipeline_rows_before if r.waz_package_url}
+    prev_gm_id = data.get("prevGlobalMaterialId")
+    try:
+        prev_gm_id = int(prev_gm_id) if prev_gm_id is not None else None
+    except (TypeError, ValueError):
+        prev_gm_id = None
+    # Same story for the heat number: it is rewritten by the project-material call that runs
+    # before this one, so the client sends what it was beforehand.
+    prev_heat = data.get("prevHeatNo") if "prevHeatNo" in data else None
+
     if "position" in data:
         m.position = data["position"]
     if "startOfPlumbing" in data:
@@ -265,6 +291,56 @@ def edit_pipeline_material(pm_id):
     if "connections" in data:
         _update_connections(m, data["connections"], m.pipeline_id)
         db.session.commit()
+
+    # Details on the cover page changed -> the stored package no longer matches. Rebuild it in
+    # the background so saving stays responsive (it downloads, merges and re-uploads a PDF).
+    regen_ids = []
+    if m.project_material and m.project_material.waz_pdf_url and m.waz_no:
+        specs_changed = prev_gm_id is not None and prev_gm_id != m.project_material.global_material_id
+        heat_changed = prev_heat is not None and clean_str(prev_heat).lower() != clean_str(m.project_material.heat_no).lower()
+        if (specs_changed or heat_changed or _waz_fingerprint(m) != waz_before
+                or (pkg_url_before and not m.waz_package_url)):
+            regen_ids.append(m.id)
+
+    for r in PipelineMaterial.query.filter_by(pipeline_id=m.pipeline_id, archived=False).all():
+        if r.id in regen_ids or not r.waz_no:
+            continue
+        if waz_nos_before.get(r.id) != r.waz_no and r.project_material and r.project_material.waz_pdf_url:
+            regen_ids.append(r.id)
+
+    if regen_ids:
+        import threading
+        from flask import current_app, session as flask_session
+        app = current_app._get_current_object()
+        actor = flask_session.get("user", {}).get("name", "") if flask_session else ""
+
+        def _bg_regen(ids, urls_before):
+            with app.app_context():
+                done_specs = set()
+                for mat_id in ids:
+                    try:
+                        mat = PipelineMaterial.query.get(mat_id)
+                        mat_pm = mat.project_material if mat else None
+                        if not mat_pm:
+                            continue
+                        # Materials sharing a spec share one package file - rebuild it once
+                        key = (
+                            mat_pm.global_material_id,
+                            (mat_pm.certificate or "").strip().lower(),
+                            (mat_pm.heat_no or "").strip().lower(),
+                        )
+                        if key in done_specs:
+                            continue
+                        done_specs.add(key)
+                        _regenerate_waz_package(mat_id, user_name=actor)
+                    except Exception as e:
+                        app.logger.error(f"WAZ regeneration failed for material {mat_id}: {e}")
+                try:
+                    _delete_unreferenced_waz_packages(urls_before)
+                except Exception as e:
+                    app.logger.error(f"WAZ orphan cleanup failed: {e}")
+
+        threading.Thread(target=_bg_regen, args=(list(regen_ids), set(pkg_urls_before)), daemon=True).start()
 
     return jsonify(_serialize(m)), 200
 
@@ -911,7 +987,100 @@ def _sync_pipeline_waz_nos(pipeline_id):
         db.session.commit()
 
 
-def _build_and_save_waz_package_with_bytes(m, file_content=None):
+def _waz_fingerprint(m):
+    """Everything that is printed on the WAZ cover page or baked into its filename.
+
+    Used to tell whether an already generated package still matches the material.
+    """
+    pm = m.project_material
+    gm = pm.global_material if pm else None
+    if not gm:
+        return None
+    return (
+        (gm.item_description or "").strip().lower(),
+        (gm.dien_no or "").strip().lower(),
+        tuple((getattr(gm, f"dn{i}") or "").strip().lower() for i in range(1, 7)),
+        tuple((d or "").strip().lower() for d in [gm.diameter, gm.diameter2, gm.diameter3]),
+        tuple((t or "").strip().lower() for t in [gm.thickness, gm.thickness2, gm.thickness3]),
+        (gm.material_code or "").strip().lower(),
+        (gm.surface or "").strip().lower(),
+        (pm.heat_no or "").strip().lower(),
+        (m.waz_no or "").strip().upper(),
+    )
+
+
+def _delete_unreferenced_waz_packages(urls):
+    """Delete WAZ package files that no active material points at any more.
+
+    Only ever called with URLs this app recorded itself, and each one is re-checked against
+    the database first - so a file that is still in use is never removed, and files the app
+    did not create are never even considered.
+    """
+    urls = {u for u in (urls or []) if u}
+    if not urls:
+        return
+    still_used = {
+        u for (u,) in db.session.query(PipelineMaterial.waz_package_url)
+        .filter(PipelineMaterial.waz_package_url.in_(list(urls)))
+        .filter(PipelineMaterial.archived == False)
+        .all() if u
+    }
+    from app.sharepoint import delete_sharepoint_file_by_url
+    for url in urls - still_used:
+        try:
+            delete_sharepoint_file_by_url(url)
+        except Exception as e:
+            from flask import current_app
+            current_app.logger.error(f"Could not delete unreferenced WAZ package {url}: {e}")
+
+
+def _regenerate_waz_package(pipeline_material_id, user_name=None):
+    """Rebuild the WAZ package for a material after its details changed.
+
+    The cover page carries the item description, DN(s), diameter(s), thickness(es), surface,
+    heat number and WAZ number, and the filename encodes them too - so once any of those is
+    edited the stored package is stale. The raw PDF is re-downloaded from the project folder,
+    a fresh cover is merged onto it, and the new package is shared with every material in the
+    pipeline that has the same spec. Only the single superseded file is deleted afterwards.
+    """
+    m = PipelineMaterial.query.get(pipeline_material_id)
+    if not m or m.archived:
+        return
+    pm = m.project_material
+    if not pm or not pm.waz_pdf_url or not m.waz_no:
+        return
+
+    # Remember the package files currently in use so the stale one can be removed afterwards
+    c_norm = (pm.certificate or "").strip().lower()
+    h_norm = (pm.heat_no or "").strip().lower()
+    siblings = PipelineMaterial.query.filter_by(
+        pipeline_id=m.pipeline_id, archived=False
+    ).filter(PipelineMaterial.id != m.id).all()
+    same_spec = [
+        sib for sib in siblings
+        if sib.project_material
+        and sib.project_material.global_material_id == pm.global_material_id
+        and (sib.project_material.certificate or "").strip().lower() == c_norm
+        and (sib.project_material.heat_no or "").strip().lower() == h_norm
+    ]
+    old_pkg_urls = {u for u in [m.waz_package_url] + [sib.waz_package_url for sib in same_spec] if u}
+
+    pkg_url, _ = _build_and_save_waz_package_with_bytes(m, file_content=None, user_name=user_name)
+    if not pkg_url:
+        return
+
+    # Share the rebuilt package with the other materials carrying the same spec
+    for sib in same_spec:
+        sib.waz_no = m.waz_no
+        sib.waz_package_url = pkg_url
+    db.session.commit()
+
+    # Delete ONLY the superseded package file. Never sweep the folder: it also holds documents
+    # this app did not create, and deleting by "everything that does not match" would take them.
+    _delete_unreferenced_waz_packages(old_pkg_urls - {pkg_url})
+
+
+def _build_and_save_waz_package_with_bytes(m, file_content=None, user_name=None):
     """Generate Cover Letter, merge with raw WAZ PDF, upload combined package to SharePoint, and save waz_package_url.
     Returns (pkg_url, merged_pdf_bytes)."""
     from app.models.project import Project
@@ -958,7 +1127,10 @@ def _build_and_save_waz_package_with_bytes(m, file_content=None):
     gm = pm.global_material
     from flask import session as flask_session
     from app.dates import today_str
-    user_name = flask_session.get("user", {}).get("name", "") if flask_session else ""
+    # Outside a request - a background rebuild - the session is unavailable and reads as empty,
+    # which is why "Erstellt von" came out blank. Callers running in a request pass the name in.
+    if user_name is None:
+        user_name = flask_session.get("user", {}).get("name", "") if flask_session else ""
 
     cover_data = {
         "user_name": user_name,
@@ -1040,8 +1212,8 @@ def _build_and_save_waz_package_with_bytes(m, file_content=None):
     return pkg_url, merged_pdf_bytes
 
 
-def _build_and_save_waz_package(m, file_content=None):
-    pkg_url, _ = _build_and_save_waz_package_with_bytes(m, file_content)
+def _build_and_save_waz_package(m, file_content=None, user_name=None):
+    pkg_url, _ = _build_and_save_waz_package_with_bytes(m, file_content, user_name=user_name)
     return pkg_url
 
 

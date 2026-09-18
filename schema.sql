@@ -140,6 +140,8 @@ CREATE TABLE weldoc_welds (
     welder_id INT,
     inspector_id INT,
     date NVARCHAR(20),
+    visual NVARCHAR(20),
+    endoscopy NVARCHAR(20),
     endoscopy_video_url NVARCHAR(500),
     endoscopy_image_url NVARCHAR(500),
     remarks NVARCHAR(MAX),

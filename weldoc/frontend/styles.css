@@ -189,6 +189,15 @@ tbody tr.clickable-row{cursor:pointer;}
 .jm-row .k{color:var(--blueprint);} .jm-row .v{font-family:var(--mono);text-align:right;}
 .ok-tag{background:var(--success-soft);color:var(--success);border-radius:3px;padding:1px 8px;font-size:0.72rem;font-weight:700;}
 .na-tag{background:#E4E9ED;color:#5A6B7A;border-radius:3px;padding:1px 8px;font-size:0.72rem;font-weight:700;}
+.col-select{width:34px;text-align:center;}
+.col-select input{cursor:pointer;}
+tr.row-selected>td{background:var(--copper-soft,rgba(176,106,52,0.08));}
+.bulk-bar{display:none;align-items:center;gap:10px;margin-bottom:10px;padding:8px 14px;border:1px solid var(--border);border-left:3px solid var(--copper,#B06A34);border-radius:4px;background:#F8FAFC;}
+.bulk-bar.open{display:flex;}
+.bulk-bar .bulk-count{font-weight:600;font-size:0.86rem;margin-right:4px;}
+.bulk-result{display:none;font-size:0.84rem;color:var(--success);font-weight:600;margin-bottom:10px;padding:7px 14px;border:1px solid var(--success-soft);border-radius:4px;background:var(--success-soft);}
+.bulk-result.open{display:block;}
+.bad-tag{background:var(--danger-soft,#FDECEA);color:var(--danger,#C62828);border-radius:3px;padding:1px 8px;font-size:0.72rem;font-weight:700;white-space:nowrap;}
 
 .chip-links{display:flex;gap:8px;flex-wrap:wrap;}
 .chip-link{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);border-radius:20px;font-size:0.82rem;font-weight:600;color:var(--blueprint);text-decoration:none;background:#fff;}
@@ -222,6 +231,8 @@ tbody tr.clickable-row{cursor:pointer;}
 .inline-add-panel{display:none;margin-top:8px;padding:12px;background:#F5F7F9;border:1px solid var(--border);border-radius:4px;} .inline-add-panel.open{display:block;}
 .inline-add-row{display:flex;gap:8px;} .inline-add-row input{flex:1;} .inline-add-row .btn{padding:8px 14px;white-space:nowrap;}
 .checklist{max-height:148px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;padding:6px 10px;background:#fff;}
+.checklist.checklist-locked{background:#F8FAFC;color:var(--text-muted);cursor:not-allowed;}
+.checklist.checklist-locked .check-item{cursor:not-allowed;}
 .check-item{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:0.86rem;cursor:pointer;} .check-item input{width:auto;}
 .conn-row{display:flex;gap:8px;margin-bottom:8px;align-items:center;} .conn-row select{flex:1;}
 .conn-remove{background:none;border:1px solid var(--border);border-radius:4px;color:var(--danger);cursor:pointer;padding:7px 11px;font-weight:700;}

@@ -48,6 +48,73 @@ def get_project_material(pm_id):
     return jsonify(_serialize(m))
 
 
+def _resync_waz_for_project_material(pm_id, user_name=None):
+    """Rebuild the WAZ packages of every pipeline that uses this project material.
+
+    Editing a project material changes its specifications, heat number or certificate for
+    every pipeline it appears in. All of those are printed on the WAZ cover page and baked
+    into the filename, so each affected pipeline needs its WAZ numbers realigned and its
+    package rebuilt - otherwise the stored PDFs still describe the old material.
+    """
+    from app.models.pipeline_material import PipelineMaterial
+    from app.routes.pipeline_materials import _sync_pipeline_waz_nos, _regenerate_waz_package
+
+    rows = PipelineMaterial.query.filter_by(project_material_id=pm_id, archived=False).all()
+    pipeline_ids = sorted({r.pipeline_id for r in rows})
+    current_app.logger.info(
+        f"WAZ resync: project material {pm_id} is used by {len(rows)} material(s) "
+        f"in pipeline(s) {pipeline_ids or 'none'}"
+    )
+    for pid in pipeline_ids:
+        try:
+            _sync_pipeline_waz_nos(pid)
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"WAZ number sync failed for pipeline {pid}: {e}")
+
+    for pid in pipeline_ids:
+        # One rebuild per pipeline is enough: every row here shares this project material,
+        # and _regenerate_waz_package shares the result with same-spec siblings.
+        target = PipelineMaterial.query.filter_by(
+            project_material_id=pm_id, pipeline_id=pid, archived=False
+        ).first()
+        if not target:
+            continue
+        pm = target.project_material
+        if not pm or not pm.waz_pdf_url or not target.waz_no:
+            current_app.logger.info(
+                f"WAZ resync: skipping material {target.id} in pipeline {pid} "
+                f"(waz_no={target.waz_no!r}, has raw pdf={bool(pm and pm.waz_pdf_url)})"
+            )
+            continue
+        try:
+            _regenerate_waz_package(target.id, user_name=user_name)
+            current_app.logger.info(f"WAZ resync: rebuilt package for material {target.id} in pipeline {pid}")
+        except Exception as e:
+            current_app.logger.error(f"WAZ regeneration failed for material {target.id}: {e}")
+
+
+def _regenerate_waz_in_background(pm_id):
+    """Run _resync_waz_for_project_material off the request: it downloads, merges and
+    re-uploads a PDF per affected pipeline."""
+    import threading
+    from flask import session as flask_session
+
+    app = current_app._get_current_object()
+    # Read who is doing this while the request is still alive - the background thread has no
+    # session, and the cover page prints this name under "Erstellt von".
+    actor = flask_session.get("user", {}).get("name", "") if flask_session else ""
+
+    def _bg():
+        with app.app_context():
+            try:
+                _resync_waz_for_project_material(pm_id, user_name=actor)
+            except Exception as e:
+                app.logger.error(f"WAZ resync failed for project material {pm_id}: {e}")
+
+    threading.Thread(target=_bg, daemon=True).start()
+
+
 @project_materials_bp.route("", methods=["POST"])
 def create_or_update_project_material():
     data = request.get_json() or {}
@@ -58,6 +125,10 @@ def create_or_update_project_material():
     if "id" in data and data["id"]:
         m = ProjectMaterial.query.get_or_404(data["id"])
         target_gm_id = data.get("globalMaterialId", m.global_material_id)
+        # Remember what the existing WAZ packages were built from
+        gm_before = m.global_material_id
+        cert_before = clean_str(m.certificate)
+        heat_before = clean_str(m.heat_no)
 
         # Check if updating this PM matches another existing PM in the same project
         existing_other = find_matching_project_material(
@@ -69,6 +140,8 @@ def create_or_update_project_material():
             if waz_pdf_url and not existing_other.waz_pdf_url:
                 existing_other.waz_pdf_url = waz_pdf_url
             db.session.commit()
+            # The pipeline rows moved to a different material, so their packages are stale
+            _regenerate_waz_in_background(existing_other.id)
             return jsonify(_serialize(existing_other)), 200
 
         # Update in place
@@ -80,6 +153,12 @@ def create_or_update_project_material():
         if "archived" in data:
             m.archived = data["archived"]
         db.session.commit()
+
+        if (gm_before != m.global_material_id
+                or cert_before.lower() != clean_str(m.certificate).lower()
+                or heat_before.lower() != clean_str(m.heat_no).lower()):
+            _regenerate_waz_in_background(m.id)
+
         return jsonify(_serialize(m)), 200
     else:
         raw_project_id = data.get("projectId")
@@ -229,6 +308,10 @@ def upload_waz(pm_id):
     if url:
         m.waz_pdf_url = url
         db.session.commit()
+        # Every pipeline using this material can now have its WAZ package built: the certificate
+        # it was waiting for exists. Without this the package is only created the first time
+        # somebody happens to open that WAZ from the pipeline.
+        _regenerate_waz_in_background(m.id)
         return jsonify({"wazPdfUrl": url}), 200
     else:
         return jsonify({"error": "Failed to upload to SharePoint"}), 500

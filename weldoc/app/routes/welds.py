@@ -60,6 +60,64 @@ def create_or_update_weld():
     return jsonify(_serialize(w)), 200
 
 
+@welds_bp.route("/bulk", methods=["POST"])
+def bulk_update_welds():
+    """Apply the same values to several welds in one transaction.
+
+    Only the keys present in `values` are written, so a bulk edit of one field
+    never clears the fields the user left on "keep existing".
+    """
+    data = request.get_json() or {}
+    ids = [int(i) for i in (data.get("ids") or [])]
+    values = data.get("values") or {}
+    if not ids:
+        return jsonify({"error": "No welds selected."}), 400
+    if not values:
+        return jsonify({"error": "No fields to update."}), 400
+
+    allowed = {
+        "type": "type",
+        "procedure": "procedure",
+        "weldingWire": "welding_wire",
+        "welderId": "welder_id",
+        "inspectorId": "inspector_id",
+        "welder": "welder",
+        "inspector": "inspector",
+        "date": "date",
+        "visual": "visual",
+        "endoscopy": "endoscopy",
+    }
+    changes = {allowed[k]: v for k, v in values.items() if k in allowed}
+    if not changes:
+        return jsonify({"error": "No updatable fields supplied."}), 400
+
+    rows = Weld.query.filter(Weld.id.in_(ids), Weld.archived == False).all()  # noqa: E712
+    for w in rows:
+        for col, val in changes.items():
+            if col in ("welder_id", "inspector_id"):
+                setattr(w, col, val or None)
+            else:
+                setattr(w, col, val)
+    db.session.commit()
+
+    updated_ids = [w.id for w in rows]
+
+    # Copy welder/inspector certificates to the pipeline folder in the background
+    if values.get("welderId") or values.get("inspectorId"):
+        import threading
+        from flask import current_app
+        app = current_app._get_current_object()
+
+        def _bg_copy_certs():
+            with app.app_context():
+                for wid in updated_ids:
+                    _copy_welder_certs_to_pipeline(wid)
+
+        threading.Thread(target=_bg_copy_certs, daemon=True).start()
+
+    return jsonify({"updated": len(rows), "welds": [_serialize(w) for w in rows]}), 200
+
+
 @welds_bp.route("/<int:weld_id>/upload-files", methods=["POST"])
 def upload_weld_files(weld_id):
     """Upload endo video and/or image to SharePoint in pipeline 03 Bilddokumentation folder."""
@@ -119,6 +177,8 @@ def _update(w, data):
     if "inspector" in data:
         w.inspector = data["inspector"]
     w.date = data.get("date", w.date)
+    w.visual = data.get("visual", w.visual)
+    w.endoscopy = data.get("endoscopy", w.endoscopy)
     w.endoscopy_video_url = data.get("endoscopyVideoUrl", w.endoscopy_video_url)
     w.endoscopy_image_url = data.get("endoscopyImageUrl", w.endoscopy_image_url)
     w.remarks = data.get("remarks", w.remarks)
@@ -141,6 +201,8 @@ def _serialize(w):
         "welderId": w.welder_id,
         "inspectorId": w.inspector_id,
         "date": w.date,
+        "visual": w.visual,
+        "endoscopy": w.endoscopy,
         "endoscopyVideoUrl": w.endoscopy_video_url,
         "endoscopyImageUrl": w.endoscopy_image_url,
         "remarks": w.remarks,

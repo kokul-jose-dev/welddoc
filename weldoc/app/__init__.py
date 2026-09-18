@@ -33,6 +33,8 @@ def create_app():
                 "ALTER TABLE weldoc_pipelines ADD welding_remarks NVARCHAR(MAX) NULL",
                 "ALTER TABLE weldoc_welds ADD welder_id INT NULL",
                 "ALTER TABLE weldoc_welds ADD inspector_id INT NULL",
+                "ALTER TABLE weldoc_welds ADD visual NVARCHAR(20) NULL",
+                "ALTER TABLE weldoc_welds ADD endoscopy NVARCHAR(20) NULL",
             ]
             for sql in migrations:
                 try:

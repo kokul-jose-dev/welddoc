@@ -75,7 +75,7 @@ def get_pipeline_detail(pipeline_id):
     weld_rows = db.session.execute(db.text("""
         SELECT id, pipeline_id, weld_no, between_a, between_b, type, [procedure],
                welding_wire, welder, inspector, welder_id, inspector_id, date,
-               endoscopy_video_url, endoscopy_image_url, remarks, archived
+               visual, endoscopy, endoscopy_video_url, endoscopy_image_url, remarks, archived
         FROM weldoc_welds
         WHERE pipeline_id = :pid AND archived = 0
         ORDER BY CAST(weld_no AS INT), id
@@ -173,7 +173,8 @@ def get_pipeline_detail(pipeline_id):
             "type": w.type, "procedure": getattr(w, 'procedure', ''),
             "weldingWire": w.welding_wire, "welder": w.welder, "inspector": w.inspector,
             "welderId": w.welder_id, "inspectorId": w.inspector_id,
-            "date": w.date, "endoscopyVideoUrl": w.endoscopy_video_url,
+            "date": w.date, "visual": w.visual, "endoscopy": w.endoscopy,
+            "endoscopyVideoUrl": w.endoscopy_video_url,
             "endoscopyImageUrl": w.endoscopy_image_url, "remarks": w.remarks,
             "archived": w.archived,
         })

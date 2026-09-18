@@ -1080,8 +1080,8 @@ function mountModals() {
       <label class="field"><span class="lbl" data-i18n="weld_no">Weld number <span class="req">*</span></span><input type="text" id="input-weld-no" required></label>
       <label class="field"><span class="lbl" data-i18n="date_of_welding">Date of welding</span><input type="date" id="input-weld-date"></label>
       <div class="field wide"><span class="lbl" data-i18n="between_joined_materials">Between (joined materials)</span><div class="checklist" id="input-weld-materials"></div>
-        <button type="button" class="inline-add-toggle" onclick="openMaterialModal(null,true)" data-i18n="add_new_item">+ Add new item</button>
-        <div class="field-hint" data-i18n="select_joined_materials_hint">Select the materials this seam joins.</div></div>
+        <button type="button" class="inline-add-toggle" id="weld-mat-add-btn" onclick="openMaterialModal(null,true)" data-i18n="add_new_item">+ Add new item</button>
+        <div class="field-hint" id="weld-mat-hint" data-i18n="select_joined_materials_hint">Select the materials this seam joins.</div></div>
       <div class="field"><span class="lbl" data-i18n="weld_type">Type</span><select id="input-weld-type" onchange="onWeldTypeChange()"><option value="">—</option><option value="O">O — Orbital</option><option value="H">H — Hand / semi-auto</option><option value="M">M — Manual</option></select></div>
       <div class="field"><span class="lbl" data-i18n="procedure">Procedure</span><input type="text" id="input-weld-proc" readonly></div>
       <label class="field"><span class="lbl" data-i18n="visual_result">Visual result</span><select id="input-weld-visual"><option>OK</option><option>Not OK</option><option>n/a</option></select></label>
@@ -1090,6 +1090,23 @@ function mountModals() {
       <div class="field"><span class="lbl" data-i18n="endoscopy_image">Endoscopy image (→ SharePoint)</span><div id="weld-image-current"></div><input type="file" id="input-weld-endoscopy-img" accept="image/*"></div>
       <label class="field wide"><span class="lbl" data-i18n="remarks">Remarks</span><textarea id="input-weld-remarks" placeholder="Shown when the Remarks cell is clicked" data-i18n-placeholder="remarks_placeholder"></textarea></label>
     </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-weld')" data-i18n="cancel">Cancel</button><button type="submit" class="btn btn-primary" data-i18n="save_weld">Save weld</button></div></form>
+  </div></div>
+
+  <div class="modal-overlay" id="modal-weld-bulk"><div class="modal modal-wide">
+    <button class="modal-close" onclick="closeModal('modal-weld-bulk')">&times;</button><h2 data-i18n="bulk_edit_welds">Edit several welds</h2>
+    <p class="field-hint" style="margin-bottom:16px;" id="bulk-weld-count"></p>
+    <form id="weld-bulk-form" onsubmit="submitWeldBulk(event); return false;" novalidate><div class="form-grid">
+      <div class="field"><span class="lbl" data-i18n="weld_type">Type</span><select id="bulk-weld-type" onchange="onBulkWeldTypeChange()"><option value="__keep__" data-i18n="keep_existing">— Keep existing —</option><option value="">—</option><option value="O">O — Orbital</option><option value="H">H — Hand / semi-auto</option><option value="M">M — Manual</option></select></div>
+      <div class="field"><span class="lbl" data-i18n="procedure">Procedure</span><input type="text" id="bulk-weld-proc" readonly placeholder="—"></div>
+      <div class="field"><span class="lbl" data-i18n="th_welding_wire">Welding Wire</span><select id="bulk-weld-wire"></select></div>
+      <div class="field"><span class="lbl" data-i18n="date_of_welding">Date of welding</span><input type="date" id="bulk-weld-date"></div>
+      <div class="field"><span class="lbl" data-i18n="th_welder">Welder</span><select id="bulk-weld-welder"></select></div>
+      <div class="field"><span class="lbl" data-i18n="th_inspector">Inspector</span><select id="bulk-weld-inspector"></select></div>
+      <div class="field"><span class="lbl" data-i18n="visual_result">Visual result</span><select id="bulk-weld-visual"><option value="__keep__" data-i18n="keep_existing">— Keep existing —</option><option value="OK">OK</option><option value="Not OK">Not OK</option><option value="n/a">n/a</option></select></div>
+      <div class="field"><span class="lbl" data-i18n="endoscopy_result">Endoscopy result</span><select id="bulk-weld-endoscopy"><option value="__keep__" data-i18n="keep_existing">— Keep existing —</option><option value="OK">OK</option><option value="Not OK">Not OK</option><option value="n/a">n/a</option></select></div>
+      <div class="field wide"><div class="field-hint" data-i18n="bulk_edit_hint">Only the fields you change are written. Anything left on “Keep existing” stays as it is on each weld. Weld number, joined materials and endoscopy files stay per weld and are edited individually.</div></div>
+      <div class="modal-err" id="weld-bulk-err"></div>
+    </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-weld-bulk')" data-i18n="cancel">Cancel</button><button type="submit" class="btn btn-primary" id="weld-bulk-submit" data-i18n="apply_to_selected">Apply to selected</button></div></form>
   </div></div>
 
   <div class="modal-overlay" id="modal-material"><div class="modal modal-wide">
@@ -1453,7 +1470,7 @@ function attachFormHandlers() {
       const selMats = data.materialIds.map(id => getMaterial(id)).filter(Boolean);
       const bA = selMats[0] ? posLetter(selMats[0].position) : '';
       const bB = selMats[1] ? posLetter(selMats[1].position) : '';
-      const apiData = { pipelineId: data.pipelineId, weldNo: data.weldNo, betweenA: bA, betweenB: bB, type: data.type, procedure: data.procedure, welderId: welderIdVal, inspectorId: inspectorIdVal, welder: welderName, inspector: inspectorName, date: data.date, remarks: data.remarks };
+      const apiData = { pipelineId: data.pipelineId, weldNo: data.weldNo, betweenA: bA, betweenB: bB, type: data.type, procedure: data.procedure, welderId: welderIdVal, inspectorId: inspectorIdVal, welder: welderName, inspector: inspectorName, date: data.date, visual: data.visual, endoscopy: data.endoscopy, remarks: data.remarks };
       if (existingWeld && existingWeld.weldingWire) apiData.weldingWire = existingWeld.weldingWire;
       if (editingWeldId !== null) apiData.id = editingWeldId;
       const savedWeld = await apiPost('/welds', apiData);
@@ -1596,7 +1613,7 @@ function attachFormHandlers() {
           promptHeatConflictModal({
             mode: 'update_or_add_new',
             title: t('similar_material_exists_title', 'Similar Material Exists'),
-            desc: t('similar_material_exists_desc', 'A material with the same core specifications already exists in this project, but has different secondary specifications. Would you like to update the existing material or add this as a new material?'),
+            desc: t('similar_material_exists_desc', 'A material with the same core specifications already exists in this project, but some secondary specifications differ.<br><br><strong>Update</strong> — the existing material is changed, which applies to <strong>every material with these specifications</strong>, in this and in every other pipeline of the project.<br><strong>Add as New Material</strong> — a separate material is created and <strong>only this one</strong> uses it.'),
             diffs,
             updateBtnText: t('update', 'Update'),
             addBtnText: t('add_as_new', 'Add as New Material'),
@@ -1625,7 +1642,7 @@ function attachFormHandlers() {
         promptHeatConflictModal({
           mode: 'update_or_add_new',
           title: t('update_material_specs_title', 'Update Material Specifications'),
-          desc: t('update_material_specs_desc', 'You are changing the specifications for this material. Would you like to update this material or add it as a new material?'),
+          desc: t('update_material_specs_desc', 'You are changing the specifications for this material.<br><br><strong>Update</strong> — the change applies to <strong>every material with these specifications</strong>, in this and in every other pipeline of the project.<br><strong>Add as New Material</strong> — <strong>only this material</strong> changes; all the others keep their current specifications.'),
           diffs,
           updateBtnText: t('update', 'Update'),
           addBtnText: t('add_as_new', 'Add as New Material'),
@@ -1716,6 +1733,12 @@ async function doSavePipelineMaterial(params) {
   const curPl = (typeof getPipeline === 'function' && PAGE.pipelineId) ? getPipeline(PAGE.pipelineId) : null;
   const currentProjectId = PAGE.projectId || (curPl ? curPl.projectId : null);
 
+  /* Read the spec this material points at BEFORE any save call runs. The global material is
+     find-or-create on an exact match, so a different id afterwards means the specifications
+     changed - which is how the server knows the WAZ cover page has to be rebuilt. */
+  const matBeforeSave = (editingId !== null) ? getMaterial(editingId) : null;
+  const prevGlobalMaterialId = matBeforeSave ? matBeforeSave.globalMaterialId : null;
+
   try {
     const posLtr = val('input-mat-position') || posLetter(data.position || 1);
     const connPositions = (data.connections || []).map(cid => {
@@ -1753,6 +1776,10 @@ async function doSavePipelineMaterial(params) {
     // Step 3: Create/edit pipeline material
     const plmData = { pipelineId: data.pipelineId, projectMaterialId: pmResult.id, position: posLtr, startOfPlumbing: data.startOfPlumbing, endOfPlumbing: data.endOfPlumbing, connections: connPositions };
     if (editingId !== null) plmData.id = editingId;
+    if (prevGlobalMaterialId) plmData.prevGlobalMaterialId = prevGlobalMaterialId;
+    /* The heat number is changed by the project-material call above, so the server cannot see
+       what it used to be. It is printed on the cover page and in the filename, so send it. */
+    if (matBeforeSave) plmData.prevHeatNo = matBeforeSave.heatNo || '';
     let plmResult;
     if (plmData.id) { plmResult = await apiPost('/pipeline-materials/' + plmData.id, plmData); }
     else { plmResult = await apiPost('/pipeline-materials', plmData); }
@@ -1776,7 +1803,7 @@ async function doSavePipelineMaterial(params) {
     rebuildRelationships();
     saveDB();
     closeModal('modal-material');
-    if (materialReturnToWeld) { materialReturnToWeld = false; if (document.getElementById('modal-weld').classList.contains('open')) buildWeldMaterialChecklist(getChecked('input-weld-materials')); }
+    if (materialReturnToWeld) { materialReturnToWeld = false; if (document.getElementById('modal-weld').classList.contains('open')) buildWeldMaterialChecklist(getChecked('input-weld-materials'), editingWeldId !== null); }
     rerenderPage();
   } catch (e) {
     console.error('Save material API error:', e);
@@ -2335,14 +2362,23 @@ function addPersonInline(kind) {
 }
 
 /* weld modal */
-function buildWeldMaterialChecklist(selectedIds) {
+function buildWeldMaterialChecklist(selectedIds, locked) {
   const mats = pipelineMaterials(PAGE.pipelineId);
-  document.getElementById('input-weld-materials').innerHTML = mats.length ? mats.map(m => `<label class="check-item"><input type="checkbox" value="${m.id}" ${selectedIds.includes(m.id) ? 'checked' : ''}> ${posLetter(m.position)} · ${escapeHtml(m.piece)} · ${escapeHtml(m.itemDescription)}</label>`).join('') : '<div class="muted" style="padding:6px 0;">' + t('no_materials_yet_add_first', 'No materials yet — add one first.') + '</div>';
+  const el = document.getElementById('input-weld-materials');
+  el.innerHTML = mats.length ? mats.map(m => `<label class="check-item"><input type="checkbox" value="${m.id}" ${selectedIds.includes(m.id) ? 'checked' : ''} ${locked ? 'disabled' : ''}> ${posLetter(m.position)} · ${escapeHtml(m.piece)} · ${escapeHtml(m.itemDescription)}</label>`).join('') : '<div class="muted" style="padding:6px 0;">' + t('no_materials_yet_add_first', 'No materials yet — add one first.') + '</div>';
+  el.classList.toggle('checklist-locked', !!locked);
+  const addBtn = document.getElementById('weld-mat-add-btn');
+  if (addBtn) addBtn.style.display = locked ? 'none' : '';
+  const hint = document.getElementById('weld-mat-hint');
+  if (hint) hint.setAttribute('data-i18n', locked ? 'joined_materials_locked_hint' : 'select_joined_materials_hint');
+  if (hint) hint.textContent = locked
+    ? t('joined_materials_locked_hint', 'The joined materials cannot be changed after the weld is created. Edit the connections on the materials instead.')
+    : t('select_joined_materials_hint', 'Select the materials this seam joins.');
 }
 function openWeldModal(id = null) {
   editingWeldId = id; document.getElementById('weld-form').reset();
   const sel = id !== null ? getWeld(id) : null;
-  buildWeldMaterialChecklist(sel ? sel.materialIds : []);
+  buildWeldMaterialChecklist(sel ? sel.materialIds : [], !!sel);
   if (sel) {
     document.getElementById('modal-weld-title').textContent = t('edit_weld', 'Edit weld');
     setV('input-weld-no', sel.weldNo); setV('input-weld-date', sel.date || TODAY_ISO); setV('input-weld-type', sel.type); setV('input-weld-visual', sel.visual || 'OK'); setV('input-weld-endoscopy', sel.endoscopy || 'n/a'); setV('input-weld-remarks', sel.remarks || '');
@@ -2484,6 +2520,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   const isTriggerOther = triggerSelId ? (document.getElementById(triggerSelId)?.value === '__other__') : false;
 
   const _catMatch = (item) => !curPiece || (item.category || item.piece || '').toLowerCase() === curPiece.toLowerCase();
+  const _dnOf = (item, i) => (i === 1 ? (item.dn1 || item.dimension) : (item[`dimension${i}`] || item[`dn${i}`])) || '';
   const _isProjectHeat = (h) => Boolean(
     h && h !== '__other__' &&
     projMats.some(pm => _catMatch(pm) && (pm.heatNo || '').trim().toLowerCase() === h.trim().toLowerCase())
@@ -2510,10 +2547,21 @@ function _refreshPipelineMatCombinations(triggerField = null) {
       curDien = ''; curCode = ''; curDia = ''; curThk = ''; curSurf = '';
       for (let i = 2; i <= 6; i++) { curExtraDias[i] = ''; curExtraThks[i] = ''; }
     } else if (triggerField === 'dn' || (triggerField && triggerField.startsWith('dn'))) {
-      /* A different DN means a different material: the heat and everything derived from it
-         must be re-resolved, otherwise the pools below are still built from the old heat. */
-      curHeat = ''; curCert = ''; curDien = ''; curCode = ''; curDia = ''; curThk = ''; curSurf = '';
-      for (let i = 2; i <= 6; i++) { curExtraDias[i] = ''; curExtraThks[i] = ''; }
+      /* Editing an existing material must never throw away its recorded data - the user is
+         correcting one field. When ADDING, the heat-derived specs are only dropped if that
+         heat does not exist for the new DN, because then they describe a different material. */
+      const heatFitsNewDn = Boolean(
+        curHeat && curHeat !== '__other__' &&
+        projMats.some(pm =>
+          _catMatch(pm) &&
+          (pm.heatNo || '').trim().toLowerCase() === curHeat.trim().toLowerCase() &&
+          (!curDn || curDn === '__other__' || !_dnOf(pm, 1) || _dnOf(pm, 1) === curDn)
+        )
+      );
+      if (editingMaterialId === null && !heatFitsNewDn) {
+        curHeat = ''; curCert = ''; curDien = ''; curCode = ''; curDia = ''; curThk = ''; curSurf = '';
+        for (let i = 2; i <= 6; i++) { curExtraDias[i] = ''; curExtraThks[i] = ''; }
+      }
     } else if (triggerField === 'diameter') {
       curThk = '';
     } else if (triggerField && triggerField.startsWith('diameter')) {
@@ -2525,7 +2573,6 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   /* Adopt the previous material's DN(s) as an ACTIVE FILTER (not just a display value),
      but only when the chosen category really has materials with that DN. Doing this here,
      before any option pool is built, lets DN narrow description / heat / certificate too. */
-  const _dnOf = (item, i) => (i === 1 ? (item.dn1 || item.dimension) : (item[`dimension${i}`] || item[`dn${i}`])) || '';
   const _dnTriggered = Boolean(triggerField && /^dn\d*$/.test(triggerField));
   if (!isTriggerOther && !_dnTriggered && !_isProjectHeat(curHeat) && _prefillAllDns && _prefillAllDns.length) {
     const catPool = [...projMats.filter(_catMatch), ...globalMats.filter(_catMatch)];
@@ -2780,7 +2827,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   const heatOpts = availHeats;
   let targetHeat = getFieldValue('heat', curHeat, availHeats, 'input-mat-heat');
   /* Changing a DN can invalidate the heat that was chosen for the old DN - drop it. */
-  if (isDnTrigger && targetHeat && targetHeat !== '__other__' && !availHeats.includes(targetHeat)) {
+  if (editingMaterialId === null && isDnTrigger && targetHeat && targetHeat !== '__other__' && !availHeats.includes(targetHeat)) {
     targetHeat = availHeats.length === 1 ? availHeats[0] : '';
   }
   const isHeatOther = document.getElementById('input-mat-heat') && document.getElementById('input-mat-heat').value === '__other__';
@@ -2792,7 +2839,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   // 4. Certificate
   const certOpts = availCerts.length ? availCerts : (isHeatSelected ? [] : CERT_OPTIONS);
   let targetCert = getFieldValue('cert', curCert, certOpts, 'input-mat-certificate');
-  if (isDnTrigger && targetCert && targetCert !== '__other__' && !certOpts.includes(targetCert)) {
+  if (editingMaterialId === null && isDnTrigger && targetCert && targetCert !== '__other__' && !certOpts.includes(targetCert)) {
     targetCert = certOpts.length === 1 ? certOpts[0] : '';
   }
   const isCertOther = document.getElementById('input-mat-certificate') && document.getElementById('input-mat-certificate').value === '__other__';
@@ -2934,9 +2981,11 @@ function _refreshPipelineMatCombinations(triggerField = null) {
       _matAttachedWazPdfUrl = '';
       _renderMatWazDoc();
     }
-  } else if (!isTriggerOther || isUnknownHeat) {
-    /* A brand new heat has no WAZ certificate of its own - drop the one that belonged to the
-       previous heat rather than carrying it over to a different material. */
+  } else if (editingMaterialId === null && (!isTriggerOther || isUnknownHeat)) {
+    /* When ADDING, a brand new heat has no certificate of its own - drop the one that belonged
+       to the previous heat rather than carrying it over to a different material. When EDITING,
+       the material keeps its document: the server carries waz_pdf_url over to whichever project
+       material the row ends up linked to, and Remove is the only thing that detaches it. */
     _matAttachedWazPdfUrl = '';
     _renderMatWazDoc();
   }
@@ -4636,6 +4685,35 @@ function materialDnMismatch(m) {
     return m.dimension !== c.dimension;
   });
 }
+/* A tee's third leg leaves the straight run and lands somewhere else in the pipeline.
+   The combined view flags that with a branch badge; the Pos. cell carries the same cue,
+   so any connection that is NOT the row above or below shows as "↳ <pos>". */
+function materialBranchBadges(m, rows, rowIndex) {
+  const isWireMat = x => (x.piece || x.category || '').toLowerCase() === 'welding wire';
+  const conns = (m.connections || []).map(getMaterial).filter(c => c && !isWireMat(c));
+  if (!conns.length) return '';
+  const i = rowIndex.get(m.id);
+  const neighbourIds = new Set();
+  if (i !== undefined) {
+    if (rows[i - 1]) neighbourIds.add(rows[i - 1].id);
+    if (rows[i + 1]) neighbourIds.add(rows[i + 1].id);
+  }
+  const branches = conns.filter(c => !neighbourIds.has(c.id));
+  if (!branches.length) return '';
+  branches.sort((a, b) => (rowIndex.has(a.id) ? rowIndex.get(a.id) : 999) - (rowIndex.has(b.id) ? rowIndex.get(b.id) : 999));
+  return branches.map(c => {
+    const letter = posLetter(c.position);
+    const tip = `${t('branch_connection_to', 'Branch connection to')} ${letter} · ${c.itemDescription}`;
+    return `<button class="cv-branch-badge" onclick="event.stopPropagation();jumpToMaterialRow(${c.id})" title="${escapeHtml(tip)}">↳ ${letter}</button>`;
+  }).join('');
+}
+function jumpToMaterialRow(matId) {
+  const el = document.querySelector(`#materials-tbody tr[data-mat-id="${matId}"]`);
+  if (!el) { location.href = 'material-detail.html?id=' + matId; return; }
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.querySelectorAll('td').forEach(td => td.style.background = 'rgba(168,93,44,0.4)');
+  setTimeout(() => el.querySelectorAll('td').forEach(td => td.style.background = ''), 800);
+}
 function renderMaterialsList() {
   const tbody = document.getElementById('materials-tbody'); const allRows = pipelineMaterials(PAGE.pipelineId);
   const isWire = m => (m.piece || m.category || '').toLowerCase() === 'welding wire';
@@ -4648,6 +4726,7 @@ function renderMaterialsList() {
     for (let i = 2; i <= 3; i++) { if (m[`diameter${i}`]) maxDia = Math.max(maxDia, i); }
     for (let i = 2; i <= 3; i++) { if (m[`thickness${i}`]) maxThk = Math.max(maxThk, i); }
   });
+  const rowIndex = new Map(rows.map((m, i) => [m.id, i]));
   tbody.innerHTML = rows.length ? rows.map(m => {
     const flags = [m.startOfPlumbing ? 'start' : '', m.endOfPlumbing ? 'end' : ''].filter(Boolean).join(' · ');
     const hasErr = materialConnError(m, rows);
@@ -4673,7 +4752,7 @@ function renderMaterialsList() {
       extraThkCells += `<td class="col-mono">${escapeHtml(m[`thickness${i}`]) || '<span class="muted">—</span>'}</td>`;
     }
     return `<tr${hasErr ? ' class="row-error"' : ''} data-mat-id="${m.id}" ${canDrag ? 'draggable="true" ondragstart="onMatDragStart(event,' + m.id + ')"' : ''} ondragover="onMatDragOver(event)" ondrop="onMatDrop(event,${m.id})">
-      <td class="col-mono">${canDrag ? '<span class="drag-handle" title="Drag to reorder">⠿</span> ' : ''}${posLetter(m.position)}${flags ? `<span class="person-sub">${flags}</span>` : ''}</td>
+      <td class="col-mono">${canDrag ? '<span class="drag-handle" title="Drag to reorder">⠿</span> ' : ''}${posLetter(m.position)}${materialBranchBadges(m, rows, rowIndex)}${flags ? `<span class="person-sub">${flags}</span>` : ''}</td>
       <td>${escapeHtml(piece)}</td>
       <td><a class="cell-link" href="material-detail.html?id=${m.id}">${escapeHtml(m.itemDescription)}</a></td>
       <td class="col-mono${dnWarn ? ' dn-warn' : ''}">${escapeHtml(m.dimension)}</td>${extraDnCells}
@@ -4838,6 +4917,11 @@ async function onMatDrop(e, targetMatId) {
 /* Show welds for a material — if 1 weld, open edit directly; if multiple, open first seam detail */
 
 
+function resultTag(v) {
+  if (v === 'OK') return '<span class="ok-tag">OK</span>';
+  if (v === 'Not OK') return `<span class="bad-tag">${t('not_ok', 'Not OK')}</span>`;
+  return `<span class="na-tag">${escapeHtml(v || 'n/a')}</span>`;
+}
 function betweenCell(materialIds, useDesc) {
   const parts = materialIds.map(mid => { const m = getMaterial(mid); if (!m) return '<span class="muted">?</span>'; const label = useDesc ? m.itemDescription : m.piece; return `<a class="cell-link" title="${escapeHtml(m.itemDescription)}" href="material-detail.html?id=${m.id}">${escapeHtml(label)} (${posLetter(m.position)})</a>`; });
   return `<div class="between-cell">${parts.join('<span class="between-arrow">→</span>')}</div>`;
@@ -4848,7 +4932,8 @@ function renderWeldList() {
     const photo = w.endoscopyVideoUrl ? `<a class="img-btn" href="${escapeHtml(w.endoscopyVideoUrl)}" target="_blank">${t('view', 'View')}</a>` : '<span class="img-btn empty">—</span>';
     const endo = w.endoscopyImageUrl ? `<a class="img-btn" href="${escapeHtml(w.endoscopyImageUrl)}" target="_blank">${t('view', 'View')}</a>` : '<span class="img-btn empty">—</span>';
     const rem = w.remarks ? `<button class="remarks-btn" onclick="showRemarks(${w.id})">${t('view', 'View')}</button>` : '<span class="remarks-btn none">—</span>';
-    return `<tr>
+    return `<tr class="${selectedWeldIds.has(w.id) ? 'row-selected' : ''}">
+      <td class="col-select"><input type="checkbox" class="weld-select" aria-label="${t('select_weld', 'Select weld')} ${escapeHtml(w.weldNo)}" ${selectedWeldIds.has(w.id) ? 'checked' : ''} onchange="toggleWeldSelect(${w.id}, this.checked); this.closest('tr').classList.toggle('row-selected', this.checked);"></td>
       <td><button class="pipe-no" onclick="showSeamDetail(${w.id})">${escapeHtml(w.weldNo)}</button></td>
       <td>${betweenCell(w.materialIds)}</td>
       <td><span class="type-tag">${escapeHtml(w.type) || '—'}</span></td>
@@ -4857,11 +4942,127 @@ function renderWeldList() {
       <td>${weldPersonCell(w, pl, 'welder')}</td>
       <td>${weldPersonCell(w, pl, 'inspector')}</td>
       <td class="col-mono">${w.date ? formatDate(w.date) : '—'}</td>
+      <td>${resultTag(w.visual)}</td>
+      <td>${resultTag(w.endoscopy)}</td>
       <td>${photo}</td><td>${endo}</td><td>${rem}</td>
       <td class="col-actions"><button class="btn-link" onclick="showSeamDetail(${w.id})">${t('seam', 'Seam')}</button><button class="btn-link" onclick="openWeldModal(${w.id})">${t('edit', 'Edit')}</button>${archiveBtn('weld', w.id)}</td>
     </tr>`;
-  }).join('') : '<tr class="empty-row"><td colspan="12">' + t('no_welds_yet', 'No welds yet — add materials with connections (welds are created automatically) or use \"+ Add weld\".') + '</td></tr>';
+  }).join('') : '<tr class="empty-row"><td colspan="15">' + t('no_welds_yet', 'No welds yet — add materials with connections (welds are created automatically) or use \"+ Add weld\".') + '</td></tr>';
+  /* welds can disappear on a re-render (archive, resync) — drop stale selections */
+  const live = new Set(pipelineWelds(PAGE.pipelineId).map(w => w.id));
+  [...selectedWeldIds].forEach(id => { if (!live.has(id)) selectedWeldIds.delete(id); });
+  updateWeldBulkBar();
 }
+/* ---- bulk weld selection + editing ---------------------------------------
+   Most welds in a pipeline share the same type, wire, welder and results, so
+   they are edited together: select rows, then apply only the fields you change. */
+const selectedWeldIds = new Set();
+
+function toggleWeldSelect(weldId, checked) {
+  if (checked) selectedWeldIds.add(weldId); else selectedWeldIds.delete(weldId);
+  updateWeldBulkBar();
+}
+function toggleAllWelds(checked) {
+  selectedWeldIds.clear();
+  if (checked) pipelineWelds(PAGE.pipelineId).forEach(w => selectedWeldIds.add(w.id));
+  document.querySelectorAll('#weldlist-tbody .weld-select').forEach(cb => { cb.checked = checked; });
+  updateWeldBulkBar();
+}
+function clearWeldSelection() {
+  selectedWeldIds.clear();
+  document.querySelectorAll('#weldlist-tbody .weld-select').forEach(cb => { cb.checked = false; });
+  const all = document.getElementById('weld-select-all'); if (all) { all.checked = false; all.indeterminate = false; }
+  updateWeldBulkBar();
+}
+function updateWeldBulkBar() {
+  const bar = document.getElementById('weld-bulk-bar'); if (!bar) return;
+  const total = pipelineWelds(PAGE.pipelineId).length;
+  const n = selectedWeldIds.size;
+  bar.classList.toggle('open', n > 0);
+  const label = document.getElementById('weld-bulk-count-label');
+  if (label) label.textContent = n === 1 ? t('one_weld_selected', '1 weld selected') : `${n} ${t('welds_selected', 'welds selected')}`;
+  const all = document.getElementById('weld-select-all');
+  if (all) { all.checked = n > 0 && n === total; all.indeterminate = n > 0 && n < total; }
+}
+function openWeldBulkModal() {
+  if (!selectedWeldIds.size) return;
+  const n = selectedWeldIds.size;
+  document.getElementById('weld-bulk-form').reset();
+  document.getElementById('weld-bulk-err').textContent = '';
+  document.getElementById('bulk-weld-count').textContent = n === 1
+    ? t('bulk_applies_to_one', 'The values below are applied to the 1 selected weld.')
+    : `${t('bulk_applies_to', 'The values below are applied to the')} ${n} ${t('bulk_selected_welds', 'selected welds.')}`;
+  setV('bulk-weld-type', '__keep__'); setV('bulk-weld-visual', '__keep__'); setV('bulk-weld-endoscopy', '__keep__');
+  setV('bulk-weld-proc', ''); setV('bulk-weld-date', '');
+
+  const keepOpt = `<option value="__keep__">${t('keep_existing', '— Keep existing —')}</option>`;
+  const noneOpt = `<option value="">${t('none_opt', '— None —')}</option>`;
+  const isWire = m => (m.piece || m.category || '').toLowerCase().includes('welding') || (m.piece || m.category || '').toLowerCase().includes('wire');
+  const wires = pipelineMaterials(PAGE.pipelineId).filter(isWire);
+  document.getElementById('bulk-weld-wire').innerHTML = keepOpt + noneOpt
+    + wires.map(wr => `<option value="${wr.id}">${escapeHtml(wr.itemDescription)}${wr.diameter ? ' (' + escapeHtml(fmtDia(wr.diameter)) + ')' : ''}</option>`).join('');
+  const personOpts = people().map(pp => `<option value="${pp.id}">${escapeHtml(pp.name)} · No. ${escapeHtml(pp.no)}</option>`).join('');
+  document.getElementById('bulk-weld-welder').innerHTML = keepOpt + noneOpt + personOpts;
+  document.getElementById('bulk-weld-inspector').innerHTML = keepOpt + noneOpt + personOpts;
+  openModal('modal-weld-bulk');
+}
+function onBulkWeldTypeChange() {
+  const type = val('bulk-weld-type');
+  const procEl = document.getElementById('bulk-weld-proc');
+  if (type === 'O') procEl.value = '147';
+  else if (type === 'H') procEl.value = '141';
+  else if (type === 'M') procEl.value = '142';
+  else procEl.value = '';
+}
+async function submitWeldBulk(e) {
+  e.preventDefault();
+  const btn = document.getElementById('weld-bulk-submit');
+  const err = document.getElementById('weld-bulk-err');
+  err.textContent = '';
+  const ids = [...selectedWeldIds];
+  if (!ids.length) { closeModal('modal-weld-bulk'); return; }
+
+  /* Only fields the user actually changed are sent — "keep existing" writes nothing. */
+  const values = {};
+  const type = val('bulk-weld-type');
+  if (type !== '__keep__') { values.type = type; values.procedure = val('bulk-weld-proc'); }
+  const wire = val('bulk-weld-wire');
+  if (wire !== '__keep__') { const wm = wire ? getMaterial(Number(wire)) : null; values.weldingWire = wm ? wm.itemDescription : ''; }
+  const date = val('bulk-weld-date');
+  if (date) values.date = date;
+  const welder = val('bulk-weld-welder');
+  if (welder !== '__keep__') { const pp = welder ? getPerson(Number(welder)) : null; values.welderId = pp ? pp.id : null; values.welder = pp ? pp.name : ''; }
+  const inspector = val('bulk-weld-inspector');
+  if (inspector !== '__keep__') { const pp = inspector ? getPerson(Number(inspector)) : null; values.inspectorId = pp ? pp.id : null; values.inspector = pp ? pp.name : ''; }
+  const visual = val('bulk-weld-visual');
+  if (visual !== '__keep__') values.visual = visual;
+  const endo = val('bulk-weld-endoscopy');
+  if (endo !== '__keep__') values.endoscopy = endo;
+
+  if (!Object.keys(values).length) { err.textContent = t('bulk_nothing_changed', 'Nothing to apply — change at least one field.'); return; }
+
+  setButtonLoading(btn, true, t('saving', 'Saving…'));
+  try {
+    const res = await apiPost('/welds/bulk', { ids, values });
+    const freshWelds = await apiGet('/welds?pipelineId=' + PAGE.pipelineId);
+    DB.welds = normalizeWelds(freshWelds);
+    rebuildRelationships();
+    closeModal('modal-weld-bulk');
+    clearWeldSelection();
+    rerenderPage();
+    showWeldBulkResult(res && res.updated ? res.updated : ids.length);
+  } catch (ex) {
+    err.textContent = t('bulk_failed', 'Could not apply the changes:') + ' ' + ex.message;
+  } finally { setButtonLoading(btn, false); }
+}
+function showWeldBulkResult(count) {
+  const bar = document.getElementById('weld-bulk-bar'); if (!bar) return;
+  const note = document.getElementById('weld-bulk-result'); if (!note) return;
+  note.textContent = `${count} ${count === 1 ? t('weld_updated', 'weld updated.') : t('welds_updated', 'welds updated.')}`;
+  note.classList.add('open');
+  setTimeout(() => note.classList.remove('open'), 4000);
+}
+
 function showRemarks(weldId) { document.getElementById('remarks-body').textContent = getWeld(weldId).remarks || '—'; openModal('modal-remarks'); }
 function weldWireDropdown(w) {
   const isWire = m => (m.piece || m.category || '').toLowerCase().includes('welding') || (m.piece || m.category || '').toLowerCase().includes('wire');
@@ -5252,6 +5453,13 @@ function toggleWazFileVisibility() {
     fileEl.style.display = 'none';
     const fileName = formatWazDocName(_wazProjectPdfUrl);
     docDiv.innerHTML = `<div class="waz-doc-current"><a class="doc-chip doc-iso" href="${escapeHtml(_wazProjectPdfUrl)}" target="_blank" rel="noopener" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</a> <span class="muted">(from project)</span><button type="button" class="btn-link waz-doc-remove" onclick="removeWazCurrentDoc()">Remove</button></div>`;
+  } else if (m && m.wazPdfUrl && !wazDocRemoved) {
+    /* Fall back to the document this material already has. Changing the heat or certificate
+       must not make it look deleted: the server carries waz_pdf_url over to whichever project
+       material the row ends up linked to. It only goes when Remove is clicked. */
+    fileEl.style.display = 'none';
+    const fileName = formatWazDocName(m.wazPdfUrl);
+    docDiv.innerHTML = `<div class="waz-doc-current"><a class="doc-chip doc-iso" href="${escapeHtml(m.wazPdfUrl)}" target="_blank" rel="noopener" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</a><button type="button" class="btn-link waz-doc-remove" onclick="removeWazCurrentDoc()">${t('remove', 'Remove')}</button></div>`;
   } else if (!wazDocRemoved) {
     fileEl.style.display = '';
     docDiv.innerHTML = `<div class="waz-doc-none">${escapeHtml(t('waz_no_document_yet', 'No WAZ document uploaded yet.'))}</div>`;
@@ -5411,7 +5619,7 @@ function showSeamDetail(weldId) {
   const firstW = getPerson(w.welderIds[0]);
   const welderLabel = firstW ? `${escapeHtml(firstW.name)} · No. ${escapeHtml(firstW.no)}${w.welderIds.length > 1 ? ` (+${w.welderIds.length - 1})` : ''}` : '—';
   const insLabel = w.inspectorIds.length ? w.inspectorIds.map(id => escapeHtml(getPerson(id).name)).join(', ') : '—';
-  const tag = v => v === 'OK' ? '<span class="ok-tag">OK</span>' : `<span class="na-tag">${escapeHtml(v || '—')}</span>`;
+  const tag = resultTag;
   let schematic = ''; mats.forEach((m, idx) => { schematic += `<div class="pos-box"><div class="pos-label">${posLetter(m.position)}</div><div class="pos-desc">${escapeHtml(m.itemDescription)}</div></div>`; if (idx < mats.length - 1) schematic += `<div class="naht-marker"><div class="naht-label">${escapeHtml(w.weldNo)}</div><div class="naht-bar"></div></div>`; });
   const sideLabels = ['SIDE A', 'PAGE B', 'PART C', 'PART D', 'PART E', 'PART F'];
   let cards = ''; mats.forEach((m, idx) => {
@@ -6961,7 +7169,7 @@ function promptHeatConflictModal({
     iconEl.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#D97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`;
     titleHeader.style.color = '#92400E';
     titleEl.textContent = title || t('update_material_specs_title', 'Update Material Specifications');
-    descEl.innerHTML = desc || t('update_material_specs_desc', 'You are changing the specifications for this material. Would you like to update this material or add it as a new material?');
+    descEl.innerHTML = desc || t('update_material_specs_desc', 'You are changing the specifications for this material.<br><br><strong>Update</strong> — the change applies to <strong>every material with these specifications</strong>, in this and in every other pipeline of the project.<br><strong>Add as New Material</strong> — <strong>only this material</strong> changes; all the others keep their current specifications.');
 
     if (diffs && diffs.length > 0) {
       tableContainer.style.display = '';
@@ -7305,8 +7513,13 @@ function onPmHeatChange() {
   toggleSelectOther('pm-heat', 'pm-heat-new');
   const heatNo = readSelectOther('pm-heat', 'pm-heat-new');
   if (!heatNo || heatNo === '__other__') {
-    _pmAttachedWazPdfUrl = '';
-    _renderPmWazDoc();
+    /* Editing an existing material keeps its certificate: the server carries waz_pdf_url over
+       to whichever record the material ends up on, and Remove is the only thing that detaches
+       it. Only while ADDING does a cleared heat mean there is no certificate to show yet. */
+    if (!_projMatEditId) {
+      _pmAttachedWazPdfUrl = '';
+      _renderPmWazDoc();
+    }
     _updateAllPmBadges();
     return;
   }
@@ -7797,7 +8010,7 @@ async function saveProjectMaterial(e) {
         promptHeatConflictModal({
           mode: 'update_or_add_new',
           title: t('similar_material_exists_title', 'Similar Material Exists'),
-          desc: t('similar_material_exists_desc', 'A material with the same core specifications already exists in this project, but has different secondary specifications. Would you like to update the existing material or add this as a new material?'),
+          desc: t('similar_material_exists_desc', 'A material with the same core specifications already exists in this project, but some secondary specifications differ.<br><br><strong>Update</strong> — the existing material is changed, which applies to <strong>every material with these specifications</strong>, in this and in every other pipeline of the project.<br><strong>Add as New Material</strong> — a separate material is created and <strong>only this one</strong> uses it.'),
           diffs,
           updateBtnText: t('update', 'Update'),
           addBtnText: t('add_as_new', 'Add as New Material'),
@@ -7861,7 +8074,7 @@ async function saveProjectMaterial(e) {
       promptHeatConflictModal({
         mode: 'update_or_add_new',
         title: t('update_material_specs_title', 'Update Material Specifications'),
-        desc: t('update_material_specs_desc', 'You are changing the specifications for this material. Would you like to update this material or add it as a new material?'),
+        desc: t('update_material_specs_desc', 'You are changing the specifications for this material.<br><br><strong>Update</strong> — the change applies to <strong>every material with these specifications</strong>, in this and in every other pipeline of the project.<br><strong>Add as New Material</strong> — <strong>only this material</strong> changes; all the others keep their current specifications.'),
         diffs,
         updateBtnText: t('update', 'Update'),
         addBtnText: t('add_as_new', 'Add as New Material'),
