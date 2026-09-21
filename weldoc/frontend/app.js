@@ -4681,7 +4681,7 @@ async function initPipelineDetailPage() {
   const pr = getProject(pl.projectId);
   PAGE.projectId = pl.projectId;
   if (pr) PAGE.clientId = pr.clientId;
-  renumberWelds(PAGE.pipelineId); saveDB();
+  saveDB();
   renderChrome('pipelines', `<a href="projects.html">${t('projects', 'Projects')}</a> / ${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a> / ` : ''}${escapeHtml(pl.no)}`); mountModals(); wireModalDismiss();
   renderPipelineDetail();
   const seam = qp('seam'); if (seam) { const w = getWeld(Number(seam)); if (w && w.pipelineId === PAGE.pipelineId) showSeamDetail(w.id); }
@@ -5045,7 +5045,6 @@ async function onMatDrop(e, targetMatId) {
       ensureWeldForPair(pipeId, dragged.id, next.id);
     }
   }
-  renumberWelds(pipeId);
   saveDB();
   _dragMatId = null;
   rerenderPage();

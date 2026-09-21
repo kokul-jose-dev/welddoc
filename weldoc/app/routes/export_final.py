@@ -230,9 +230,20 @@ def export_final(pipeline_id):
                 pass
 
     # --- Add internal GoTo links using exact row positions ---
-    from pypdf.generic import ArrayObject, DictionaryObject, NumberObject, NameObject, RectangleObject
+    from pypdf.generic import (
+        ArrayObject, DictionaryObject, NumberObject, NameObject, RectangleObject,
+        NullObject, FloatObject,
+    )
 
     if row_positions:
+        # A branch is shown as two rows sharing a key: the pointer under the part
+        # it leaves, and the row where the branch resumes. Each jumps to the other,
+        # so a reader can follow a branch in either direction.
+        branch_pairs = {}
+        for rp in row_positions:
+            if rp["type"] == "branch" and rp.get("branch_key"):
+                branch_pairs.setdefault(rp["branch_key"], []).append(rp)
+
         for rp in row_positions:
             page_idx = rp.get("page_idx", 0)
             if page_idx >= len(writer.pages):
@@ -240,12 +251,21 @@ def export_final(pipeline_id):
             page_obj = writer.pages[page_idx]
 
             dest_page = None
+            dest_top = None  # set only for a jump to a specific row
             if rp["type"] == "mat" and rp.get("waz_no") and rp["waz_no"] in waz_page_map:
                 dest_page = waz_page_map[rp["waz_no"]]
                 x1, x2 = rp["waz_x1"], rp["waz_x2"]
             elif rp["type"] == "weld" and rp.get("welder_id") and rp["welder_id"] in cert_page_map:
                 dest_page = cert_page_map[rp["welder_id"]]
                 x1, x2 = rp["welder_x1"], rp["welder_x2"]
+            elif rp["type"] == "branch" and rp.get("branch_key"):
+                partner = next((o for o in branch_pairs.get(rp["branch_key"], []) if o is not rp), None)
+                if not partner:
+                    continue
+                dest_page = partner["page_idx"]
+                x1, x2 = rp["branch_x1"], rp["branch_x2"]
+                # Land on the partner row rather than the top of its page.
+                dest_top = partner["y_top"]
             else:
                 continue
 
@@ -254,12 +274,19 @@ def export_final(pipeline_id):
                     page_obj[NameObject("/Annots")] = ArrayObject()
 
                 dest_page_ref = writer.pages[dest_page].indirect_reference
+                if dest_top is None:
+                    dest = ArrayObject([dest_page_ref, NameObject("/Fit")])
+                else:
+                    dest = ArrayObject([
+                        dest_page_ref, NameObject("/XYZ"),
+                        NullObject(), FloatObject(dest_top + 8), NullObject(),
+                    ])
                 annot = writer._add_object(DictionaryObject({
                     NameObject("/Type"): NameObject("/Annot"),
                     NameObject("/Subtype"): NameObject("/Link"),
                     NameObject("/Rect"): RectangleObject([x1, rp["y_bot"], x2, rp["y_top"]]),
                     NameObject("/Border"): ArrayObject([NumberObject(0), NumberObject(0), NumberObject(0)]),
-                    NameObject("/Dest"): ArrayObject([dest_page_ref, NameObject("/Fit")]),
+                    NameObject("/Dest"): dest,
                 }))
                 page_obj["/Annots"].append(annot)
 
@@ -358,50 +385,72 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
         col_x.append(col_x[-1] + cw)
     REPEAT_ROWS = 4
 
-    # Walk order
+    # Walk order. This mirrors the combined view on screen exactly: follow one line
+    # to its end, queueing every branch met along the way, then drain that queue in
+    # the order the branches were found. Descending into a branch the moment it is
+    # found (a plain depth-first walk) emits a later junction's branch before an
+    # earlier one, which is why the export used to disagree with the screen.
     mat_by_pos = {m["position"]: m for m in materials}
-    start_mat = next((m for m in materials if m["start_of_plumbing"]), materials[0] if materials else None)
     visited = set()
     combined = []
+    branch_queue = []
 
-    def walk(pos):
-        """Append this chain to `combined`; return the last position on its own line."""
-        if not pos or pos in visited:
-            return None
-        visited.add(pos)
-        mat = mat_by_pos.get(pos)
-        if not mat:
-            return None
-        combined.append(("mat", mat))
-        conns = []
+    def conns_of(pos):
+        """Unvisited neighbours of `pos` as (position, weld), end pieces last."""
+        out = []
         for w in welds:
+            other = None
             if w.between_a == pos and w.between_b not in visited:
-                conns.append((w.between_b, w))
+                other = w.between_b
             elif w.between_b == pos and w.between_a not in visited:
-                conns.append((w.between_a, w))
-        tail = pos
-        # Every branch off this part gets two marker rows in a shared colour: a
-        # pointer row directly below the part, naming where that branch ends,
-        # and a row at the branch itself, naming the part it comes from.
-        pointers = [len(combined) + i for i in range(max(len(conns) - 1, 0))]
-        combined.extend([None] * len(pointers))
-        if conns:
+                other = w.between_a
+            if other and other in mat_by_pos:
+                out.append((other, w))
+        out.sort(key=lambda c: 1 if mat_by_pos[c[0]].get("end_of_plumbing") else 0)
+        return out
+
+    def walk_line(start_pos):
+        """Follow one line, queueing branches. Returns the last position on it."""
+        cur, tail = start_pos, start_pos
+        while cur and cur not in visited:
+            mat = mat_by_pos.get(cur)
+            if not mat:
+                break
+            visited.add(cur)
+            combined.append(("mat", mat))
+            tail = cur
+            conns = conns_of(cur)
+            if not conns:
+                break
+            # A pointer row per branch sits directly under the part, naming where
+            # that branch ends; the label is only known once the branch is walked.
+            for bp, bw in conns[1:]:
+                branch_queue.append({"slot": len(combined), "from": cur, "start": bp, "weld": bw})
+                combined.append(None)
             combined.append(("weld", conns[0][1]))
-            tail = walk(conns[0][0]) or pos
-            for slot, (bp, bw) in zip(pointers, conns[1:]):
-                if bp in visited:
-                    continue  # the None left behind is stripped after the walk
-                key = f"{pos}->{bp}"
-                combined.append(("branch", {"label": pos, "key": key}))
-                combined.append(("weld", bw))
-                combined[slot] = ("branch", {"label": walk(bp) or bp, "key": key})
+            cur = conns[0][0]
         return tail
 
-    if start_mat:
-        walk(start_mat["position"])
-    for m in materials:
-        if m["position"] not in visited:
-            walk(m["position"])
+    def drain_branches():
+        while branch_queue:
+            b = branch_queue.pop(0)
+            if b["start"] in visited:
+                continue  # the None left in its slot is stripped after the walk
+            key = f"{b['from']}->{b['start']}"
+            marker = len(combined)
+            combined.append(None)
+            combined.append(("weld", b["weld"]))
+            tail = walk_line(b["start"])
+            combined[marker] = ("branch", {"label": b["from"], "key": key})
+            combined[b["slot"]] = ("branch", {"label": tail, "key": key})
+
+    start_mat = next((m for m in materials if m["start_of_plumbing"]), materials[0] if materials else None)
+    seeds = ([start_mat] if start_mat else []) + list(materials)
+    for seed in seeds:
+        if not seed or seed["position"] in visited:
+            continue
+        walk_line(seed["position"])
+        drain_branches()
     combined = [c for c in combined if c is not None]  # unused pointer slots
 
     # Each branch gets its own shade, shared by its two marker rows, so a part
@@ -437,7 +486,10 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
 
     for item_type, data in combined:
         if item_type == "branch":
-            all_rows.append([Paragraph(f"<b>{data['label']}</b>", s7bc)] + [""] * 15)
+            # Blue like the other links in this document, so the row reads as clickable.
+            all_rows.append(
+                [Paragraph(f"<font color=\"#0066CC\"><b>{data['label']}</b></font>", s7bc)] + [""] * 15
+            )
             row_meta.append({"type": "branch", "key": data["key"]})
         elif item_type == "mat":
             m = data
@@ -657,6 +709,12 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
                 entry["welder_id"] = meta.get("welder_id")
                 entry["welder_x1"] = draw_x + colpos[5]  # Welder no. column
                 entry["welder_x2"] = draw_x + colpos[6]
+            elif meta["type"] == "branch":
+                # The whole row is the hit area; the two rows sharing a key are
+                # the pair, and each links to the other.
+                entry["branch_key"] = meta.get("key")
+                entry["branch_x1"] = draw_x + colpos[0]
+                entry["branch_x2"] = draw_x + colpos[len(colpos) - 1]
             row_positions.append(entry)
 
         next_global_row += (chunk_rows - start_local)

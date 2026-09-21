@@ -71,61 +71,71 @@ def generate_builder_doc(pipeline_id):
             mat_connections.setdefault(w.between_a, []).append(w.between_b)
             mat_connections.setdefault(w.between_b, []).append(w.between_a)
 
-    # Walk combined view order (start -> end)
+    # Walk combined view order (start -> end). Identical to the combined view on
+    # screen: follow one line to its end, queueing every branch met along the way,
+    # then drain that queue in the order the branches were found. Descending into a
+    # branch the moment it is found (a plain depth-first walk) emits a later
+    # junction's branch before an earlier one, which is why this export used to
+    # disagree with the screen.
     mat_by_pos = {m.position: m for m in materials}
     start_mat = next((m for m in materials if m.start_of_plumbing), materials[0] if materials else None)
 
     visited = set()
-    combined_rows = []  # list of (type, data) tuples
+    combined_rows = []  # list of (type, data, extra) tuples
+    branch_queue = []
 
-    def walk(pos):
-        """Append this chain to `combined_rows`; return the last position on its own line."""
-        if not pos or pos in visited:
-            return None
-        visited.add(pos)
-        mat = mat_by_pos.get(pos)
-        if not mat:
-            return None
+    def conns_of(pos):
+        """Unvisited neighbour positions of `pos`, end pieces last."""
+        out = [p for p in mat_connections.get(pos, []) if p not in visited and p in mat_by_pos]
+        out.sort(key=lambda p: 1 if mat_by_pos[p].end_of_plumbing else 0)
+        return out
 
-        conns = [p for p in mat_connections.get(pos, []) if p not in visited]
-        branches = conns[1:] if len(conns) > 1 else []
-
-        combined_rows.append(("material", mat, None))
-
-        # Every branch off this part gets two marker rows in a shared colour: a
-        # pointer row directly below the part, naming where that branch ends,
-        # and a row at the branch itself, naming the part it comes from.
-        pointers = [len(combined_rows) + i for i in range(len(branches))]
-        combined_rows.extend([None] * len(pointers))
-
-        # Walk to next (first unvisited connection)
-        tail = pos
-        if conns:
-            next_pos = conns[0]
-            # Add weld between current and next
-            w = weld_map.get((pos, next_pos))
+    def walk_line(start_pos):
+        """Follow one line, queueing branches. Returns the last position on it."""
+        cur, tail = start_pos, start_pos
+        while cur and cur not in visited:
+            mat = mat_by_pos.get(cur)
+            if not mat:
+                break
+            visited.add(cur)
+            combined_rows.append(("material", mat, None))
+            tail = cur
+            conns = conns_of(cur)
+            if not conns:
+                break
+            # A pointer row per branch sits directly under the part, naming where
+            # that branch ends; the label is only known once the branch is walked.
+            for bp in conns[1:]:
+                branch_queue.append({"slot": len(combined_rows), "from": cur, "start": bp})
+                combined_rows.append(None)
+            w = weld_map.get((cur, conns[0]))
             if w:
                 combined_rows.append(("weld", w, None))
-            tail = walk(next_pos) or pos
-
-        # Walk branches
-        for slot, bp in zip(pointers, branches):
-            bw = weld_map.get((pos, bp))
-            if bw and bp not in visited:
-                key = f"{pos}->{bp}"
-                combined_rows.append(("branch", pos, key))
-                combined_rows.append(("weld", bw, None))
-                combined_rows[slot] = ("branch", walk(bp) or bp, key)
-
+            cur = conns[0]
         return tail
 
-    if start_mat:
-        walk(start_mat.position)
+    def drain_branches():
+        while branch_queue:
+            b = branch_queue.pop(0)
+            if b["start"] in visited:
+                continue  # the None left in its slot is stripped after the walk
+            bw = weld_map.get((b["from"], b["start"]))
+            if not bw:
+                continue
+            key = f"{b['from']}->{b['start']}"
+            marker = len(combined_rows)
+            combined_rows.append(None)
+            combined_rows.append(("weld", bw, None))
+            tail = walk_line(b["start"])
+            combined_rows[marker] = ("branch", b["from"], key)
+            combined_rows[b["slot"]] = ("branch", tail, key)
 
-    # Walk any unvisited material chains/segments
-    for m in materials:
-        if m.position not in visited:
-            walk(m.position)
+    seeds = ([start_mat] if start_mat else []) + list(materials)
+    for seed in seeds:
+        if not seed or seed.position in visited:
+            continue
+        walk_line(seed.position)
+        drain_branches()
     combined_rows = [r for r in combined_rows if r is not None]  # unused pointer slots
 
     # === Generate Excel (A-P = 16 columns) ===

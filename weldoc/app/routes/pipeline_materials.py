@@ -1464,9 +1464,17 @@ def _update_connections(m, conn_positions, pipeline_id):
 
     # Let the connections decide where this material sits. Only when they actually changed,
     # so editing anything else on a material never reshuffles the pipeline.
+    #
+    # Moving it is only right when it was spliced into an existing weld: connected to R and S
+    # that were welded together, the line becomes R-m-S and m belongs between them. Connected
+    # to a single part, or to two parts that were never joined, it is a branch or a tie-in and
+    # keeps the slot it already has - the end of the list for a new material, where it was for
+    # an edited one. Repositioning those dragged them up next to the part they hang off and
+    # pushed the rest of the pipeline down.
     if conns_changed or m.start_of_plumbing:
-        _split_linked_pair(m, pipeline_id)
-        _reposition_by_connections(m, pipeline_id)
+        spliced = _split_linked_pair(m, pipeline_id)
+        if spliced or m.start_of_plumbing:
+            _reposition_by_connections(m, pipeline_id)
 
     _sync_and_renumber_welds(pipeline_id)
 
