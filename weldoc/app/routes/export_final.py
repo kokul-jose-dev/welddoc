@@ -365,12 +365,13 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     combined = []
 
     def walk(pos):
+        """Append this chain to `combined`; return the last position on its own line."""
         if not pos or pos in visited:
-            return
+            return None
         visited.add(pos)
         mat = mat_by_pos.get(pos)
         if not mat:
-            return
+            return None
         combined.append(("mat", mat))
         conns = []
         for w in welds:
@@ -378,18 +379,39 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
                 conns.append((w.between_b, w))
             elif w.between_b == pos and w.between_a not in visited:
                 conns.append((w.between_a, w))
+        tail = pos
+        # Every branch off this part gets two marker rows in a shared colour: a
+        # pointer row directly below the part, naming where that branch ends,
+        # and a row at the branch itself, naming the part it comes from.
+        pointers = [len(combined) + i for i in range(max(len(conns) - 1, 0))]
+        combined.extend([None] * len(pointers))
         if conns:
             combined.append(("weld", conns[0][1]))
-            walk(conns[0][0])
-            for bp, bw in conns[1:]:
+            tail = walk(conns[0][0]) or pos
+            for slot, (bp, bw) in zip(pointers, conns[1:]):
+                if bp in visited:
+                    continue  # the None left behind is stripped after the walk
+                key = f"{pos}->{bp}"
+                combined.append(("branch", {"label": pos, "key": key}))
                 combined.append(("weld", bw))
-                walk(bp)
+                combined[slot] = ("branch", {"label": walk(bp) or bp, "key": key})
+        return tail
 
     if start_mat:
         walk(start_mat["position"])
     for m in materials:
         if m["position"] not in visited:
             walk(m["position"])
+    combined = [c for c in combined if c is not None]  # unused pointer slots
+
+    # Each branch gets its own shade, shared by its two marker rows, so a part
+    # with two branches shows two distinguishable pairs.
+    BRANCH_COLOURS = ["#F8CBAD", "#F4B6B6", "#FBE2D5", "#FAD4D4", "#E8C9A0", "#F2B27A"]
+    _branch_seen = {}
+    def branch_bg(key):
+        if key not in _branch_seen:
+            _branch_seen[key] = BRANCH_COLOURS[len(_branch_seen) % len(BRANCH_COLOURS)]
+        return colors.HexColor(_branch_seen[key])
 
     # Build rows + track metadata
     mat_hdr = [Paragraph("Teil Nr.<br/>Part Nr.", s7bc), Paragraph("Beschreibung<br/>Description", s7bc), "", "",
@@ -414,7 +436,10 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     row_meta = [None, None, None, None]  # no links on header rows
 
     for item_type, data in combined:
-        if item_type == "mat":
+        if item_type == "branch":
+            all_rows.append([Paragraph(f"<b>{data['label']}</b>", s7bc)] + [""] * 15)
+            row_meta.append({"type": "branch", "key": data["key"]})
+        elif item_type == "mat":
             m = data
             pos = m["position"] or ""
             if m["start_of_plumbing"]: pos += " (S)"
@@ -534,6 +559,9 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
             style_cmds.append(('SPAN', (13,i), (14,i)))
         elif meta and meta["type"] == "weld":
             style_cmds.append(('SPAN', (1,i), (2,i)))
+        elif meta and meta["type"] == "branch":
+            style_cmds.append(('SPAN', (0,i), (-1,i)))
+            style_cmds.append(('BACKGROUND', (0,i), (-1,i), branch_bg(meta["key"])))
     data_table.setStyle(TableStyle(style_cmds))
 
     # Build header elements

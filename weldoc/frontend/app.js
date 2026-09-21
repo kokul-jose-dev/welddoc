@@ -5335,13 +5335,20 @@ function renderCombinedView() {
       conns.sort((a, b) => (a.endOfPlumbing ? 1 : 0) - (b.endOfPlumbing ? 1 : 0));
       if (conns.length === 0) break;
       const next = conns[0];
+      /* Every branch off this part gets two marker rows in a shared colour: a
+         pointer row directly below the part, naming where that branch ends, and
+         a row at the branch itself, naming the part it comes from. The pointer's
+         label is only known once the branch is walked, so reserve it here. */
+      const pending = [];
+      for (let i = 1; i < conns.length; i++) {
+        const ptr = { type: 'branch', label: '', key: `${current.id}->${conns[i].id}` };
+        line.push(ptr);
+        pending.push({ fromMat: current, branchStartId: conns[i].id, pointer: ptr });
+      }
       /* find weld between current and next */
       const w = wlds.find(wl => wl.materialIds.includes(current.id) && wl.materialIds.includes(next.id));
       if (w) line.push({ type: 'weld', data: w });
-      /* queue remaining connections as branches */
-      for (let i = 1; i < conns.length; i++) {
-        branches.push({ fromMat: current, branchStartId: conns[i].id });
-      }
+      pending.forEach(b => branches.push(b));
       current = next;
     }
     return line;
@@ -5361,6 +5368,9 @@ function renderCombinedView() {
       const bLine = walkLine(b.branchStartId);
       if (!bLine.length) continue;
       branchLines.push({ from: b.fromMat, junctionWeld, line: bLine });
+      const lastMat = bLine.filter(i => i.type === 'material').pop();
+      if (b.pointer) b.pointer.label = lastMat ? posLetter(lastMat.data.position) : '';
+      rows.push({ type: 'branch', label: posLetter(b.fromMat.position), key: b.pointer ? b.pointer.key : '' });
       if (junctionWeld) rows.push({ type: 'weld', data: junctionWeld });
       bLine.forEach(item => rows.push(item));
     }
@@ -5406,8 +5416,19 @@ function renderCombinedView() {
   });
 
   let html = `<div class="table-card"><table class="table-xwide"><thead><tr><th>${t('th_type', 'Type')}</th><th>${t('th_pos_weld', 'Pos./Weld')}</th><th>${t('th_item_description', 'Item description')}</th><th>${t('th_dn', 'DN')}</th><th>Ø</th><th>${t('th_thk', 'Thk.')}</th><th>${t('th_ho', 'H/O')}</th><th>${t('th_wire', 'Wire')}</th><th>${t('th_welder', 'Welder')}</th><th>${t('th_inspector', 'Inspector')}</th></tr></thead><tbody>`;
+  /* Each branch gets its own shade, shared by its two marker rows, so a part
+     with two branches shows two distinguishable pairs. */
+  const BRANCH_COLOURS = ['#f8cbad', '#f4b6b6', '#fbe2d5', '#fad4d4', '#e8c9a0', '#f2b27a'];
+  const branchSeen = {};
+  const branchColour = key => {
+    if (!(key in branchSeen)) branchSeen[key] = BRANCH_COLOURS[Object.keys(branchSeen).length % BRANCH_COLOURS.length];
+    return branchSeen[key];
+  };
   allRows.forEach(row => {
-    if (row.type === 'material') {
+    if (row.type === 'branch') {
+      if (!row.label) return;  /* pointer for a branch that was never walked */
+      html += `<tr class="cv-branch-row"><td colspan="10" style="background:${branchColour(row.key)};text-align:center;font-weight:600;">${escapeHtml(row.label)}</td></tr>`;
+    } else if (row.type === 'material') {
       const m = row.data;
       const dnWarn = materialDnMismatch(m);
       const flags = [m.startOfPlumbing ? 'start' : '', m.endOfPlumbing ? 'end' : ''].filter(Boolean).join(', ');

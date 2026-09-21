@@ -79,39 +79,45 @@ def generate_builder_doc(pipeline_id):
     combined_rows = []  # list of (type, data) tuples
 
     def walk(pos):
+        """Append this chain to `combined_rows`; return the last position on its own line."""
         if not pos or pos in visited:
-            return
+            return None
         visited.add(pos)
         mat = mat_by_pos.get(pos)
         if not mat:
-            return
+            return None
 
-        # Find branch connections for badge
         conns = [p for p in mat_connections.get(pos, []) if p not in visited]
         branches = conns[1:] if len(conns) > 1 else []
-        branch_info = ""
-        for bp in branches:
-            bw = weld_map.get((pos, bp))
-            if bw:
-                branch_info += f" ({bp}·W{bw.weld_no})"
 
-        combined_rows.append(("material", mat, branch_info))
+        combined_rows.append(("material", mat, None))
+
+        # Every branch off this part gets two marker rows in a shared colour: a
+        # pointer row directly below the part, naming where that branch ends,
+        # and a row at the branch itself, naming the part it comes from.
+        pointers = [len(combined_rows) + i for i in range(len(branches))]
+        combined_rows.extend([None] * len(pointers))
 
         # Walk to next (first unvisited connection)
+        tail = pos
         if conns:
             next_pos = conns[0]
             # Add weld between current and next
             w = weld_map.get((pos, next_pos))
             if w:
                 combined_rows.append(("weld", w, None))
-            walk(next_pos)
+            tail = walk(next_pos) or pos
 
         # Walk branches
-        for bp in branches:
+        for slot, bp in zip(pointers, branches):
             bw = weld_map.get((pos, bp))
             if bw and bp not in visited:
+                key = f"{pos}->{bp}"
+                combined_rows.append(("branch", pos, key))
                 combined_rows.append(("weld", bw, None))
-                walk(bp)
+                combined_rows[slot] = ("branch", walk(bp) or bp, key)
+
+        return tail
 
     if start_mat:
         walk(start_mat.position)
@@ -120,6 +126,7 @@ def generate_builder_doc(pipeline_id):
     for m in materials:
         if m.position not in visited:
             walk(m.position)
+    combined_rows = [r for r in combined_rows if r is not None]  # unused pointer slots
 
     # === Generate Excel (A-P = 16 columns) ===
     wb = openpyxl.Workbook()
@@ -129,6 +136,14 @@ def generate_builder_doc(pipeline_id):
     sf = Font(bold=True, size=10); df = Font(size=10); bf = Font(bold=True, size=10)
     h7 = Font(bold=True, size=8); h6 = Font(bold=True, size=7)
     blue = PatternFill("solid", fgColor="B8CCE4"); grey = PatternFill("solid", fgColor="F2F2F2")
+    # Each branch gets its own shade, shared by its two marker rows, so a part
+    # with two branches shows two distinguishable pairs.
+    BRANCH_COLOURS = ["F8CBAD", "F4B6B6", "FBE2D5", "FAD4D4", "E8C9A0", "F2B27A"]
+    _branch_seen = {}
+    def branch_fill(key):
+        if key not in _branch_seen:
+            _branch_seen[key] = BRANCH_COLOURS[len(_branch_seen) % len(BRANCH_COLOURS)]
+        return PatternFill("solid", fgColor=_branch_seen[key])
     wc = Alignment(wrap_text=True, vertical="center", horizontal="center")
     wr = Alignment(wrap_text=True, vertical="center")
     rot = Alignment(wrap_text=True, vertical="center", horizontal="center", textRotation=90)
@@ -229,7 +244,6 @@ def generate_builder_doc(pipeline_id):
             pos = m.position or ""
             if m.start_of_plumbing: pos = f"{m.position} (START)"
             if m.end_of_plumbing: pos = f"{m.position} (END)"
-            if extra: pos += f" {extra}"
             dim = ""
             if m.diameter and m.thickness:
                 dim = f"\u00d8{_clean_thk(m.diameter)}x{_clean_thk(m.thickness)}"
@@ -248,6 +262,12 @@ def generate_builder_doc(pipeline_id):
             ws.cell(row,14,m.heat_no or "").font=df; ws.cell(row,14).alignment=wc
             ws.cell(row,16,m.waz_no or "").font=df; ws.cell(row,16).alignment=wc
             fl(row,1,row,16,blue); bdr(row,1,row,16); ws.row_dimensions[row].height = 26; row+=1
+        elif item_type == "branch":
+            label, key = data, extra
+            ws.merge_cells(start_row=row,start_column=1,end_row=row,end_column=16)
+            ws.cell(row,1,label or "").font=bf; ws.cell(row,1).alignment=wc
+            fl(row,1,row,16,branch_fill(key)); bdr(row,1,row,16)
+            ws.row_dimensions[row].height = 18; row+=1
         elif item_type == "weld":
             w = data
             ws.cell(row,1,w.weld_no or "").font=df; ws.cell(row,1).alignment=wc
