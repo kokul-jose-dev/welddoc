@@ -151,6 +151,11 @@ def create_or_update_project_material():
         if waz_pdf_url is not None:
             m.waz_pdf_url = waz_pdf_url
         if "archived" in data:
+            if data["archived"] and _pipelines_using(m.id):
+                return jsonify({
+                    "error": "material_in_use",
+                    "message": "This material cannot be archived while a pipeline uses it.",
+                }), 409
             m.archived = data["archived"]
         db.session.commit()
 
@@ -257,6 +262,82 @@ def _copy_waz_file_for_pm(m):
     except Exception as e:
         current_app.logger.error(f"Failed to copy WAZ file for project material {m.id}: {e}")
 
+
+
+def _pipelines_using(pm_id):
+    """Every active pipeline material built from this project material, with its pipeline."""
+    from app.models.pipeline_material import PipelineMaterial
+    from app.models.pipeline import Pipeline
+
+    uses = PipelineMaterial.query.filter_by(
+        project_material_id=pm_id, archived=False
+    ).all()
+    if not uses:
+        return []
+    pipelines = {
+        p.id: p for p in Pipeline.query.filter(
+            Pipeline.id.in_({u.pipeline_id for u in uses})
+        ).all()
+    }
+    out = []
+    for u in uses:
+        pl = pipelines.get(u.pipeline_id)
+        out.append({
+            "pipelineMaterialId": u.id,
+            "pipelineId": u.pipeline_id,
+            "pipelineNo": pl.no if pl else "",
+            "position": u.position or "",
+            "wazNo": u.waz_no or "",
+            "archived": bool(pl.archived) if pl else False,
+        })
+    out.sort(key=lambda r: (r["pipelineNo"], r["position"]))
+    return out
+
+
+@project_materials_bp.route("/<int:pm_id>/usage", methods=["GET"])
+def project_material_usage(pm_id):
+    """Which pipelines use this project material."""
+    m = ProjectMaterial.query.get_or_404(pm_id)
+    uses = _pipelines_using(pm_id)
+    return jsonify({
+        "projectMaterialId": m.id,
+        "archived": bool(m.archived),
+        "usedCount": len(uses),
+        "canArchive": not uses,
+        "uses": uses,
+    })
+
+
+@project_materials_bp.route("/<int:pm_id>/archive", methods=["POST"])
+def archive_project_material(pm_id):
+    """Archive or restore a project material.
+
+    A material may only be archived while no pipeline uses it. Archiving one that is still
+    built into a run would hide the specification the weld list and the WAZ documents are
+    printed from, while the part itself is still welded into the pipe.
+    """
+    m = ProjectMaterial.query.get_or_404(pm_id)
+    data = request.get_json(silent=True) or {}
+    archived = bool(data.get("archived", True))
+
+    if archived:
+        uses = _pipelines_using(pm_id)
+        if uses:
+            names = sorted({u["pipelineNo"] for u in uses if u["pipelineNo"]})
+            return jsonify({
+                "error": "material_in_use",
+                "usedCount": len(uses),
+                "pipelines": names,
+                "uses": uses,
+                "message": (
+                    "This material cannot be archived: it is used in "
+                    f"{len(uses)} place(s) in pipeline(s) {', '.join(names) or '-'}."
+                ),
+            }), 409
+
+    m.archived = archived
+    db.session.commit()
+    return jsonify(_serialize(m)), 200
 
 
 @project_materials_bp.route("/<int:pm_id>/upload-waz", methods=["POST"])

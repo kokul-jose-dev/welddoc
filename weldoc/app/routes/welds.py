@@ -118,6 +118,91 @@ def bulk_update_welds():
     return jsonify({"updated": len(rows), "welds": [_serialize(w) for w in rows]}), 200
 
 
+def _stamp_image(data, lines):
+    """Burn the pipeline number and weld number into the top-left of an endoscopy image.
+
+    The endoscope's own touch screen is barely usable, so the operator cannot label a shot
+    on the device. Stamping it here means the picture still says which weld it belongs to
+    once it is out of SharePoint - in a mail, a report or a printout.
+
+    Returns (bytes, content_type). On any failure the original bytes are returned unchanged:
+    a picture that could not be labelled is still the evidence, and must not be lost.
+    """
+    try:
+        from io import BytesIO
+        from PIL import Image, ImageDraw, ImageFont
+
+        img = Image.open(BytesIO(data))
+        img.load()
+        fmt = (img.format or "JPEG").upper()
+        if fmt == "JPEG" and img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        elif fmt != "JPEG" and img.mode == "P":
+            img = img.convert("RGBA")
+
+        # Scale with the image so the stamp is legible on a thumbnail and not gigantic on
+        # a full-resolution frame.
+        size = max(13, min(48, img.width // 42))
+        pad = max(6, size // 2)
+        font = _load_font(size)
+
+        draw = ImageDraw.Draw(img)
+        widths, heights = [], []
+        for line in lines:
+            box = draw.textbbox((0, 0), line, font=font)
+            widths.append(box[2] - box[0])
+            heights.append(box[3] - box[1])
+        gap = max(2, size // 5)
+        box_w = max(widths) + pad * 2
+        box_h = sum(heights) + gap * (len(lines) - 1) + pad * 2
+
+        # Endoscopy frames are dark with a bright seam, so neither white nor black text is
+        # readable on its own - a solid plate behind it is.
+        draw.rectangle([0, 0, box_w, box_h], fill=(0, 0, 0))
+        y = pad
+        for line, h in zip(lines, heights):
+            draw.text((pad, y), line, font=font, fill=(255, 255, 255))
+            y += h + gap
+
+        out = BytesIO()
+        if fmt == "JPEG":
+            img.save(out, format="JPEG", quality=92, subsampling=0)
+            return out.getvalue(), "image/jpeg"
+        if fmt == "PNG":
+            img.save(out, format="PNG")
+            return out.getvalue(), "image/png"
+        img.save(out, format=fmt)
+        return out.getvalue(), Image.MIME.get(fmt, "image/jpeg")
+    except Exception as e:
+        from flask import current_app
+        try:
+            current_app.logger.warning(f"Could not stamp endoscopy image, uploading as-is: {e}")
+        except Exception:
+            pass
+        return data, None
+
+
+def _load_font(size):
+    """A real TrueType face if the host has one, otherwise Pillow's built-in."""
+    from PIL import ImageFont
+
+    for path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "C:\Windows\Fonts\arialbd.ttf",
+        "C:\Windows\Fonts\arial.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    try:
+        return ImageFont.load_default(size)
+    except Exception:
+        return ImageFont.load_default()
+
+
 @welds_bp.route("/<int:weld_id>/upload-files", methods=["POST"])
 def upload_weld_files(weld_id):
     """Upload endo video and/or image to SharePoint in pipeline 03 Bilddokumentation folder."""
@@ -131,15 +216,20 @@ def upload_weld_files(weld_id):
     if not project.sharepoint_drive_id or not project.sharepoint_folder_id:
         return jsonify({"error": "No SharePoint folder configured for this project."}), 400
 
+    from app.sharepoint import _sanitize_name
+
     weld_label = w.weld_no or str(w.id)
+    # e.g. 20-LFR-LH088-LFR401-112_Schweissnaht_4.jpg - the file has to say which weld of
+    # which pipeline it is once it is outside its SharePoint folder.
+    base_name = _sanitize_name(f"{pipeline.no}_Schweissnaht_{weld_label}")
 
     if "video" in request.files and request.files["video"].filename:
         f = request.files["video"]
         ext = f.filename.rsplit(".", 1)[-1] if "." in f.filename else "mp4"
-        name = f"Naht_{weld_label}.{ext}"
         url = upload_to_pipeline_subfolder(
             project.sharepoint_drive_id, project.sharepoint_folder_id,
-            pipeline.no, "03 Bilddokumentation", name, f.read(), f.content_type or "video/mp4"
+            pipeline.no, "03 Bilddokumentation", f"{base_name}.{ext}",
+            f.read(), f.content_type or "video/mp4"
         )
         if url:
             w.endoscopy_video_url = url
@@ -147,10 +237,14 @@ def upload_weld_files(weld_id):
     if "image" in request.files and request.files["image"].filename:
         f = request.files["image"]
         ext = f.filename.rsplit(".", 1)[-1] if "." in f.filename else "jpg"
-        name = f"Naht_{weld_label}.{ext}"
+        content = f.read()
+        content, stamped_type = _stamp_image(
+            content, [pipeline.no or "", f"Schweissnaht {weld_label}"]
+        )
         url = upload_to_pipeline_subfolder(
             project.sharepoint_drive_id, project.sharepoint_folder_id,
-            pipeline.no, "03 Bilddokumentation", name, f.read(), f.content_type or "image/jpeg"
+            pipeline.no, "03 Bilddokumentation", f"{base_name}.{ext}",
+            content, stamped_type or f.content_type or "image/jpeg"
         )
         if url:
             w.endoscopy_image_url = url

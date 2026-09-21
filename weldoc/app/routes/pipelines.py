@@ -22,6 +22,49 @@ def get_pipeline(pipeline_id):
     return jsonify(_serialize(p))
 
 
+@pipelines_bp.route("/check-no", methods=["GET"])
+def check_pipeline_no():
+    """Report whether a pipeline number is already in use.
+
+    A repeat inside the same project is a real clash; the same number under another
+    project is only worth mentioning, so the two are reported separately.
+    """
+    from app.models.project import Project
+
+    no = (request.args.get("no") or "").strip()
+    project_id = request.args.get("projectId", type=int)
+    exclude_id = request.args.get("excludeId", type=int)
+    if not no:
+        return jsonify({"duplicate": False, "pipeline": None, "otherProjects": []})
+
+    rows = Pipeline.query.filter(
+        db.func.lower(db.func.ltrim(db.func.rtrim(Pipeline.no))) == no.lower(),
+        Pipeline.archived == False,  # noqa: E712
+    ).all()
+    if exclude_id:
+        rows = [r for r in rows if r.id != exclude_id]
+
+    titles = {}
+    for pr in Project.query.filter(Project.id.in_([r.project_id for r in rows] or [0])).all():
+        titles[pr.id] = pr.title
+
+    def brief(r):
+        return {
+            "id": r.id,
+            "no": r.no,
+            "projectId": r.project_id,
+            "projectTitle": titles.get(r.project_id, ""),
+        }
+
+    same = [r for r in rows if project_id and r.project_id == project_id]
+    other = [r for r in rows if not project_id or r.project_id != project_id]
+    return jsonify({
+        "duplicate": bool(same),
+        "pipeline": brief(same[0]) if same else None,
+        "otherProjects": [brief(r) for r in other],
+    })
+
+
 @pipelines_bp.route("", methods=["POST"])
 def create_or_update_pipeline():
     data = request.get_json()

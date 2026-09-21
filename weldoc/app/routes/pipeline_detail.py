@@ -27,10 +27,13 @@ def get_pipeline_detail(pipeline_id):
     if not row:
         return jsonify({"error": "not found"}), 404
 
-    from app.routes.pipeline_materials import _sync_pipeline_waz_nos, _sync_and_renumber_welds
+    # Welds are deliberately NOT resynced/renumbered here. Reading the page must not
+    # change data: once a welder or inspector is assigned, the weld number is what is
+    # written on the pipe and in the issued documents. Every path that actually changes
+    # materials or connections still calls _sync_and_renumber_welds itself.
+    from app.routes.pipeline_materials import _sync_pipeline_waz_nos
     try:
         _sync_pipeline_waz_nos(pipeline_id)
-        _sync_and_renumber_welds(pipeline_id)
     except Exception:
         db.session.rollback()
 
@@ -78,7 +81,7 @@ def get_pipeline_detail(pipeline_id):
                visual, endoscopy, endoscopy_video_url, endoscopy_image_url, remarks, archived
         FROM weldoc_welds
         WHERE pipeline_id = :pid AND archived = 0
-        ORDER BY CAST(weld_no AS INT), id
+        ORDER BY LEN(between_a), between_a, LEN(between_b), between_b, id
     """), {"pid": pipeline_id}).fetchall()
 
     pm_rows = db.session.execute(db.text("""

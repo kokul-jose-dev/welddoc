@@ -86,7 +86,14 @@ async function apiPost(path, data) {
   showGlobalProgress();
   try {
     const r = await fetch(API_BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-    if (!r.ok) throw new Error(r.statusText);
+    if (!r.ok) {
+      let body = null;
+      try { body = await r.json(); } catch (_) { /* not JSON */ }
+      const err = new Error((body && body.message) || r.statusText);
+      err.status = r.status;
+      err.body = body;
+      throw err;
+    }
     return await r.json();
   } finally {
     hideGlobalProgress();
@@ -254,36 +261,42 @@ function rebuildRelationships() {
 }
 
 /* ---- catalogs for dropdown + free-text fields ---- */
-const PIECE_OPTIONS = ["Pipe", "Flange", "Blind Flange", "Elbow", "Reducer", "Tee", "Pipe extruded outlet", "Pipe 2 extruded outlet", "Equipment", "2-Way Valve", "3-Way Valve", "4-Way Valve", "6-Way Valve", "Welding Wire"];
+const PIECE_OPTIONS = ["Pipe", "Flange", "Blind Flange", "Elbow", "Reducer", "Tee", "Pipe extruded outlet", "Pipe 2 extruded outlet", "Equipment", "Reduction Equipment", "3-Way Valve", "4-Way Valve", "6-Way Valve", "Existing Material", "Welding Wire"];
+/* Pipework already on site that the new run is welded onto. It is not supplied by us, so
+   it carries no certificate, heat number, material code or wall data — only a description
+   and the DN it has to match. It ties in at one end, or sits between two new sections,
+   so it never has more than two connections. */
+const EXISTING_MATERIAL = "existing material";
+function isExistingMaterial(piece) { return (piece || '').toLowerCase() === EXISTING_MATERIAL; }
 /* Required number of welds (connections) per category */
 const PIECE_WELDS = {
   "pipe": 2, "flange": 1, "blind flange": 0, "elbow": 2, "reducer": 2,
   "tee": 3, "pipe extruded outlet": 3, "pipe 2 extruded outlet": 4,
-  "equipment": 2, "2-way valve": 2, "3-way valve": 3, "4-way valve": 4, "6-way valve": 6,
-  "ferrule": 2, "welding wire": 0, "valve": 2
+  "equipment": 2, "reduction equipment": 2, "2-way valve": 2, "3-way valve": 3, "4-way valve": 4, "6-way valve": 6,
+  "ferrule": 2, "welding wire": 0, "valve": 2, "existing material": 2
 };
 function requiredWelds(piece) { return PIECE_WELDS[(piece || '').toLowerCase()] ?? 2; }
 /* Number of DN fields per category (matches ports that can differ in size) */
 const PIECE_DNS = {
   "pipe": 1, "flange": 1, "blind flange": 1, "elbow": 1, "reducer": 2,
   "tee": 2, "pipe extruded outlet": 2, "pipe 2 extruded outlet": 3,
-  "equipment": 1, "2-way valve": 2, "3-way valve": 3, "4-way valve": 4, "6-way valve": 6,
-  "ferrule": 1, "welding wire": 0, "valve": 1
+  "equipment": 1, "reduction equipment": 2, "2-way valve": 2, "3-way valve": 3, "4-way valve": 4, "6-way valve": 6,
+  "ferrule": 1, "welding wire": 0, "valve": 1, "existing material": 1
 };
 function requiredDns(piece) { return PIECE_DNS[(piece || '').toLowerCase()] ?? 1; }
 /* Whether category shows outer diameter field */
 const PIECE_HAS_DIAMETER = {
   "pipe": true, "flange": true, "blind flange": false, "elbow": true, "reducer": true,
   "tee": true, "pipe extruded outlet": true, "pipe 2 extruded outlet": true,
-  "equipment": false, "2-way valve": false, "3-way valve": false, "4-way valve": false, "6-way valve": false,
-  "ferrule": true, "welding wire": true, "valve": false
+  "equipment": false, "reduction equipment": false, "2-way valve": false, "3-way valve": false, "4-way valve": false, "6-way valve": false,
+  "ferrule": true, "welding wire": true, "valve": false, "existing material": false
 };
 /* Whether category shows thickness field */
 const PIECE_HAS_THICKNESS = {
   "pipe": true, "flange": true, "blind flange": false, "elbow": true, "reducer": true,
   "tee": true, "pipe extruded outlet": true, "pipe 2 extruded outlet": true,
-  "equipment": false, "2-way valve": false, "3-way valve": false, "4-way valve": false, "6-way valve": false,
-  "ferrule": true, "welding wire": false, "valve": false
+  "equipment": false, "reduction equipment": false, "2-way valve": false, "3-way valve": false, "4-way valve": false, "6-way valve": false,
+  "ferrule": true, "welding wire": false, "valve": false, "existing material": false
 };
 function hasDiameter(piece) { return PIECE_HAS_DIAMETER[(piece || '').toLowerCase()] !== false; }
 function hasThickness(piece) { return PIECE_HAS_THICKNESS[(piece || '').toLowerCase()] !== false; }
@@ -310,7 +323,6 @@ function formatMaterialThickness(m) {
   return thks.map(t => String(t).trim()).join(' / ');
 }
 const DIMENSION_OPTIONS = ["DN 8", "DN 10", "DN 15", "DN 20", "DN 25", "DN 32", "DN 40", "DN 50", "DN 65", "DN 80", "DN 100", "DN 125", "DN 150", "DN 200", "DN 250", "DN 300", "DN 350", "DN 400", "DN 450", "DN 500", "DN 550", "DN 600", "DN 700", "DN 800", "DN 900"];
-const CERT_OPTIONS = ["EN 10204 3.1", "EN 10204 3.2", "EN 10204 2.2"];
 const PROC_OPTIONS = ["141", "147"];
 const DEFAULT_WPS_PROCESSES = [
   { wpsNo: "SP2", process: "141" },
@@ -398,7 +410,15 @@ function getMaterial(id) { return DB.materials.find(m => m.id === id); }
 function getWeld(id) { return DB.welds.find(w => w.id === id); }
 function getClientName(id) { const c = getClient(id); return c ? c.name : t('unknown_client', 'Unknown client'); }
 function pipelineMaterials(pid) { return materials().filter(m => m.pipelineId === pid).sort((a, b) => a.position - b.position); }
-function pipelineWelds(pid) { return welds().filter(w => w.pipelineId === pid).sort((a, b) => Number(a.weldNo) - Number(b.weldNo)); }
+/* Ordered along the run, not by number: once numbering is frozen a weld added later
+   carries a higher number than its neighbours, and it still has to read in the place
+   it physically sits. For an unfrozen pipeline the two orders are identical. */
+function pipelineWelds(pid) {
+  return welds().filter(w => w.pipelineId === pid).sort((a, b) =>
+    (_letterToNum(a.betweenA) - _letterToNum(b.betweenA))
+    || (_letterToNum(a.betweenB) - _letterToNum(b.betweenB))
+    || (Number(a.weldNo) - Number(b.weldNo)));
+}
 function materialWelds(mid) { const m = getMaterial(mid); return welds().filter(w => w.pipelineId === m.pipelineId && w.materialIds.includes(mid)); }
 function personCerts(pid) { return certificates().filter(c => c.personId === pid); }
 function projectPipelines(prid) { return pipelines().filter(p => p.projectId === prid).sort(compareByPipelineNo); }
@@ -1006,7 +1026,8 @@ function mountModals() {
   <div class="modal-overlay" id="modal-pipeline"><div class="modal modal-wide">
     <button class="modal-close" onclick="closeModal('modal-pipeline')">&times;</button><h2 id="modal-pipeline-title" data-i18n="new_pipeline">New pipeline</h2>
     <form id="pipeline-form"><div class="form-grid">
-      <label class="field wide"><span class="lbl" data-i18n="pipeline_number">Pipeline number <span class="req">*</span></span><input type="text" id="input-pl-no" required></label>
+      <div class="field wide"><span class="lbl" data-i18n="pipeline_number">Pipeline number <span class="req">*</span></span><input type="text" id="input-pl-no" required oninput="onPipelineNoInput()">
+        <div class="inline-warn" id="pl-no-warn"></div></div>
       <label class="field"><span class="lbl" data-i18n="project">Project <span class="req">*</span></span><select id="input-pl-project" onchange="onPipelineProjectChange()" required></select></label>
       <label class="field"><span class="lbl" data-i18n="order_no_from_project">Order number (from project)</span><input type="text" id="input-pl-order" disabled></label>
       <label class="field"><span class="lbl" data-i18n="plant">Plant</span><input type="text" id="input-pl-plant"></label>
@@ -1426,6 +1447,12 @@ function attachFormHandlers() {
     setButtonLoading(submitBtn, true, t('saving', 'Saving…'));
     const statusVal = Number(val('input-pl-status')) || 0;
     const projectId = Number(val('input-pl-project')), no = val('input-pl-no');
+    /* Re-check on save: the number may have been taken since the modal was opened. */
+    const dup = await checkPipelineNo();
+    if (dup && dup.duplicate) {
+      const proceed = confirm(t('pipeline_no_in_use', 'This pipeline number is already used in this project.') + '\n\n' + t('save_anyway_q', 'Save anyway?'));
+      if (!proceed) { setButtonLoading(submitBtn, false); document.getElementById('input-pl-no').focus(); return; }
+    }
     const data = { no, projectId, plant: val('input-pl-plant'), status: statusVal };
     if (editingPipelineId !== null) data.id = editingPipelineId;
     try {
@@ -1559,10 +1586,15 @@ function attachFormHandlers() {
     for (let i = 0; i < extraThks.length; i++) {
       if (!extraThks[i]) { err.textContent = `${t('thickness', 'Thickness')} ${i + 2} is required.`; err.classList.add('show'); return; }
     }
-    if (!matCode) { err.textContent = t('material_code_required', 'Material code is required.'); err.classList.add('show'); return; }
+    if (!matCode && !isExistingMaterial(piece)) { err.textContent = t('material_code_required', 'Material code is required.'); err.classList.add('show'); return; }
 
-    const certificate = readSelectOther('input-mat-certificate', 'input-mat-certificate-new');
-    const heatNo = readSelectOther('input-mat-heat', 'input-mat-heat-new');
+    const certificateRaw = readSelectOther('input-mat-certificate', 'input-mat-certificate-new');
+    const heatNoRaw = readSelectOther('input-mat-heat', 'input-mat-heat-new');
+    /* Supply-side fields are hidden for an existing material; make sure nothing an
+       auto-select dropped into them while another category was chosen gets saved. */
+    const isExist = isExistingMaterial(piece);
+    const certificate = isExist ? '' : certificateRaw;
+    const heatNo = isExist ? '' : heatNoRaw;
     const wazFileInput = document.getElementById('input-mat-waz-file');
     const wazFile = wazFileInput ? (wazFileInput.files[0] || null) : null;
     const attachedWazPdfUrl = (!_matWazDocRemoved && _matAttachedWazPdfUrl) ? _matAttachedWazPdfUrl : '';
@@ -1571,8 +1603,8 @@ function attachFormHandlers() {
     const posVal = val('input-mat-position'); const posNum = _letterToNum(posVal) || Number(posVal) || (pipelineMaterials(PAGE.pipelineId).length + 1);
     const data = {
       pipelineId: PAGE.pipelineId, position: posNum,
-      piece, dimension, materialCode: matCode, itemDescription: itemDesc || piece,
-      diameter, thickness, dienNo, surface,
+      piece, dimension, materialCode: isExist ? '' : matCode, itemDescription: itemDesc || piece,
+      diameter, thickness, dienNo: isExist ? '' : dienNo, surface: isExist ? '' : surface,
       diameter2: extraDias[0] || '', diameter3: extraDias[1] || '',
       thickness2: extraThks[0] || '', thickness3: extraThks[1] || '',
       certificate, heatNo,
@@ -1591,7 +1623,7 @@ function attachFormHandlers() {
     if (!_bypassMatHeatConflict) {
       const dnsObj = { dn1: dimension };
       for (let i = 2; i <= 6; i++) if (data[`dimension${i}`]) dnsObj[`dn${i}`] = data[`dimension${i}`];
-      const specsObj = { category: piece, itemDescription: itemDesc || piece, dn1: dimension, materialCode: matCode, dienNo, diameter, thickness, surface, certificate, ...dnsObj };
+      const specsObj = { category: piece, itemDescription: itemDesc || piece, dn1: dimension, materialCode: data.materialCode, dienNo: data.dienNo, diameter, thickness, surface: data.surface, certificate, ...dnsObj };
 
       // Step 1: Check if an exact match on ALL fields exists (with same heatNo or both no heatNo)
       const dupMatch = findDuplicateProjectMaterial(currentProjectId, heatNo, specsObj, isEditingMat && existingMat ? existingMat.projectMaterialId : null);
@@ -1885,7 +1917,56 @@ function openProjectModal(id = null) {
   }
   openModal('modal-project'); document.getElementById('input-project-title').focus();
 }
-function onPipelineProjectChange() { const pr = getProject(Number(val('input-pl-project'))); setV('input-pl-order', pr && pr.order ? pr.order : ''); }
+/* Pipeline numbers are drawing numbers: reusing one inside a project makes two pipelines
+   indistinguishable in every document that follows. The number is checked against the
+   server (the local cache may only hold one project's pipelines) and the user is warned,
+   on typing and again on save — a warning, not a block, since the call is theirs. */
+let _plNoCheckTimer = null;
+let _plNoLastResult = null;
+function pipelineNoWarnEl() { return document.getElementById('pl-no-warn'); }
+function clearPipelineNoWarn() {
+  _plNoLastResult = null;
+  const el = pipelineNoWarnEl();
+  if (el) { el.textContent = ''; el.className = 'inline-warn'; }
+}
+async function checkPipelineNo() {
+  const no = val('input-pl-no').trim();
+  const projectId = Number(val('input-pl-project')) || 0;
+  const el = pipelineNoWarnEl();
+  if (!el) return null;
+  if (!no) { clearPipelineNoWarn(); return null; }
+  try {
+    const params = new URLSearchParams({ no, projectId: String(projectId) });
+    if (editingPipelineId !== null) params.set('excludeId', String(editingPipelineId));
+    const res = await apiGet('/pipelines/check-no?' + params.toString());
+    _plNoLastResult = res;
+    if (res.duplicate) {
+      el.className = 'inline-warn inline-warn-danger open';
+      el.textContent = `⚠ ${t('pipeline_no_in_use', 'This pipeline number is already used in this project.')}`;
+    } else if (res.otherProjects && res.otherProjects.length) {
+      const first = res.otherProjects[0];
+      const where = first.projectTitle ? ` (${first.projectTitle})` : '';
+      el.className = 'inline-warn open';
+      el.textContent = `ℹ ${t('pipeline_no_used_elsewhere', 'This number is already used in another project')}${where}.`;
+    } else {
+      clearPipelineNoWarn();
+    }
+    return res;
+  } catch (e) {
+    /* the check is advisory — never block saving because it could not run */
+    console.error('Pipeline number check failed:', e);
+    clearPipelineNoWarn();
+    return null;
+  }
+}
+function onPipelineNoInput() {
+  clearTimeout(_plNoCheckTimer);
+  _plNoCheckTimer = setTimeout(checkPipelineNo, 350);
+}
+function onPipelineProjectChange() { const pr = getProject(Number(val('input-pl-project'))); setV('input-pl-order', pr && pr.order ? pr.order : '');
+  /* the same number can be free in one project and taken in another */
+  if (document.getElementById('modal-pipeline') && document.getElementById('modal-pipeline').classList.contains('open')) checkPipelineNo();
+}
 function openPipelineModal(id = null) {
   editingPipelineId = id; document.getElementById('pipeline-form').reset();
   const projSel = document.getElementById('input-pl-project');
@@ -1947,7 +2028,7 @@ function openPipelineModal(id = null) {
       if (readOnly) readOnly.style.display = 'none';
     }
   }
-  onPipelineProjectChange(); openModal('modal-pipeline'); document.getElementById('input-pl-no').focus();
+  onPipelineProjectChange(); clearPipelineNoWarn(); openModal('modal-pipeline'); document.getElementById('input-pl-no').focus();
 }
 let _welderSignatureFile = null;
 let _welderSignatureRemoved = false;
@@ -2747,7 +2828,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
 
   // 4. Certificate
   const pmCerts = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : candidates) : scopedPms.filter(descMatches)).map(pm => pm.certificate);
-  const availCerts = isHeatSelected ? [...new Set(pmCerts.filter(Boolean))] : makeOpts(pmCerts, CERT_OPTIONS);
+  const availCerts = [...new Set(pmCerts.filter(Boolean))];
 
   /* 5. DN1 - a field must never be narrowed by its OWN value, nor by the heat that the DN
      itself selected, otherwise the user gets locked into the first DN and can never switch
@@ -2837,7 +2918,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   }
 
   // 4. Certificate
-  const certOpts = availCerts.length ? availCerts : (isHeatSelected ? [] : CERT_OPTIONS);
+  const certOpts = availCerts.slice();
   let targetCert = getFieldValue('cert', curCert, certOpts, 'input-mat-certificate');
   if (editingMaterialId === null && isDnTrigger && targetCert && targetCert !== '__other__' && !certOpts.includes(targetCert)) {
     targetCert = certOpts.length === 1 ? certOpts[0] : '';
@@ -3258,6 +3339,26 @@ function toggleWireFields(piece) {
   if (startEndField) startEndField.style.display = isWire ? 'none' : '';
   if (isWire) { document.getElementById('conn-rows').innerHTML = ''; document.getElementById('input-mat-start').checked = false; document.getElementById('input-mat-end').checked = false; }
   if (!isWire) toggleDnFields(piece);
+  applyExistingMaterialFields(piece);
+}
+/* An existing material is only ever identified by what it is and the DN it must match;
+   every supply-side field (heat, DIN EN, material code, surface, certificate, WAZ) is
+   meaningless for pipework we did not deliver, so those fields are taken off the form. */
+function applyExistingMaterialFields(piece) {
+  const on = isExistingMaterial(piece);
+  const hide = ['input-mat-heat', 'input-mat-dien', 'input-mat-code', 'input-mat-surface', 'input-mat-certificate'];
+  hide.forEach(id => {
+    const el = document.getElementById(id);
+    const field = el && el.closest('.field');
+    if (field) field.style.display = on ? 'none' : '';
+    if (on && el) {
+      el.value = '';
+      const txt = document.getElementById(id + '-new');
+      if (txt) { txt.value = ''; txt.style.display = 'none'; }
+    }
+  });
+  const waz = document.getElementById('mat-waz-doc-field');
+  if (waz) waz.style.display = on ? 'none' : '';
 }
 function onItemDescChange() {
   toggleSelectOther('input-mat-desc', 'input-mat-desc-new');
@@ -3980,6 +4081,9 @@ function archivedProjects() { return DB.projects.filter(p => p.archived); }
 function archivedPipelines() { return DB.pipelines.filter(p => p.archived).sort(compareByPipelineNo); }
 function archivedMaterials() { return DB.materials.filter(m => m.archived); }
 function archivedWelds() { return DB.welds.filter(w => w.archived); }
+/* Project materials archive separately from the pipeline materials above: one is a
+   specification held by a project, the other a part built into a run. */
+function archivedProjectMaterials() { return (DB.projectMaterials || []).filter(m => m.archived); }
 function allProjectsForClient(cid) { return DB.projects.filter(p => p.clientId === cid); }
 let archiveFilterText = '';
 let archiveTab = 'clients';
@@ -4006,8 +4110,9 @@ function switchArchiveTab(tab) {
 function onArchiveFilterInput(v) { archiveFilterText = v; renderArchivePage(); }
 function renderArchivePage() {
   const aC = archivedClients().length, aP = archivedProjects().length, aPl = archivedPipelines().length, aM = archivedMaterials().length, aW = archivedWelds().length;
-  document.getElementById('archive-stats').innerHTML = tile(aC, t('total_clients', 'Clients'), 't-neutral') + tile(aP, t('total_projects', 'Projects'), 't-neutral') + tile(aPl, t('total_pipelines', 'Pipelines'), 't-neutral') + tile(aM, t('total_materials', 'Materials'), 't-neutral') + tile(aW, t('total_welds', 'Welds'), 't-neutral');
-  ['clients', 'projects', 'pipelines', 'materials', 'welds'].forEach(t => {
+  const aPm = archivedProjectMaterials().length;
+  document.getElementById('archive-stats').innerHTML = tile(aC, t('total_clients', 'Clients'), 't-neutral') + tile(aP, t('total_projects', 'Projects'), 't-neutral') + tile(aPl, t('total_pipelines', 'Pipelines'), 't-neutral') + tile(aM, t('total_materials', 'Materials'), 't-neutral') + tile(aPm, t('project_materials', 'Project materials'), 't-neutral') + tile(aW, t('total_welds', 'Welds'), 't-neutral');
+  ['clients', 'projects', 'pipelines', 'materials', 'projectmaterials', 'welds'].forEach(t => {
     const el = document.getElementById('arc-tab-' + t);
     if (el) el.classList.toggle('active', archiveTab === t);
   });
@@ -4017,6 +4122,7 @@ function renderArchivePage() {
   else if (archiveTab === 'projects') renderArchiveProjects(content);
   else if (archiveTab === 'pipelines') renderArchivePipelines(content);
   else if (archiveTab === 'materials') renderArchiveMaterials(content);
+  else if (archiveTab === 'projectmaterials') renderArchiveProjectMaterials(content);
   else if (archiveTab === 'welds') renderArchiveWelds(content);
 }
 const RESTORE_ICON = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"><path d="M3 12a9 9 0 1 1 2.64 6.36" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M3 18v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -4036,12 +4142,13 @@ function renderArchiveProjects(el) {
 }
 function renderArchiveMaterials(el) {
   const items = archivedMaterials();
-  el.innerHTML = `<div class="table-card"><table class="table-wide"><thead><tr><th>${t('th_category', 'Category')}</th><th>${t('th_item_description', 'Item description')}</th><th>${t('th_dn', 'DN')}</th><th>${t('th_material', 'Material')}</th><th>${t('th_pipeline_no', 'Pipeline No.')}</th><th></th></tr></thead><tbody>${items.length ? items.map(m => {
+  el.innerHTML = `<div class="table-card"><table class="table-wide"><thead><tr><th>${t('th_category', 'Category')}</th><th>${t('th_item_description', 'Item description')}</th><th>${t('th_dn', 'DN')}</th><th>${t('th_material', 'Material')}</th><th>${t('th_project', 'Project')}</th><th>${t('th_pipeline_no', 'Pipeline No.')}</th><th></th></tr></thead><tbody>${items.length ? items.map(m => {
     const pl = getPipeline(m.pipelineId);
+    const pr = pl ? getProject(pl.projectId) : null;
     let dnDisplay = escapeHtml(m.dimension);
     for (let i = 2; i <= 6; i++) { if (m[`dimension${i}`]) dnDisplay += ' / ' + escapeHtml(m[`dimension${i}`]); }
-    return `<tr><td>${escapeHtml(m.piece)}</td><td>${escapeHtml(m.itemDescription)}</td><td class="col-mono">${dnDisplay}</td><td class="col-mono">${escapeHtml(m.materialCode)}</td><td>${pl ? escapeHtml(pl.no) : '\u2014'}</td><td class="col-actions"><button class="btn-restore" onclick="openRestoreMaterialModal(${m.id})">${RESTORE_ICON} ${t('restore', 'Restore')}</button></td></tr>`;
-  }).join('') : '<tr class="empty-row"><td colspan="6">' + t('no_archived_materials', 'No archived materials.') + '</td></tr>'}</tbody></table></div>`;
+    return `<tr><td>${escapeHtml(m.piece)}</td><td>${escapeHtml(m.itemDescription)}</td><td class="col-mono">${dnDisplay}</td><td class="col-mono">${escapeHtml(m.materialCode)}</td><td>${pr ? escapeHtml(pr.title) : '\u2014'}</td><td>${pl ? escapeHtml(pl.no) : '\u2014'}</td><td class="col-actions"><button class="btn-restore" onclick="openRestoreMaterialModal(${m.id})">${RESTORE_ICON} ${t('restore', 'Restore')}</button></td></tr>`;
+  }).join('') : '<tr class="empty-row"><td colspan="7">' + t('no_archived_materials', 'No archived materials.') + '</td></tr>'}</tbody></table></div>`;
 }
 function renderArchivePipelines(el) {
   const items = archivedPipelines();
@@ -4050,6 +4157,38 @@ function renderArchivePipelines(el) {
     const cli = pr ? getClient(pr.clientId) : null;
     return `<tr><td class="col-mono">${escapeHtml(pl.no)}</td><td>${pr ? escapeHtml(pr.title) : '\u2014'}</td><td>${cli ? escapeHtml(cli.name) : '\u2014'}</td><td class="col-mono">${escapeHtml(pl.plant) || '\u2014'}</td><td>${statusPill(pl.status)}</td><td class="col-actions"><button class="btn-restore" onclick="restorePipeline(${pl.id})">${RESTORE_ICON} ${t('restore', 'Restore')}</button></td></tr>`;
   }).join('') : '<tr class="empty-row"><td colspan="6">' + t('no_archived_pipelines', 'No archived pipelines.') + '</td></tr>'}</tbody></table></div>`;
+}
+function renderArchiveProjectMaterials(el) {
+  const items = archivedProjectMaterials();
+  el.innerHTML = `<div class="table-card"><table class="table-wide"><thead><tr>`
+    + `<th>${t('th_category', 'Category')}</th><th>${t('th_item_description', 'Item description')}</th>`
+    + `<th>${t('th_dn', 'DN')}</th><th>${t('th_material', 'Material')}</th>`
+    + `<th>${t('th_certificate', 'Certificate')}</th><th>${t('th_heat_no', 'Heat No.')}</th>`
+    + `<th>${t('th_project', 'Project')}</th><th></th></tr></thead><tbody>`
+    + (items.length ? items.map(pm => {
+        const pr = getProject(pm.projectId);
+        return `<tr>
+          <td>${escapeHtml(pm.category || '')}</td>
+          <td><a class="cell-link" href="material-usage.html?pmId=${pm.id}">${escapeHtml(pm.itemDescription || '')}</a></td>
+          <td class="col-mono">${escapeHtml(pm.dn1 || '')}</td>
+          <td class="col-mono">${escapeHtml(pm.materialCode || '')}</td>
+          <td class="col-mono">${escapeHtml(pm.certificate || '') || '—'}</td>
+          <td class="col-mono">${escapeHtml(pm.heatNo || '') || '—'}</td>
+          <td>${pr ? escapeHtml(pr.title) : '—'}</td>
+          <td class="col-actions"><button class="btn-restore" onclick="restoreProjectMaterial(${pm.id})">${RESTORE_ICON} ${t('restore', 'Restore')}</button></td>
+        </tr>`;
+      }).join('')
+      : `<tr class="empty-row"><td colspan="8">${t('no_archived_project_materials', 'No archived project materials.')}</td></tr>`)
+    + `</tbody></table></div>`;
+}
+async function restoreProjectMaterial(pmId) {
+  try {
+    await apiPost('/project-materials/' + pmId + '/archive', { archived: false });
+    const pm = (DB.projectMaterials || []).find(x => x.id === pmId);
+    if (pm) pm.archived = false;
+    saveDB();
+    renderArchivePage();
+  } catch (e) { alert('Error: ' + e.message); }
 }
 function renderArchiveWelds(el) {
   const items = archivedWelds();
@@ -4661,6 +4800,9 @@ function materialConnError(m, allMats) {
   const conns = (m.connections || []).length;
   const piece = (m.piece || m.category || '').toLowerCase();
   if (piece === 'welding wire' || piece === 'blind flange') return false;
+  /* A tie-in point is correct with either one connection (at an end) or two (mid-run),
+     whether or not it was flagged as start/end of plumbing. */
+  if (isExistingMaterial(piece)) return conns < 1 || conns > 2;
   const isFirst = allMats.length <= 1;
   if (isFirst) return false;
   const required = requiredWelds(piece);
@@ -4673,7 +4815,7 @@ function materialConnError(m, allMats) {
   return conns < adjusted || conns > required;
 }
 /* Categories that must have matching DN on all connections (single-DN pieces) */
-const SINGLE_DN_PIECES = ["pipe", "flange", "blind flange", "elbow", "equipment"];
+const SINGLE_DN_PIECES = ["pipe", "flange", "blind flange", "elbow", "equipment", "existing material"];
 function materialDnMismatch(m) {
   if (!m.dimension || !m.connections || !m.connections.length) return false;
   const myPiece = (m.piece || m.category || '').toLowerCase();
@@ -4714,6 +4856,13 @@ function jumpToMaterialRow(matId) {
   el.querySelectorAll('td').forEach(td => td.style.background = 'rgba(168,93,44,0.4)');
   setTimeout(() => el.querySelectorAll('td').forEach(td => td.style.background = ''), 800);
 }
+/* Once a welder or inspector is on a weld, the weld numbers are on the pipe and in the
+   issued documents. From that point the running order is fixed: reordering materials would
+   change which materials each weld joins, so dragging is switched off. The server refuses
+   the reorder too - this is the visible half of that rule. */
+function pipelineNumberingFrozen(pipelineId) {
+  return pipelineWelds(pipelineId).some(w => w.welderId || w.inspectorId);
+}
 function renderMaterialsList() {
   const tbody = document.getElementById('materials-tbody'); const allRows = pipelineMaterials(PAGE.pipelineId);
   const isWire = m => (m.piece || m.category || '').toLowerCase() === 'welding wire';
@@ -4726,6 +4875,14 @@ function renderMaterialsList() {
     for (let i = 2; i <= 3; i++) { if (m[`diameter${i}`]) maxDia = Math.max(maxDia, i); }
     for (let i = 2; i <= 3; i++) { if (m[`thickness${i}`]) maxThk = Math.max(maxThk, i); }
   });
+  const orderFrozen = pipelineNumberingFrozen(PAGE.pipelineId);
+  const lockNote = document.getElementById('materials-order-locked');
+  if (lockNote) {
+    lockNote.classList.toggle('open', orderFrozen);
+    lockNote.textContent = orderFrozen
+      ? '🔒 ' + t('order_locked_note', 'A welder or inspector is assigned, so the weld numbers are fixed. Materials can no longer be reordered; adding one creates new welds without renumbering the existing ones.')
+      : '';
+  }
   const rowIndex = new Map(rows.map((m, i) => [m.id, i]));
   tbody.innerHTML = rows.length ? rows.map(m => {
     const flags = [m.startOfPlumbing ? 'start' : '', m.endOfPlumbing ? 'end' : ''].filter(Boolean).join(' · ');
@@ -4738,7 +4895,7 @@ function renderMaterialsList() {
     if (m.startOfPlumbing && maxWelds > 1) adjusted = Math.max(1, adjusted - 1);
     if (m.endOfPlumbing && maxWelds > 1) adjusted = Math.max(1, adjusted - 1);
     if (m.startOfPlumbing && m.endOfPlumbing) adjusted = 0;
-    const canDrag = maxWelds < 3;
+    const canDrag = maxWelds < 3 && !orderFrozen;
     let extraDnCells = '';
     for (let i = 2; i <= maxDn; i++) {
       extraDnCells += `<td class="col-mono">${m[`dimension${i}`] ? escapeHtml(m[`dimension${i}`]) : '<span class="muted">—</span>'}</td>`;
@@ -4912,7 +5069,22 @@ async function onMatDrop(e, targetMatId) {
     DB.welds = normalizeWelds(freshWelds);
     rebuildRelationships();
     rerenderPage();
-  } catch (e) { console.error('Reorder API error:', e); }
+  } catch (e) {
+    console.error('Reorder API error:', e);
+    /* The local list was reordered optimistically before the request. If the server
+       refused, reload so the screen matches what is actually stored. */
+    if (e.status === 409) alert(t('reorder_locked_msg', 'Materials cannot be reordered: a welder or inspector is already assigned to a weld in this pipeline.'));
+    try {
+      const [freshMats, freshWelds] = await Promise.all([
+        apiGet('/pipeline-materials?pipelineId=' + PAGE.pipelineId),
+        apiGet('/welds?pipelineId=' + PAGE.pipelineId)
+      ]);
+      DB.materials = normalizeMaterials(freshMats);
+      DB.welds = normalizeWelds(freshWelds);
+      rebuildRelationships();
+      rerenderPage();
+    } catch (reloadErr) { console.error('Reload after failed reorder:', reloadErr); }
+  }
 }
 /* Show welds for a material — if 1 weld, open edit directly; if multiple, open first seam detail */
 
@@ -4992,8 +5164,6 @@ function openWeldBulkModal() {
   document.getElementById('bulk-weld-count').textContent = n === 1
     ? t('bulk_applies_to_one', 'The values below are applied to the 1 selected weld.')
     : `${t('bulk_applies_to', 'The values below are applied to the')} ${n} ${t('bulk_selected_welds', 'selected welds.')}`;
-  setV('bulk-weld-type', '__keep__'); setV('bulk-weld-visual', '__keep__'); setV('bulk-weld-endoscopy', '__keep__');
-  setV('bulk-weld-proc', ''); setV('bulk-weld-date', '');
 
   const keepOpt = `<option value="__keep__">${t('keep_existing', '— Keep existing —')}</option>`;
   const noneOpt = `<option value="">${t('none_opt', '— None —')}</option>`;
@@ -5004,8 +5174,52 @@ function openWeldBulkModal() {
   const personOpts = people().map(pp => `<option value="${pp.id}">${escapeHtml(pp.name)} · No. ${escapeHtml(pp.no)}</option>`).join('');
   document.getElementById('bulk-weld-welder').innerHTML = keepOpt + noneOpt + personOpts;
   document.getElementById('bulk-weld-inspector').innerHTML = keepOpt + noneOpt + personOpts;
+
+  /* Show what the selected welds already hold: where they all agree the field opens on
+     that value, where they differ it opens on "Multiple values" and stays untouched. */
+  const sel = [...selectedWeldIds].map(getWeld).filter(Boolean);
+  const shared = fn => {
+    if (!sel.length) return BULK_MIXED;
+    const first = fn(sel[0]);
+    return sel.every(w => fn(w) === first) ? first : BULK_MIXED;
+  };
+  const wireIdOf = w => {
+    if (w.weldingWireId) return String(w.weldingWireId);
+    if (w.weldingWire) { const hit = wires.find(x => x.itemDescription === w.weldingWire); if (hit) return String(hit.id); }
+    return '';
+  };
+  setBulkField('bulk-weld-type', shared(w => w.type || ''));
+  setBulkField('bulk-weld-wire', shared(wireIdOf));
+  setBulkField('bulk-weld-welder', shared(w => w.welderId ? String(w.welderId) : ''));
+  setBulkField('bulk-weld-inspector', shared(w => w.inspectorId ? String(w.inspectorId) : ''));
+  setBulkField('bulk-weld-visual', shared(w => w.visual || 'n/a'));
+  setBulkField('bulk-weld-endoscopy', shared(w => w.endoscopy || 'n/a'));
+  const sharedDate = shared(w => w.date || '');
+  setV('bulk-weld-date', sharedDate === BULK_MIXED ? '' : sharedDate);
+  onBulkWeldTypeChange();
+  _bulkOpened = {
+    type: val('bulk-weld-type'), wire: val('bulk-weld-wire'), welder: val('bulk-weld-welder'),
+    inspector: val('bulk-weld-inspector'), visual: val('bulk-weld-visual'),
+    endoscopy: val('bulk-weld-endoscopy'), date: val('bulk-weld-date')
+  };
   openModal('modal-weld-bulk');
 }
+let _bulkOpened = {};
+/* Sentinel for "the selected welds do not agree on this field". */
+const BULK_MIXED = Symbol('mixed');
+function setBulkField(id, value) {
+  const el = document.getElementById(id); if (!el) return;
+  const mixed = value === BULK_MIXED;
+  const keep = el.querySelector('option[value="__keep__"]');
+  if (keep) {
+    keep.textContent = mixed ? t('multiple_values', '— Multiple values —') : t('keep_existing', '— Keep existing —');
+    keep.setAttribute('data-i18n', mixed ? 'multiple_values' : 'keep_existing');
+  }
+  if (mixed) { el.value = '__keep__'; return; }
+  const v = String(value == null ? '' : value);
+  el.value = [...el.options].some(o => o.value === v) ? v : '__keep__';
+}
+
 function onBulkWeldTypeChange() {
   const type = val('bulk-weld-type');
   const procEl = document.getElementById('bulk-weld-proc');
@@ -5024,20 +5238,21 @@ async function submitWeldBulk(e) {
 
   /* Only fields the user actually changed are sent — "keep existing" writes nothing. */
   const values = {};
-  const type = val('bulk-weld-type');
-  if (type !== '__keep__') { values.type = type; values.procedure = val('bulk-weld-proc'); }
-  const wire = val('bulk-weld-wire');
-  if (wire !== '__keep__') { const wm = wire ? getMaterial(Number(wire)) : null; values.weldingWire = wm ? wm.itemDescription : ''; }
-  const date = val('bulk-weld-date');
+  const touched = (id, key) => { const v = val(id); return v !== '__keep__' && v !== _bulkOpened[key] ? v : null; };
+  const type = touched('bulk-weld-type', 'type');
+  if (type !== null) { values.type = type; values.procedure = val('bulk-weld-proc'); }
+  const wire = touched('bulk-weld-wire', 'wire');
+  if (wire !== null) { const wm = wire ? getMaterial(Number(wire)) : null; values.weldingWire = wm ? wm.itemDescription : ''; }
+  const date = touched('bulk-weld-date', 'date');
   if (date) values.date = date;
-  const welder = val('bulk-weld-welder');
-  if (welder !== '__keep__') { const pp = welder ? getPerson(Number(welder)) : null; values.welderId = pp ? pp.id : null; values.welder = pp ? pp.name : ''; }
-  const inspector = val('bulk-weld-inspector');
-  if (inspector !== '__keep__') { const pp = inspector ? getPerson(Number(inspector)) : null; values.inspectorId = pp ? pp.id : null; values.inspector = pp ? pp.name : ''; }
-  const visual = val('bulk-weld-visual');
-  if (visual !== '__keep__') values.visual = visual;
-  const endo = val('bulk-weld-endoscopy');
-  if (endo !== '__keep__') values.endoscopy = endo;
+  const welder = touched('bulk-weld-welder', 'welder');
+  if (welder !== null) { const pp = welder ? getPerson(Number(welder)) : null; values.welderId = pp ? pp.id : null; values.welder = pp ? pp.name : ''; }
+  const inspector = touched('bulk-weld-inspector', 'inspector');
+  if (inspector !== null) { const pp = inspector ? getPerson(Number(inspector)) : null; values.inspectorId = pp ? pp.id : null; values.inspector = pp ? pp.name : ''; }
+  const visual = touched('bulk-weld-visual', 'visual');
+  if (visual !== null) values.visual = visual;
+  const endo = touched('bulk-weld-endoscopy', 'endoscopy');
+  if (endo !== null) values.endoscopy = endo;
 
   if (!Object.keys(values).length) { err.textContent = t('bulk_nothing_changed', 'Nothing to apply — change at least one field.'); return; }
 
@@ -5309,6 +5524,7 @@ function onInlinePersonChange(weldId, role, wrapperId) {
 /* WAZ cell: a WAZ number with no uploaded document must look clearly different from one
    that has its certificate, so a missing document is visible at a glance in the table. */
 function wazCellHtml(m) {
+  if (isExistingMaterial(m.piece || m.category)) return '<span class="muted">—</span>';
   if (!m.wazNo) {
     return `<button class="btn btn-primary btn-sm" onclick="openAddWazModal(${m.id})">+</button>`;
   }
@@ -5717,6 +5933,71 @@ function renderMaterialDetail() {
 }
 
 /* ================================================================ MATERIAL USAGE PAGE ================================================================ */
+/* Archiving is offered per row, but only for a material no pipeline uses. The count comes
+   from the pipeline materials already loaded for this project; the server checks again and
+   refuses with 409, because this page's copy can be out of date. */
+function projectMaterialUseCount(pmId) {
+  const pm = (DB.projectMaterials || []).find(x => x.id === pmId);
+  if (pm && pm.usedCount !== undefined) return pm.usedCount;
+  return (DB.materials || []).filter(m => !m.archived && m.projectMaterialId === pmId).length;
+}
+function pmArchiveBtn(pmId) {
+  const used = projectMaterialUseCount(pmId);
+  if (used > 0) {
+    const tip = `${t('material_in_use_count', 'This material is used in')} ${used} ${used === 1 ? t('place_singular', 'place') : t('place_plural', 'places')}. ${t('archive_blocked_hint', 'It can only be archived once it is no longer used in any pipeline.')}`;
+    return `<button class="btn-link" disabled style="opacity:0.45;cursor:not-allowed;" title="${escapeHtml(tip)}">${t('archive', 'Archive')}</button>`;
+  }
+  return `<button class="btn-link" onclick="archiveProjectMaterial(${pmId})">${t('archive', 'Archive')}</button>`;
+}
+async function archiveProjectMaterial(pmId) {
+  if (!confirm(t('archive_material_q', 'Archive this material? It will be hidden from the project material list.'))) return;
+  try {
+    await apiPost('/project-materials/' + pmId + '/archive', { archived: true });
+    DB.projectMaterials = (DB.projectMaterials || []).filter(x => x.id !== pmId);
+    saveDB();
+    rerenderPage();
+  } catch (e) {
+    alert(e.status === 409
+      ? (e.message || t('archive_blocked', 'This material cannot be archived while a pipeline uses it.'))
+      : 'Error: ' + e.message);
+  }
+}
+let MU_PROJECT_MATERIAL = null;
+/* A project material may only be archived while nothing uses it: archiving one that is
+   still built into a run would hide the specification the weld list and WAZ documents are
+   printed from, while the part stays welded in the pipe. */
+function renderMuArchiveBar(p, usedCount) {
+  const host = document.getElementById('mu-archive-bar');
+  if (!host) return;
+  const pm = MU_PROJECT_MATERIAL;
+  if (!p.pmId || !pm) { host.innerHTML = ''; return; }
+  if (pm.archived) {
+    host.innerHTML = `<div class="mark-done-bar"><div class="md-text">${t('material_is_archived', 'This material is archived.')}</div>`
+      + `<button class="btn btn-ghost" onclick="setProjectMaterialArchived(${pm.id}, false)">${t('restore', 'Restore')}</button></div>`;
+    return;
+  }
+  if (usedCount > 0) {
+    host.innerHTML = `<div class="mark-done-bar"><div class="md-text">`
+      + `${t('material_in_use_count', 'This material is used in')} <strong>${usedCount}</strong> `
+      + `${usedCount === 1 ? t('place_singular', 'place') : t('place_plural', 'places')}. `
+      + `${t('archive_blocked_hint', 'It can only be archived once it is no longer used in any pipeline.')}`
+      + `</div><button class="btn btn-ghost" disabled>${t('archive', 'Archive')}</button></div>`;
+    return;
+  }
+  host.innerHTML = `<div class="mark-done-bar"><div class="md-text">${t('material_unused', 'This material is not used in any pipeline.')}</div>`
+    + `<button class="btn btn-ghost" onclick="setProjectMaterialArchived(${pm.id}, true)">${t('archive', 'Archive')}</button></div>`;
+}
+async function setProjectMaterialArchived(pmId, archived) {
+  try {
+    await apiPost('/project-materials/' + pmId + '/archive', { archived });
+    location.reload();
+  } catch (e) {
+    alert(e.status === 409
+      ? (e.message || t('archive_blocked', 'This material cannot be archived while a pipeline uses it.'))
+      : 'Error: ' + e.message);
+  }
+}
+
 async function initMaterialUsagePage() {
   PAGE.name = 'material-usage'; initDB();
   try {
@@ -5725,12 +6006,13 @@ async function initMaterialUsagePage() {
     DB.projects = normalizeProjects(data.projects || []);
     DB.pipelines = data.pipelines || [];
     DB.materials = normalizeMaterials(data.materials || []);
+    MU_PROJECT_MATERIAL = data.projectMaterial || null;
   } catch (e) { console.error('API error:', e); }
   renderChrome('materials', `<a href="materials.html">${t('materials', 'Materials')}</a> / ${t('usage', 'Usage')}`); mountModals(); wireModalDismiss();
   renderMaterialUsagePage();
 }
 function getMaterialUsageParams() {
-  return { piece: qp('piece') || '', desc: qp('desc') || '', dn: qp('dn') || '', dien: qp('dien') || '', dia: qp('dia') || '', thk: qp('thk') || '', code: qp('code') || '' };
+  return { pmId: Number(qp('pmId')) || 0, piece: qp('piece') || '', desc: qp('desc') || '', dn: qp('dn') || '', dien: qp('dien') || '', dia: qp('dia') || '', thk: qp('thk') || '', code: qp('code') || '' };
 }
 let muWazFilters = { wazNo: '', cert: '', heatNo: '', pipeline: '', project: '' };
 let muUsageFilters = { pipeline: '', project: '', client: '', pos: '', wazNo: '', cert: '', heatNo: '' };
@@ -5765,8 +6047,23 @@ function muUsageColFilter(label, filterKey, options, curVal) {
 
 function renderMaterialUsagePage() {
   const p = getMaterialUsageParams();
-  /* find all materials matching this combination */
-  const matching = materials().filter(m => {
+  /* Opened from a project material: show exactly where THAT material is used. Opened from
+     the global materials list: show everything sharing the specification. */
+  if (p.pmId && MU_PROJECT_MATERIAL) {
+    /* Opened by id, so the specification comes from the material itself rather than the
+       query string - the header, info panel and stats below read it from here. */
+    const pm = MU_PROJECT_MATERIAL;
+    p.piece = p.piece || pm.category || '';
+    p.desc = p.desc || pm.itemDescription || '';
+    p.dn = p.dn || pm.dn1 || '';
+    p.dien = p.dien || pm.dienNo || '';
+    p.dia = p.dia || pm.diameter || '';
+    p.thk = p.thk || pm.thickness || '';
+    p.code = p.code || pm.materialCode || '';
+  }
+  const matching = p.pmId
+    ? materials().filter(m => m.projectMaterialId === p.pmId)
+    : materials().filter(m => {
     if (p.piece && m.piece !== p.piece) return false;
     if (p.desc && m.itemDescription !== p.desc) return false;
     if (p.dn && m.dimension !== p.dn) return false;
@@ -5803,6 +6100,8 @@ function renderMaterialUsagePage() {
   const uniqueClients = [...new Set(uniqueProjects.map(prid => { const pr = getProject(prid); return pr ? pr.clientId : 0; }).filter(Boolean))];
   const uniqueWazNos = [...new Set(matching.map(m => m.wazNo).filter(Boolean))];
   document.getElementById('mu-stats').innerHTML = tile(matching.length, t('total_used', 'Total used'), '') + tile(uniquePipelines.length, t('total_pipelines', 'Pipelines'), 't-neutral') + tile(uniqueProjects.length, t('total_projects', 'Projects'), 't-copper') + tile(uniqueClients.length, t('total_clients', 'Clients'), 't-neutral') + tile(uniqueWazNos.length, t('total_waz', 'WAZ documents'), 't-success');
+
+  renderMuArchiveBar(p, matching.length);
 
   /* WAZ documents table */
   const wazGroups = {};
@@ -6924,7 +7223,7 @@ function renderProjectMaterialsTable() {
       return `<tr>
       <td>${i + 1}</td>
       <td>${escapeHtml(gm.category || '')}</td>
-      <td>${escapeHtml(gm.itemDescription || '')}</td>
+      <td><a class="cell-link" href="material-usage.html?pmId=${pm.id}" title="${escapeHtml(t('show_pipelines_using', 'Show the pipelines using this material'))}">${escapeHtml(gm.itemDescription || '')}</a></td>
       <td class="col-mono">${escapeHtml(gm.dn1 || '')}</td>${extraDnCells}
       <td class="col-mono">${gm.diameter ? fmtDia(gm.diameter) : '<span class="muted">—</span>'}</td>${extraDiaCells}
       <td class="col-mono">${escapeHtml(gm.thickness) || '<span class="muted">—</span>'}</td>${extraThkCells}
@@ -6934,7 +7233,7 @@ function renderProjectMaterialsTable() {
       <td class="col-mono">${escapeHtml(pm.certificate || '')}</td>
       <td class="col-mono">${escapeHtml(pm.heatNo || '')}</td>
       <td>${pm.wazPdfUrl ? '<a href="' + escapeHtml(pm.wazPdfUrl) + '" target="_blank" class="link">' + t('view', 'View') + '</a>' : '<span class="muted">—</span>'}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="openProjectMaterialModal(${pm.id})">${t('edit', 'Edit')}</button></td>
+      <td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="openProjectMaterialModal(${pm.id})">${t('edit', 'Edit')}</button>${pmArchiveBtn(pm.id)}</td>
     </tr>`;
     }).join('');
   }
@@ -7664,6 +7963,25 @@ function onPmCategoryChange() {
   /* Cascade: filter description by category */
   pmCascadeDesc();
   _refreshPmHeatAndCerts(null, true);
+
+  /* last, so a cascade cannot repopulate a field that should not be on the form */
+  applyPmExistingMaterialFields(cat);
+}
+function applyPmExistingMaterialFields(cat) {
+  const on = isExistingMaterial(cat);
+  ['pm-heat', 'pm-code', 'pm-dien', 'pm-surface', 'pm-certificate'].forEach(id => {
+    const el = document.getElementById(id);
+    const field = el && el.closest('.field');
+    if (field) field.style.display = on ? 'none' : '';
+    if (on && el) {
+      el.value = '';
+      const txt = document.getElementById(id + '-new');
+      if (txt) { txt.value = ''; txt.style.display = 'none'; }
+    }
+  });
+  const wazField = document.getElementById('pm-waz-section');
+  const wazWrap = wazField && wazField.closest('.field');
+  if (wazWrap) wazWrap.style.display = on ? 'none' : '';
 }
 function pmCascadeDesc() {
   const cat = readSelectOther('pm-category', 'pm-category-new');
@@ -7939,8 +8257,11 @@ async function saveProjectMaterial(e) {
     const v = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
     if (v) dns[`dn${i}`] = v;
   }
-  const dienNo = readSelectOther('pm-dien', 'pm-dien-new');
-  const materialCode = readSelectOther('pm-code', 'pm-code-new');
+  /* An existing material has no supply data, whatever a cascade may have left in the
+     hidden fields — blank it at the source so nothing stale is written. */
+  const pmIsExist = isExistingMaterial(category);
+  const dienNo = pmIsExist ? '' : readSelectOther('pm-dien', 'pm-dien-new');
+  const materialCode = pmIsExist ? '' : readSelectOther('pm-code', 'pm-code-new');
   const diaCount = requiredDiameterCount(category);
   const diameter = diaCount > 0 ? readSelectOther('pm-diameter', 'pm-diameter-new') : '';
   const diameter2 = diaCount >= 2 ? readSelectOther('pm-diameter2', 'pm-diameter2-new') : '';
@@ -7949,9 +8270,9 @@ async function saveProjectMaterial(e) {
   const thickness = thkCount > 0 ? readSelectOther('pm-thickness', 'pm-thickness-new') : '';
   const thickness2 = thkCount >= 2 ? readSelectOther('pm-thickness2', 'pm-thickness2-new') : '';
   const thickness3 = thkCount >= 3 ? readSelectOther('pm-thickness3', 'pm-thickness3-new') : '';
-  const surface = readSelectOther('pm-surface', 'pm-surface-new');
-  const certificate = readSelectOther('pm-certificate', 'pm-certificate-new');
-  const heatNo = readSelectOther('pm-heat', 'pm-heat-new');
+  const surface = pmIsExist ? '' : readSelectOther('pm-surface', 'pm-surface-new');
+  const certificate = pmIsExist ? '' : readSelectOther('pm-certificate', 'pm-certificate-new');
+  const heatNo = pmIsExist ? '' : readSelectOther('pm-heat', 'pm-heat-new');
   const wazFileInput = document.getElementById('pm-waz-file');
   const wazFile = wazFileInput ? wazFileInput.files[0] || null : null;
   const attachedWazPdfUrl = (!_pmWazDocRemoved && _pmAttachedWazPdfUrl) ? _pmAttachedWazPdfUrl : '';
@@ -7964,7 +8285,7 @@ async function saveProjectMaterial(e) {
   for (let i = 2; i <= dnCount; i++) {
     if (!dns[`dn${i}`]) { err.textContent = t('dn_x_required', 'DN ' + i + ' is required.').replace('{x}', i); err.classList.add('show'); return; }
   }
-  if (!materialCode) { err.textContent = t('material_code_required', 'Material code is required.'); err.classList.add('show'); return; }
+  if (!materialCode && !isExistingMaterial(category)) { err.textContent = t('material_code_required', 'Material code is required.'); err.classList.add('show'); return; }
   if (diaCount > 0 && !diameter) { err.textContent = t('diameter_required', 'Outer diameter is required.'); err.classList.add('show'); return; }
   if (diaCount >= 2 && !diameter2) { err.textContent = (t('outer_diameter', 'Outer diameter')) + ' 2 ' + (t('is_required', 'is required.')); err.classList.add('show'); return; }
   if (diaCount >= 3 && !diameter3) { err.textContent = (t('outer_diameter', 'Outer diameter')) + ' 3 ' + (t('is_required', 'is required.')); err.classList.add('show'); return; }

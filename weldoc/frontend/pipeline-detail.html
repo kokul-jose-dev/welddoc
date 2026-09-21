@@ -16,6 +16,7 @@
   </div>
   <div id="detail-materials">
     <div class="detail-toolbar"><h2 data-i18n="material_list">Material list</h2><div style="display:flex;gap:8px;"><a class="btn btn-ghost btn-sm" href="archive.html?tab=materials"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> <span data-i18n="archive">Archive</span></a><button class="btn btn-primary btn-sm" onclick="openMaterialModal()" data-i18n="add_material">+ Add material</button></div></div>
+    <div class="inline-warn" id="materials-order-locked"></div>
     <div class="table-card"><table class="table-xwide"><thead><tr><th data-i18n="th_pos">Pos.</th><th data-i18n="th_category">Category</th><th data-i18n="th_item_description">Item description</th><th data-i18n="th_dn">DN</th><th data-i18n="th_diameter">Diameter</th><th data-i18n="th_thickness">Thickness</th><th data-i18n="th_din_en_no">DIN EN No.</th><th data-i18n="th_surface">Surface</th><th data-i18n="th_material">Material</th><th data-i18n="th_certificate">Certificate</th><th data-i18n="th_heat_no">Heat&nbsp;No.</th><th data-i18n="th_waz_no">WAZ&nbsp;No.</th><th data-i18n="th_welds">Welds</th><th></th></tr></thead><tbody id="materials-tbody"></tbody></table></div>
     <div id="welding-wire-section"></div>
     <div id="materials-markdone"></div>

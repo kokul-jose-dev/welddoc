@@ -255,6 +255,17 @@ def get_project_detail_page(project_id):
         FROM weldoc_global_materials WHERE archived = 0 ORDER BY category, item_description
     """)).fetchall()
 
+    # How many times each project material is actually built into a pipeline. The list
+    # offers archiving only for a material nothing uses, so the count travels with it.
+    use_rows = db.session.execute(db.text("""
+        SELECT pm.project_material_id AS pm_id, COUNT(*) AS used
+        FROM weldoc_pipeline_materials pm
+        JOIN weldoc_project_materials prm ON pm.project_material_id = prm.id
+        WHERE prm.project_id = :pid AND pm.archived = 0
+        GROUP BY pm.project_material_id
+    """), {"pid": project_id}).fetchall()
+    used_by_pm = {r.pm_id: r.used for r in use_rows}
+
     return jsonify({
         "client": {
             "id": pr_row.c_id, "name": pr_row.c_name, "street": pr_row.street,
@@ -285,6 +296,7 @@ def get_project_detail_page(project_id):
             "thickness": r.thickness, "thickness2": r.thickness2, "thickness3": r.thickness3,
             "surface": r.surface, "materialCode": r.material_code,
             "dienNo": r.dien_no,
+            "usedCount": used_by_pm.get(r.id, 0),
         } for r in pm_rows],
         "globalMaterials": [{
             "id": r.id, "category": r.category, "piece": r.category,
@@ -565,9 +577,15 @@ def get_material_usage_page():
     dia = request.args.get("dia")
     thk = request.args.get("thk")
     code = request.args.get("code")
+    pm_id = request.args.get("pmId", type=int)
 
     sql_conds = ["pm.archived = 0"]
     params = {}
+    if pm_id:
+        # One specific project material, by id. The spec filters below match anything
+        # that happens to share a specification; this is the material itself.
+        sql_conds.append("pm.project_material_id = :pm_id")
+        params["pm_id"] = pm_id
     if piece:
         sql_conds.append("gm.category = :piece")
         params["piece"] = piece
@@ -601,6 +619,7 @@ def get_material_usage_page():
                gm.thickness, gm.thickness2, gm.thickness3,
                gm.surface, gm.material_code, gm.dien_no,
                proj.certificate, proj.heat_no, proj.waz_pdf_url,
+               proj.id as project_material_id, proj.archived as pm_archived,
                pl.no as pipeline_no, pl.project_id,
                pr.title as project_title, pr.client_id,
                c.name as client_name
@@ -642,11 +661,41 @@ def get_material_usage_page():
             "wazPdfUrl": r.waz_pdf_url or "", "wazPackageUrl": r.waz_package_url or "",
             "startOfPlumbing": bool(r.start_of_plumbing),
             "endOfPlumbing": bool(r.end_of_plumbing), "archived": bool(r.archived),
+            "projectMaterialId": r.project_material_id,
         })
 
-    return jsonify({
+    payload = {
         "clients": list(clients_map.values()),
         "projects": list(projects_map.values()),
         "pipelines": list(pipelines_map.values()),
         "materials": materials_list,
-    })
+    }
+
+    if pm_id:
+        # The rows above are the USES. A material used nowhere returns none of them, and
+        # that is exactly the case the page has to be able to show, so its own details and
+        # its usage count are reported separately.
+        from app.models.project_material import ProjectMaterial
+
+        pm = ProjectMaterial.query.get(pm_id)
+        if pm:
+            gm = pm.global_material
+            payload["projectMaterial"] = {
+                "id": pm.id,
+                "projectId": pm.project_id,
+                "certificate": pm.certificate or "",
+                "heatNo": pm.heat_no or "",
+                "wazPdfUrl": pm.waz_pdf_url or "",
+                "archived": bool(pm.archived),
+                "usedCount": len(materials_list),
+                "category": (gm.category or "") if gm else "",
+                "itemDescription": (gm.item_description or "") if gm else "",
+                "dn1": (gm.dn1 or "") if gm else "",
+                "diameter": (gm.diameter or "") if gm else "",
+                "thickness": (gm.thickness or "") if gm else "",
+                "dienNo": (gm.dien_no or "") if gm else "",
+                "surface": (gm.surface or "") if gm else "",
+                "materialCode": (gm.material_code or "") if gm else "",
+            }
+
+    return jsonify(payload)
