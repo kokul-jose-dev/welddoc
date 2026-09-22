@@ -5331,7 +5331,10 @@ function renderCombinedView() {
       visited.add(current.id);
       line.push({ type: 'material', data: current });
       const conns = (current.connections || []).map(getMaterial).filter(c => c && !visited.has(c.id));
-      conns.sort((a, b) => (a.endOfPlumbing ? 1 : 0) - (b.endOfPlumbing ? 1 : 0));
+      /* End pieces last, then by position: at a tee the run carries on through the
+         lower-lettered leg, so the rows read in letter order. Display only - no
+         position is changed, this just picks which way to go first. */
+      conns.sort((a, b) => (a.endOfPlumbing ? 1 : 0) - (b.endOfPlumbing ? 1 : 0) || a.position - b.position);
       if (conns.length === 0) break;
       const next = conns[0];
       /* Every branch off this part gets two marker rows in a shared colour: a
@@ -5361,7 +5364,14 @@ function renderCombinedView() {
 
   function drainBranches(rows) {
     while (branches.length) {
-      const b = branches.shift();
+      /* Lowest-lettered branch first, so the branches also come out in letter order. */
+      let pick = 0;
+      for (let i = 1; i < branches.length; i++) {
+        const cand = getMaterial(branches[i].branchStartId);
+        const best = getMaterial(branches[pick].branchStartId);
+        if (cand && best && cand.position < best.position) pick = i;
+      }
+      const b = branches.splice(pick, 1)[0];
       if (visited.has(b.branchStartId)) continue;
       const junctionWeld = wlds.find(wl => wl.materialIds.includes(b.fromMat.id) && wl.materialIds.includes(b.branchStartId));
       const bLine = walkLine(b.branchStartId);

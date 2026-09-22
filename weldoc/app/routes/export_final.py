@@ -14,6 +14,7 @@ from app.models.client import Client
 from app.models.pipeline_material import PipelineMaterial
 from app.models.weld import Weld
 from app.models.welder import Welder, Certificate
+from app.routes.pipeline_materials import _letter_to_pos
 from app.dates import fmt_date, today_str
 from pypdf import PdfWriter, PdfReader
 
@@ -406,7 +407,11 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
                 other = w.between_a
             if other and other in mat_by_pos:
                 out.append((other, w))
-        out.sort(key=lambda c: 1 if mat_by_pos[c[0]].get("end_of_plumbing") else 0)
+        # End pieces last, then by position: at a tee the run carries on through the
+        # lower-lettered leg, so the rows read in letter order. Display only - this
+        # picks which way to go first, it changes no position.
+        out.sort(key=lambda c: (1 if mat_by_pos[c[0]].get("end_of_plumbing") else 0,
+                                _letter_to_pos(c[0])))
         return out
 
     def walk_line(start_pos):
@@ -433,7 +438,9 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
 
     def drain_branches():
         while branch_queue:
-            b = branch_queue.pop(0)
+            # Lowest-lettered branch first, so branches also come out in letter order.
+            b = min(branch_queue, key=lambda x: _letter_to_pos(x["start"]))
+            branch_queue.remove(b)
             if b["start"] in visited:
                 continue  # the None left in its slot is stripped after the walk
             key = f"{b['from']}->{b['start']}"

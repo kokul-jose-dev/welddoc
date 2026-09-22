@@ -7,6 +7,7 @@ from app.models.pipeline_material import PipelineMaterial
 from app.models.weld import Weld
 from app.models.welder import Welder
 from app.dates import fmt_date
+from app.routes.pipeline_materials import _letter_to_pos
 import openpyxl
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
@@ -87,7 +88,10 @@ def generate_builder_doc(pipeline_id):
     def conns_of(pos):
         """Unvisited neighbour positions of `pos`, end pieces last."""
         out = [p for p in mat_connections.get(pos, []) if p not in visited and p in mat_by_pos]
-        out.sort(key=lambda p: 1 if mat_by_pos[p].end_of_plumbing else 0)
+        # End pieces last, then by position: at a tee the run carries on through the
+        # lower-lettered leg, so the rows read in letter order. Display only - this
+        # picks which way to go first, it changes no position.
+        out.sort(key=lambda p: (1 if mat_by_pos[p].end_of_plumbing else 0, _letter_to_pos(p)))
         return out
 
     def walk_line(start_pos):
@@ -116,7 +120,9 @@ def generate_builder_doc(pipeline_id):
 
     def drain_branches():
         while branch_queue:
-            b = branch_queue.pop(0)
+            # Lowest-lettered branch first, so branches also come out in letter order.
+            b = min(branch_queue, key=lambda x: _letter_to_pos(x["start"]))
+            branch_queue.remove(b)
             if b["start"] in visited:
                 continue  # the None left in its slot is stripped after the walk
             bw = weld_map.get((b["from"], b["start"]))
