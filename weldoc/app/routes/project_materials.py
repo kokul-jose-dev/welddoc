@@ -145,11 +145,18 @@ def create_or_update_project_material():
             return jsonify(_serialize(existing_other)), 200
 
         # Update in place
+        heat_changed = heat_before.lower() != heat.lower()
         m.global_material_id = target_gm_id
         m.certificate = cert
         m.heat_no = heat
         if waz_pdf_url is not None:
             m.waz_pdf_url = waz_pdf_url
+        if heat_changed and not waz_pdf_url:
+            # A WAZ certificate belongs to one melt. The moment the heat number changes it
+            # describes a different batch of steel, so the old document must not travel with
+            # the material - a new certificate is always required.
+            m.waz_pdf_url = ""
+            _drop_stale_waz_packages(m.id)
         if "archived" in data:
             if data["archived"] and _pipelines_using(m.id):
                 return jsonify({
@@ -177,6 +184,13 @@ def create_or_update_project_material():
             gm_id = int(raw_gm_id) if raw_gm_id is not None else None
         except Exception:
             gm_id = raw_gm_id
+
+        # Saving an edited material as a NEW one: the client sends the heat it was copied
+        # from. A different heat means a different melt, so the certificate of the material
+        # it came from must not be inherited.
+        prev_heat = clean_str(data.get("prevHeatNo")) if "prevHeatNo" in data else None
+        if prev_heat is not None and prev_heat.lower() != heat.lower():
+            waz_pdf_url = ""
 
         # Check if same combination already exists in this project
         existing = find_matching_project_material(project_id, gm_id, cert, heat)
@@ -262,6 +276,20 @@ def _copy_waz_file_for_pm(m):
     except Exception as e:
         current_app.logger.error(f"Failed to copy WAZ file for project material {m.id}: {e}")
 
+
+
+def _drop_stale_waz_packages(pm_id):
+    """Clear the built WAZ packages of every pipeline material using this project material.
+
+    The package is the certificate plus a cover page. Once the certificate it was built from
+    is gone, the stored package describes the wrong melt, so it must not stay attached to
+    the pipeline rows or be printed into the next export.
+    """
+    from app.models.pipeline_material import PipelineMaterial
+
+    rows = PipelineMaterial.query.filter_by(project_material_id=pm_id, archived=False).all()
+    for r in rows:
+        r.waz_package_url = None
 
 
 def _pipelines_using(pm_id):

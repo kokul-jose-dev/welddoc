@@ -315,6 +315,23 @@ def export_final(pipeline_id):
     return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=True, download_name=filename)
 
 
+def _result_mark(value):
+    """A recorded inspection result as the short mark this form uses.
+
+    The legend printed under the table defines them: o.k. = In Ordnung, F = Fehler,
+    n.a. = nicht Anwendbar. A result that was never recorded stays blank rather than
+    claiming anything.
+    """
+    v = (value or "").strip().lower()
+    if v == "ok":
+        return "o.k"
+    if v == "not ok":
+        return "F"
+    if v in ("n/a", "na", "n.a."):
+        return "n.a."
+    return ""
+
+
 def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True, include_inspector_sign=True):
     """Generate the builder table as landscape PDF and return (pdf_bytes, row_positions)."""
     from reportlab.lib.pagesizes import A4, landscape
@@ -339,6 +356,9 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     s9b = ParagraphStyle('s9b', parent=styles['Normal'], fontSize=10, leading=12, fontName='Helvetica-Bold')
     s14b = ParagraphStyle('s14b', parent=styles['Normal'], fontSize=16, leading=18, fontName='Helvetica-Bold', alignment=TA_CENTER)
     s6bc = ParagraphStyle('s6bc', parent=styles['Normal'], fontSize=6.5, leading=7.5, fontName='Helvetica-Bold', alignment=TA_CENTER)
+    # The legend under the table explains the abbreviations; it should not compete with
+    # the table itself, so it is set smaller than the data.
+    s_legend = ParagraphStyle('s_legend', parent=styles['Normal'], fontSize=6, leading=7.5)
 
     # Teil | Beschreibung (3 cols, = Wandstärke on weld rows) | DN | Dim | Material/Datum
     # | Attest/Signatur | Oberfläche (5 cols) | Heat (2 cols) | WAZ
@@ -488,7 +508,9 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
                 Paragraph("Signatur", s6bc), Paragraph("Report", s6bc), Paragraph("Signatur", s6bc), Paragraph("Report", s6bc),
                 "", "", ""]
 
-    all_rows = [mat_hdr, row7, weld_hdr, weld_sub]
+    # Order: the trade bands and the weld columns first, then the material band directly
+    # above the material rows it describes - the layout the client marked up.
+    all_rows = [row7, weld_hdr, weld_sub, mat_hdr]
     row_meta = [None, None, None, None]  # no links on header rows
 
     for item_type, data in combined:
@@ -550,6 +572,14 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
                 if _m and _m.get("thickness"):
                     weld_thk = _m["thickness"].replace(" mm","").replace("mm","")
                     break
+            # The welding wire is recorded per weld but has no column of its own on this
+            # form, so it rides along in Remarks where the inspector can still read which
+            # filler was used on that seam.
+            _remark_parts = []
+            if getattr(w, 'welding_wire', None):
+                _remark_parts.append(f"Draht: {w.welding_wire}")
+            if w.remarks:
+                _remark_parts.append(w.remarks)
             row = [
                 Paragraph(w.weld_no or "", s7c),
                 Paragraph(pl.no or "", s7), "",
@@ -558,12 +588,12 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
                 Paragraph(wn_display, s7c),
                 Paragraph(fmt_date(w.date), s7c),
                 welder_sig_img or "",
-                Paragraph("o.k" if w.remarks and "not" not in w.remarks.lower() else "", s7c),
+                Paragraph(_result_mark(getattr(w, 'visual', None)), s7c),
                 inspector_sig_img or "",
-                Paragraph("o.k" if getattr(w, 'endoscopy_image_url', None) or getattr(w, 'endoscopy_video_url', None) else "", s7c),
+                Paragraph(_result_mark(getattr(w, 'endoscopy', None)), s7c),
                 "", "",
                 "", "",
-                Paragraph(w.remarks or "", s7)
+                Paragraph(" · ".join(_remark_parts), s7)
             ]
             all_rows.append(row)
             row_meta.append({"type": "weld", "welder_id": w.welder_id})
@@ -592,23 +622,24 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('TOPPADDING', (0,0), (-1,-1), 1), ('BOTTOMPADDING', (0,0), (-1,-1), 1),
         ('LEFTPADDING', (0,0), (-1,-1), 2), ('RIGHTPADDING', (0,0), (-1,-1), 2),
-        ('BACKGROUND', (0,0), (-1,0), blue_bg),
-        ('BACKGROUND', (0,2), (-1,3), colors.HexColor("#F2F2F2")),
-        ('SPAN', (1,0), (3,0)), ('SPAN', (8,0), (12,0)), ('SPAN', (13,0), (14,0)),
-        ('SPAN', (0,1), (3,1)), ('SPAN', (4,1), (7,1)), ('SPAN', (8,1), (15,1)),
-        ('SPAN', (1,2), (2,3)),  # Drawing No spans 2 rows
-        ('SPAN', (0,2), (0,3)),  # Naht Nr spans 2 rows
-        ('SPAN', (3,2), (3,3)),  # Wandstärke spans 2 rows
-        ('SPAN', (4,2), (4,3)),  # Status spans 2 rows
-        ('SPAN', (5,2), (5,3)),  # Schweisser spans 2 rows
-        ('SPAN', (6,2), (6,3)),  # Datum spans 2 rows
-        ('SPAN', (7,2), (7,3)),  # Signatur spans 2 rows
-        ('SPAN', (8,2), (8,3)),  # Visuell spans 2 rows
-        ('SPAN', (9,2), (10,2)),  # Endoskopie header spans 2 cols
-        ('SPAN', (11,2), (12,2)),  # Ferrit header spans 2 cols
-        ('SPAN', (13,2), (13,3)),  # Hersteller spans 2 rows
-        ('SPAN', (14,2), (14,3)),  # Kunde spans 2 rows
-        ('SPAN', (15,2), (15,3)),  # Bemerkung spans 2 rows
+        # Header rows: 0 = trades, 1-2 = weld columns, 3 = material band
+        ('BACKGROUND', (0,3), (-1,3), blue_bg),
+        ('BACKGROUND', (0,1), (-1,2), colors.HexColor("#F2F2F2")),
+        ('SPAN', (0,0), (3,0)), ('SPAN', (4,0), (7,0)), ('SPAN', (8,0), (15,0)),
+        ('SPAN', (1,1), (2,2)),  # Drawing No spans 2 rows
+        ('SPAN', (0,1), (0,2)),  # Naht Nr spans 2 rows
+        ('SPAN', (3,1), (3,2)),  # Wandstärke spans 2 rows
+        ('SPAN', (4,1), (4,2)),  # Status spans 2 rows
+        ('SPAN', (5,1), (5,2)),  # Schweisser spans 2 rows
+        ('SPAN', (6,1), (6,2)),  # Datum spans 2 rows
+        ('SPAN', (7,1), (7,2)),  # Signatur spans 2 rows
+        ('SPAN', (8,1), (8,2)),  # Visuell spans 2 rows
+        ('SPAN', (9,1), (10,1)),  # Endoskopie header spans 2 cols
+        ('SPAN', (11,1), (12,1)),  # Ferrit header spans 2 cols
+        ('SPAN', (13,1), (13,2)),  # Hersteller spans 2 rows
+        ('SPAN', (14,1), (14,2)),  # Kunde spans 2 rows
+        ('SPAN', (15,1), (15,2)),  # Bemerkung spans 2 rows
+        ('SPAN', (1,3), (3,3)), ('SPAN', (8,3), (12,3)), ('SPAN', (13,3), (14,3)),
     ]
     for i, meta in enumerate(row_meta):
         if meta and meta["type"] == "mat":
@@ -638,35 +669,39 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
         ('SPAN', (14,0), (15,0)),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
     ]))
-    elements.append(hdr_table)
+    # hdr_table / t3 / t4 are NOT added to the story: they are drawn at the top of every
+    # page by _draw_page_header below, so the header appears on page 2 and 3 as well.
 
+    # "Projekt / project:" labels row 3 and the project name sits under it in row 4, as a
+    # two-row block on the right. The page number is stamped onto the canvas afterwards,
+    # once the total page count is known, so this cell is left empty.
     row3 = [Paragraph("Auftrag - Nr. / Order No.:", s7b), "", "",
             Paragraph(f"<b>{pr.order_no if pr else ''}</b>", s7), "", "",
             Paragraph("Kunde / Customer:", s7b), "",
             Paragraph(f"<b>{cli.name if cli else ''}</b>", s7), "", "", "", "",
-            Paragraph(f"Projekt / project: <b>{pr.title if pr else ''}</b>", s7), "",
-            Paragraph("Seite / Page: 1", s7)]
+            Paragraph("Projekt / project:", s7b), "",
+            ""]
     t3 = Table([row3], colWidths=col_widths)
     t3.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.black), ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('SPAN', (0,0), (2,0)), ('SPAN', (3,0), (5,0)), ('SPAN', (6,0), (7,0)), ('SPAN', (8,0), (12,0)), ('SPAN', (13,0), (14,0))]))
-    elements.append(t3)
 
+    # Welding procedure is WIG on every sheet; it is changed by hand in the rare case it
+    # differs, which is what the client asked for.
     row4 = [Paragraph("Rohrleitungs- / Zeichnungs Nr. / Pipeline- / Drawing No.", s7b), "", "",
             Paragraph(f"<b>{pl.no}</b>", s7b), "", "",
-            Paragraph("Schweissverfahren / Welding procedure:", s7b), "",
-            "", "", "", "", "",
-            Paragraph("Schweisszusatzmaterial mit Chargen Nr. / Welding additional material:", s7b), "", ""]
+            Paragraph("Schweissverfahren<br/>Welding procedure:", s7b), "",
+            Paragraph("<b>WIG</b>", s9b), "", "", "", "",
+            Paragraph(f"<b>{pr.title if pr else ''}</b>", s9b), "", ""]
     t4 = Table([row4], colWidths=col_widths)
     t4.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.black), ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('SPAN', (0,0), (2,0)), ('SPAN', (3,0), (5,0)), ('SPAN', (6,0), (7,0)), ('SPAN', (8,0), (12,0)), ('SPAN', (13,0), (14,0))]))
-    elements.append(t4)
     elements.append(Spacer(1, 1*mm))
     elements.append(data_table)
     elements.append(Spacer(1, 3*mm))
     elements.append(Paragraph(
         "<b>H</b>=Handnaht/Manual  <b>O</b>=Orbital  <b>V</b>=Vorfertigung/Prefabrication  <b>M</b>=Montage/Installation  |  "
         "o.k.=In Ordnung  F=Fehler/Failure  P=Photo  n.a.=nicht Anwendbar  |  "
-        "R=Reparatur/Repair  Ferrit &lt;3.0%  |  Signatur=Bestätigung Visuelle Prüfung / acceptance visual test", s7))
+        "R=Reparatur/Repair  Ferrit &lt;3.0%  |  Signatur=Bestätigung Visuelle Prüfung / acceptance visual test", s_legend))
     if pl.welding_start or pl.welding_end:
         elements.append(Spacer(1, 2*mm))
         dash = "\u2014"
@@ -674,9 +709,56 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
         we = fmt_date(pl.welding_end) or dash
         elements.append(Paragraph(f"Schweissen: {ws} \u2013 {we}", s9b))
 
+    # The three header tables are drawn by hand at the top of EVERY page instead of being
+    # flowed once: a list that runs to page 2 or 3 otherwise arrives with no order number,
+    # customer, project or pipeline number on it. The page frame starts below them.
+    page_header = [hdr_table, t3, t4]
+    header_h = 0
+    for _t in page_header:
+        _w, _h = _t.wrap(total_w, page_size[1])
+        header_h += _h
+
+    def _draw_page_header(canvas, doc_):
+        y = page_size[1] - margin
+        for _t in page_header:
+            _w, _h = _t.wrap(total_w, page_size[1])
+            y -= _h
+            _t.drawOn(canvas, margin, y)
+    # "Seite / Page: 2 von 3" - the total is only known once the whole document has been
+    # laid out, so every page is held back and the number written on a second pass.
+    _page_no_y = page_size[1] - margin - hdr_table.wrap(total_w, page_size[1])[1] - 11
+
+    class _NumberedCanvas(rl_canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_pages = []
+
+        def showPage(self):
+            self._saved_pages.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total = len(self._saved_pages)
+            cell_left = page_size[0] - margin - col_widths[-1]
+            cell_w = col_widths[-1] - 4
+            for state in self._saved_pages:
+                self.__dict__.update(state)
+                txt = f"Seite / Page: {self._pageNumber} von {total}"
+                # Shrink to fit the last column: at a fixed size the text runs past the
+                # right-hand border of the table and out of the form.
+                size = 8.0
+                while size > 4.5 and self.stringWidth(txt, 'Helvetica', size) > cell_w:
+                    size -= 0.25
+                self.setFont('Helvetica', size)
+                self.drawCentredString(cell_left + col_widths[-1] / 2.0, _page_no_y, txt)
+                super().showPage()
+            super().save()
+
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=page_size, leftMargin=margin, rightMargin=margin, topMargin=margin, bottomMargin=margin)
-    doc.build(elements)
+    doc = SimpleDocTemplate(buf, pagesize=page_size, leftMargin=margin, rightMargin=margin,
+                            topMargin=margin + header_h + 1 * mm, bottomMargin=margin)
+    doc.build(elements, onFirstPage=_draw_page_header, onLaterPages=_draw_page_header,
+              canvasmaker=_NumberedCanvas)
 
     # Build row_positions from all captured chunks across all pages
     row_positions = []

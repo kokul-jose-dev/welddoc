@@ -300,6 +300,13 @@ def edit_pipeline_material(pm_id):
         _update_connections(m, data["connections"], m.pipeline_id)
         db.session.commit()
 
+    # The certificate behind this row may have just been dropped, because a changed heat
+    # number always requires a new one. A package built from the old certificate describes a
+    # different melt, so it goes with it instead of staying on the row.
+    if m.project_material and not m.project_material.waz_pdf_url and m.waz_package_url:
+        m.waz_package_url = None
+        db.session.commit()
+
     # Details on the cover page changed -> the stored package no longer matches. Rebuild it in
     # the background so saving stays responsive (it downloads, merges and re-uploads a PDF).
     regen_ids = []

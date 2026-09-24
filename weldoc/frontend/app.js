@@ -1103,7 +1103,7 @@ function mountModals() {
       <div class="field wide"><span class="lbl" data-i18n="between_joined_materials">Between (joined materials)</span><div class="checklist" id="input-weld-materials"></div>
         <button type="button" class="inline-add-toggle" id="weld-mat-add-btn" onclick="openMaterialModal(null,true)" data-i18n="add_new_item">+ Add new item</button>
         <div class="field-hint" id="weld-mat-hint" data-i18n="select_joined_materials_hint">Select the materials this seam joins.</div></div>
-      <div class="field"><span class="lbl" data-i18n="weld_type">Type</span><select id="input-weld-type" onchange="onWeldTypeChange()"><option value="">—</option><option value="O">O — Orbital</option><option value="H">H — Hand / semi-auto</option><option value="M">M — Manual</option></select></div>
+      <div class="field"><span class="lbl" data-i18n="weld_type">Type</span><select id="input-weld-type" onchange="onWeldTypeChange()"><option value="">—</option><option value="O-V">O-V — Orbital / Vorfertigung</option><option value="O-M">O-M — Orbital / Montagenaht</option><option value="H-V">H-V — Handnaht / Vorfertigung</option><option value="H-M">H-M — Handnaht / Montagenaht</option></select></div>
       <div class="field"><span class="lbl" data-i18n="procedure">Procedure</span><input type="text" id="input-weld-proc" readonly></div>
       <label class="field"><span class="lbl" data-i18n="visual_result">Visual result</span><select id="input-weld-visual"><option>OK</option><option>Not OK</option><option>n/a</option></select></label>
       <label class="field"><span class="lbl" data-i18n="endoscopy_result">Endoscopy result</span><select id="input-weld-endoscopy"><option>OK</option><option>Not OK</option><option>n/a</option></select></label>
@@ -1117,7 +1117,7 @@ function mountModals() {
     <button class="modal-close" onclick="closeModal('modal-weld-bulk')">&times;</button><h2 data-i18n="bulk_edit_welds">Edit several welds</h2>
     <p class="field-hint" style="margin-bottom:16px;" id="bulk-weld-count"></p>
     <form id="weld-bulk-form" onsubmit="submitWeldBulk(event); return false;" novalidate><div class="form-grid">
-      <div class="field"><span class="lbl" data-i18n="weld_type">Type</span><select id="bulk-weld-type" onchange="onBulkWeldTypeChange()"><option value="__keep__" data-i18n="keep_existing">— Keep existing —</option><option value="">—</option><option value="O">O — Orbital</option><option value="H">H — Hand / semi-auto</option><option value="M">M — Manual</option></select></div>
+      <div class="field"><span class="lbl" data-i18n="weld_type">Type</span><select id="bulk-weld-type" onchange="onBulkWeldTypeChange()"><option value="__keep__" data-i18n="keep_existing">— Keep existing —</option><option value="">—</option><option value="O-V">O-V — Orbital / Vorfertigung</option><option value="O-M">O-M — Orbital / Montagenaht</option><option value="H-V">H-V — Handnaht / Vorfertigung</option><option value="H-M">H-M — Handnaht / Montagenaht</option></select></div>
       <div class="field"><span class="lbl" data-i18n="procedure">Procedure</span><input type="text" id="bulk-weld-proc" readonly placeholder="—"></div>
       <div class="field"><span class="lbl" data-i18n="th_welding_wire">Welding Wire</span><select id="bulk-weld-wire"></select></div>
       <div class="field"><span class="lbl" data-i18n="date_of_welding">Date of welding</span><input type="date" id="bulk-weld-date"></div>
@@ -1798,6 +1798,9 @@ async function doSavePipelineMaterial(params) {
       surface: data.surface || '',
       wazPdfUrl: data.wazPdfUrl || ''
     };
+    /* The heat this material had before the edit. A different heat is a different melt, so
+       the server will not carry the old WAZ certificate onto the new material. */
+    if (existingMat) pmData.prevHeatNo = existingMat.heatNo || '';
     if (existingMat && existingMat.projectMaterialId && !forceNew) {
       pmData.id = existingMat.projectMaterialId;
     } else if (targetProjectMaterialId && !forceNew) {
@@ -2476,8 +2479,11 @@ function openWeldModal(id = null) {
 function onWeldTypeChange() {
   const type = val('input-weld-type');
   const procEl = document.getElementById('input-weld-proc');
-  if (type === 'O') procEl.value = '147';
-  else if (type === 'H') procEl.value = '141';
+  /* The procedure follows the welding method, not the prefab/site part: orbital -> 147,
+     hand -> 141. The old single-letter codes are still recognised for welds saved before
+     the four-type scheme. */
+  if (type.startsWith('O')) procEl.value = '147';
+  else if (type.startsWith('H')) procEl.value = '141';
   else if (type === 'M') procEl.value = '142';
   else procEl.value = '';
 }
@@ -3062,11 +3068,10 @@ function _refreshPipelineMatCombinations(triggerField = null) {
       _matAttachedWazPdfUrl = '';
       _renderMatWazDoc();
     }
-  } else if (editingMaterialId === null && (!isTriggerOther || isUnknownHeat)) {
-    /* When ADDING, a brand new heat has no certificate of its own - drop the one that belonged
-       to the previous heat rather than carrying it over to a different material. When EDITING,
-       the material keeps its document: the server carries waz_pdf_url over to whichever project
-       material the row ends up linked to, and Remove is the only thing that detaches it. */
+  } else if ((editingMaterialId === null || _matHeatChanged(curHeat)) && (!isTriggerOther || isUnknownHeat)) {
+    /* A brand new heat has no certificate of its own, so the one belonging to the previous
+       heat is dropped rather than carried onto a different melt. This applies while editing
+       too: changing the heat number always requires a new WAZ document. */
     _matAttachedWazPdfUrl = '';
     _renderMatWazDoc();
   }
@@ -3407,6 +3412,13 @@ function formatWazDocName(url) {
 }
 let _matWazDocRemoved = false;
 let _matAttachedWazPdfUrl = '';
+/* The heat number the material carried when the modal opened. A WAZ certificate belongs to
+   one melt, so as soon as this changes the attached document no longer describes the
+   material and a new one has to be supplied. */
+let _matOriginalHeatNo = '';
+function _matHeatChanged(curHeat) {
+  return (curHeat || '').trim().toLowerCase() !== (_matOriginalHeatNo || '').trim().toLowerCase();
+}
 function _renderMatWazDoc() {
   const docDiv = document.getElementById('mat-waz-current-doc');
   const fileEl = document.getElementById('input-mat-waz-file');
@@ -3501,6 +3513,7 @@ function openMaterialModal(id = null, returnToWeld = false) {
   if (fileInput) fileInput.value = '';
   _matWazDocRemoved = false;
   _matAttachedWazPdfUrl = '';
+  _matOriginalHeatNo = '';
 
   /* reset DN fields to just DN1 */
   document.getElementById('dn-fields-container').querySelectorAll('.dn-extra-field').forEach(el => el.remove());
@@ -3574,6 +3587,7 @@ function openMaterialModal(id = null, returnToWeld = false) {
     buildSelectOther('input-mat-certificate', 'input-mat-certificate-new', catCerts, m.certificate || '');
     buildSelectOther('input-mat-heat', 'input-mat-heat-new', catHeats, m.heatNo || '');
     _matAttachedWazPdfUrl = m.wazPdfUrl || m.wazPackageUrl || '';
+    _matOriginalHeatNo = m.heatNo || '';
     _matWazDocRemoved = false;
     _renderMatWazDoc();
     document.getElementById('input-mat-start').checked = !!m.startOfPlumbing; document.getElementById('input-mat-end').checked = !!m.endOfPlumbing;
@@ -3593,6 +3607,7 @@ function openMaterialModal(id = null, returnToWeld = false) {
     }
     document.getElementById('input-mat-start').checked = prevMats.length === 0; document.getElementById('input-mat-end').checked = false;
     _matAttachedWazPdfUrl = '';
+    _matOriginalHeatNo = '';
     _matWazDocRemoved = false;
     _renderMatWazDoc();
     /* pre-fill connection with the nearest material that has a missing connection, or fallback to the immediately previous non-wire material */
@@ -5088,6 +5103,21 @@ async function onMatDrop(e, targetMatId) {
 /* Show welds for a material — if 1 weld, open edit directly; if multiple, open first seam detail */
 
 
+/* O/H = orbital or hand, V/M = prefabrication or site weld. The single letters are what
+   welds saved before the four-type scheme carry, so they are still understood. */
+const WELD_TYPE_LABELS = {
+  'O-V': ['orbital_prefab', 'Orbital / Vorfertigung'],
+  'O-M': ['orbital_site', 'Orbital / Montagenaht'],
+  'H-V': ['hand_prefab', 'Handnaht / Vorfertigung'],
+  'H-M': ['hand_site', 'Handnaht / Montagenaht'],
+  'O': ['orbital', 'Orbital'],
+  'H': ['hand', 'Hand'],
+  'M': ['manual', 'Manual']
+};
+function weldTypeLabel(type) {
+  const hit = WELD_TYPE_LABELS[(type || '').toUpperCase()];
+  return hit ? t(hit[0], hit[1]) : '—';
+}
 function resultTag(v) {
   if (v === 'OK') return '<span class="ok-tag">OK</span>';
   if (v === 'Not OK') return `<span class="bad-tag">${t('not_ok', 'Not OK')}</span>`;
@@ -5222,8 +5252,11 @@ function setBulkField(id, value) {
 function onBulkWeldTypeChange() {
   const type = val('bulk-weld-type');
   const procEl = document.getElementById('bulk-weld-proc');
-  if (type === 'O') procEl.value = '147';
-  else if (type === 'H') procEl.value = '141';
+  /* The procedure follows the welding method, not the prefab/site part: orbital -> 147,
+     hand -> 141. The old single-letter codes are still recognised for welds saved before
+     the four-type scheme. */
+  if (type.startsWith('O')) procEl.value = '147';
+  else if (type.startsWith('H')) procEl.value = '141';
   else if (type === 'M') procEl.value = '142';
   else procEl.value = '';
 }
@@ -5461,7 +5494,7 @@ function renderCombinedView() {
       const w = row.data;
       const wire = w.weldingWireId ? getMaterial(w.weldingWireId) : null;
       const wireLabel = wire ? posLetter(wire.position) : '—';
-      const typeLabel = w.type === 'O' ? t('orbital', 'Orbital') : w.type === 'H' ? t('hand', 'Hand') : w.type === 'M' ? t('manual', 'Manual') : '—';
+      const typeLabel = weldTypeLabel(w.type);
       const welderNames = (w.welderIds || []).map(id => { const p = getPerson(id); return p ? escapeHtml(p.name) : ''; }).filter(Boolean).join(', ');
       const inspNames = (w.inspectorIds || []).map(id => { const p = getPerson(id); return p ? escapeHtml(p.name) : ''; }).filter(Boolean).join(', ');
       const jBadge = junctionWeldLabel[w.id] ? `<span class="cv-branch-badge" style="cursor:default;">→ ${junctionWeldLabel[w.id].fromPos}</span>` : '';
@@ -7674,6 +7707,7 @@ function openProjectMaterialModal(editId) {
 
   /* Certificate and Heat dropdowns */
   _pmAttachedWazPdfUrl = existing ? (existing.wazPdfUrl || '') : '';
+  _pmOriginalHeatNo = existing ? (existing.heatNo || '') : '';
   _pmWazDocRemoved = false;
   _refreshPmHeatAndCerts(existing);
 
@@ -7688,6 +7722,11 @@ function openProjectMaterialModal(editId) {
 }
 
 let _pmAttachedWazPdfUrl = '';
+/* The heat the material had when the modal opened - see _matOriginalHeatNo. */
+let _pmOriginalHeatNo = '';
+function _pmHeatChanged(cur) {
+  return (cur || '').trim().toLowerCase() !== (_pmOriginalHeatNo || '').trim().toLowerCase();
+}
 let _pmWazDocRemoved = false;
 
 function _renderPmWazDoc() {
@@ -7842,10 +7881,10 @@ function onPmHeatChange() {
   toggleSelectOther('pm-heat', 'pm-heat-new');
   const heatNo = readSelectOther('pm-heat', 'pm-heat-new');
   if (!heatNo || heatNo === '__other__') {
-    /* Editing an existing material keeps its certificate: the server carries waz_pdf_url over
-       to whichever record the material ends up on, and Remove is the only thing that detaches
-       it. Only while ADDING does a cleared heat mean there is no certificate to show yet. */
-    if (!_projMatEditId) {
+    /* A WAZ certificate belongs to one melt, so a cleared or newly typed heat number leaves
+       the material without one - while adding, and while editing too: changing the heat
+       always requires a new certificate. */
+    if (!_projMatEditId || _pmHeatChanged(heatNo)) {
       _pmAttachedWazPdfUrl = '';
       _renderPmWazDoc();
     }
@@ -7869,9 +7908,18 @@ function onPmHeatChange() {
   ) || projMats.find(pm => (pm.heatNo || '').trim().toLowerCase() === heatNo.trim().toLowerCase())
     || (DB.materials || []).find(m => (m.heatNo || '').trim().toLowerCase() === heatNo.trim().toLowerCase() && m.wazPdfUrl);
 
+  if (!hit && _pmHeatChanged(heatNo)) {
+    /* No certificate on file for this melt, and the one on screen belongs to the previous
+       heat - it does not describe this material, so it goes. */
+    _pmAttachedWazPdfUrl = '';
+    _renderPmWazDoc();
+  }
   if (hit) {
     if (hit.wazPdfUrl && !_pmWazDocRemoved) {
       _pmAttachedWazPdfUrl = hit.wazPdfUrl;
+      _renderPmWazDoc();
+    } else if (_pmHeatChanged(heatNo)) {
+      _pmAttachedWazPdfUrl = '';
       _renderPmWazDoc();
     }
     if (hit.certificate) {

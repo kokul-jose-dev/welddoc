@@ -18,6 +18,64 @@ import os
 builder_doc_bp = Blueprint("builder_doc", __name__)
 
 
+def _result_mark(value):
+    """A recorded inspection result as the short mark this form uses.
+
+    The legend at the foot of the sheet defines them: o.k. = In Ordnung, F = Fehler,
+    n.a. = nicht Anwendbar. A result that was never recorded stays blank rather than
+    claiming anything.
+    """
+    v = (value or "").strip().lower()
+    if v == "ok":
+        return "o.k"
+    if v == "not ok":
+        return "F"
+    if v in ("n/a", "na", "n.a."):
+        return "n.a."
+    return ""
+
+
+def _cross_out_empty_cells(ws, first_row, last_row, skip_cols, box_border):
+    """Draw a diagonal line through every empty cell in the data rows.
+
+    An empty field could be filled in after the document has been signed; a crossed-out one
+    cannot. Columns in `skip_cols` are left untouched - those are the boxes ISTinox and the
+    customer sign by hand, and they have to stay blank.
+    """
+    from openpyxl.styles import Border, Side
+
+    struck = Border(left=box_border.left, right=box_border.right,
+                    top=box_border.top, bottom=box_border.bottom,
+                    diagonal=Side(style="thin"), diagonalDown=True)
+
+    # A merged block holds its value in the top-left cell only; the diagonal has to go on
+    # every cell of the block or Excel draws it across just the first column of it.
+    merged_of = {}
+    for rng in ws.merged_cells.ranges:
+        for r in range(rng.min_row, rng.max_row + 1):
+            for c in range(rng.min_col, rng.max_col + 1):
+                merged_of[(r, c)] = rng
+
+    for r in range(first_row, last_row + 1):
+        c = 1
+        while c <= 17:
+            if c in skip_cols:
+                c += 1
+                continue
+            rng = merged_of.get((r, c))
+            if rng:
+                value = ws.cell(rng.min_row, rng.min_col).value
+                if value in (None, ""):
+                    for cc in range(rng.min_col, rng.max_col + 1):
+                        if cc not in skip_cols:
+                            ws.cell(r, cc).border = struck
+                c = rng.max_col + 1
+                continue
+            if ws.cell(r, c).value in (None, ""):
+                ws.cell(r, c).border = struck
+            c += 1
+
+
 @builder_doc_bp.route("/<int:pipeline_id>/builder-doc", methods=["GET"])
 def generate_builder_doc(pipeline_id):
     pl = Pipeline.query.get_or_404(pipeline_id)
@@ -146,8 +204,7 @@ def generate_builder_doc(pipeline_id):
 
     # === Generate Excel (A-P = 16 columns) ===
     wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Blatt 1"
+    ws = wb.active          # rebound per page in the loop further down
     thin = Border(left=Side("thin"), right=Side("thin"), top=Side("thin"), bottom=Side("thin"))
     sf = Font(bold=True, size=10); df = Font(size=10); bf = Font(bold=True, size=10)
     h7 = Font(bold=True, size=8); h6 = Font(bold=True, size=7)
@@ -169,83 +226,126 @@ def generate_builder_doc(pipeline_id):
     def fl(r1,c1,r2,c2,f):
         for r in range(r1,r2+1):
             for c in range(c1,c2+1): ws.cell(r,c).fill = f
-    for c,w in {"A":7,"B":16,"C":16,"D":8,"E":8,"F":15,"G":10,"H":8,"I":8,"J":8,"K":8,"L":8,"M":8,"N":24,"O":24,"P":20}.items():
-        ws.column_dimensions[c].width = w
-    # ROW 1-2 merged (taller rows)
-    ws.row_dimensions[1].height = 25
-    ws.row_dimensions[2].height = 25
-    ws.merge_cells("A1:F2"); ws["A1"]="Hersteller / manufacturer: ISTinox AG"; ws["A1"].font=Font(bold=True,size=12); ws["A1"].alignment=Alignment(wrap_text=True,vertical="center",horizontal="center")
-    ws.merge_cells("G1:N2"); ws["G1"]="Schweissnahtpr\u00fcfliste"; ws["G1"].font=Font(bold=True,size=18); ws["G1"].alignment=Alignment(horizontal="center",vertical="center")
-    ws.merge_cells("O1:P2"); ws["O1"]=""; ws["O1"].alignment=wc  # Company logo
-    bdr(1,1,2,16)
-    logo_path = os.path.join(os.path.dirname(__file__), '..', '..', 'image.png')
-    if os.path.exists(logo_path):
-        img = XlImage(logo_path)
-        img.width = 130
-        img.height = 45
-        ws.add_image(img, 'O1')
-    # ROW 3
-    ws.merge_cells("A3:C3"); ws["A3"]="Auftrag - Nr. / Order No.:"; ws["A3"].font=sf
-    ws.merge_cells("D3:F3"); ws["D3"]=pr.order_no if pr else ""; bdr(3,4,3,6)
-    ws.merge_cells("G3:H3"); ws["G3"]="Kunde / Customer:"; ws["G3"].font=sf
-    ws.merge_cells("I3:M3"); ws["I3"]=cli.name if cli else ""; bdr(3,9,3,13)
-    ws.merge_cells("N3:O3"); ws["N3"]=f"Projekt / project: {pr.title if pr else ''}"; ws["N3"].font=sf
-    ws["P3"]="Seite / Page: 1 von 1"; ws["P3"].font=df
-    # ROW 4-5
-    ws.merge_cells("A4:C5"); ws["A4"]="Rohrleitungs- / Zeichnungs Nr.\nPipeline- / Drawing No."; ws["A4"].font=sf; ws["A4"].alignment=wr
-    ws.merge_cells("D4:F5"); ws["D4"]=pl.no; ws["D4"].font=bf; ws["D4"].alignment=wr; bdr(4,4,5,6)
-    ws.merge_cells("G4:H5"); ws["G4"]="Schweissverfahren\nWelding procedure:"; ws["G4"].font=sf; ws["G4"].alignment=wr
-    ws.merge_cells("I4:M5"); ws["I4"]=""; bdr(4,9,5,13)
-    ws.merge_cells("N4:O5"); ws["N4"]="Schweisszusatzmaterial mit Chargen Nr.\nWelding additional material and batch No.:"; ws["N4"].font=sf; ws["N4"].alignment=wr
-    ws["P4"]=""; ws["P5"]=""
-    bdr(3,1,5,16)
-    # ROW 6: Material headers (layout matches the IST reference form)
-    ws.row_dimensions[6].height = 50
-    fl(6,1,6,16,blue); bdr(6,1,6,16)
-    ws["A6"]="Teil Nr.\nPart Nr."; ws["A6"].font=h7; ws["A6"].alignment=rot
-    ws.merge_cells("B6:D6"); ws["B6"]="Beschreibung\nDescription"; ws["B6"].font=sf; ws["B6"].alignment=wc
-    ws["E6"]="DN"; ws["E6"].font=sf; ws["E6"].alignment=wc
-    ws["F6"]="Dimension"; ws["F6"].font=sf; ws["F6"].alignment=wc
-    ws["G6"]="Material"; ws["G6"].font=h7; ws["G6"].alignment=rot
-    ws["H6"]="Attest\nEN 10204"; ws["H6"].font=h7; ws["H6"].alignment=rot
-    ws.merge_cells("I6:M6"); ws["I6"]="Oberfl\u00e4che\nSurface"; ws["I6"].font=sf; ws["I6"].alignment=wc
-    ws.merge_cells("N6:O6"); ws["N6"]="Schmelzen/Probe Nr.\nHeat Number"; ws["N6"].font=sf; ws["N6"].alignment=wc
-    ws["P6"]="WAZ Nummer\nAttest Number"; ws["P6"].font=sf; ws["P6"].alignment=wc
-    # ROW 7: Pipe man / Welder / Tester
-    ws.row_dimensions[7].height = 16
-    ws.merge_cells("A7:D7"); ws["A7"]="Rohrschlosser / Pipe man"; ws["A7"].font=sf
-    ws.merge_cells("E7:H7"); ws["E7"]="Schweisser / Welder"; ws["E7"].font=sf
-    ws.merge_cells("I7:P7"); ws["I7"]="Pr\u00fcfer / Tester"; ws["I7"].font=sf
-    bdr(7,1,7,16)
-    # ROW 8-9: Weld headers (narrow columns rotated like the IST reference form)
-    ws.row_dimensions[8].height = 76
-    ws.row_dimensions[9].height = 50
-    bdr(8,1,9,16)
-    ws.merge_cells("A8:A9"); ws["A8"]="Schweissnaht Nr.\nWeld seams no."; ws["A8"].font=h7; ws["A8"].alignment=rot
-    ws.merge_cells("B8:C9"); ws["B8"]="Zeichnungs Nummer\nDrawing No."; ws["B8"].font=h7; ws["B8"].alignment=wc
-    ws.merge_cells("D8:D9"); ws["D8"]="Wandst\u00e4rke [mm]\nThickness"; ws["D8"].font=h7; ws["D8"].alignment=rot
-    ws.merge_cells("E8:E9"); ws["E8"]="Status \u00b9"; ws["E8"].font=h7; ws["E8"].alignment=rot
-    ws.merge_cells("F8:F9"); ws["F8"]="Schweisser Nr.\nWelder no."; ws["F8"].font=h7; ws["F8"].alignment=rot
-    ws.merge_cells("G8:G9"); ws["G8"]="Datum\nDate"; ws["G8"].font=h7; ws["G8"].alignment=rot
-    ws.merge_cells("H8:H9"); ws["H8"]="Signatur\nShort mark \u2075"; ws["H8"].font=h7; ws["H8"].alignment=rot
-    ws.merge_cells("I8:I9"); ws["I8"]="Visuell"; ws["I8"].font=h7; ws["I8"].alignment=rot
-    ws.merge_cells("J8:K8"); ws["J8"]="Endoskopie\nEndoscopy"; ws["J8"].font=h7; ws["J8"].alignment=wc
-    ws["J9"]="Signatur"; ws["J9"].font=h6; ws["J9"].alignment=rot
-    ws["K9"]="Report \u00b2"; ws["K9"].font=h6; ws["K9"].alignment=rot
-    ws.merge_cells("L8:M8"); ws["L8"]="Ferrit Test\nFerrite test \u2074"; ws["L8"].font=h7; ws["L8"].alignment=wc
-    ws["L9"]="Signatur"; ws["L9"].font=h6; ws["L9"].alignment=rot
-    ws["M9"]="Report \u00b2"; ws["M9"].font=h6; ws["M9"].alignment=rot
-    ws.merge_cells("N8:N9"); ws["N8"]="Gepr\u00fcft und akzeptiert\ntested and accepted\nDatum / Date\nSignatur / Short mark\nHersteller\nManufacturer"; ws["N8"].font=h6; ws["N8"].alignment=wc
-    ws.merge_cells("O8:O9"); ws["O8"]="Gepr\u00fcft und akzeptiert\ntested and accepted\nDatum / Date\nSignatur / Short mark\nKunde (Optional)\nCustomer (optional)"; ws["O8"].font=h6; ws["O8"].alignment=wc
-    ws.merge_cells("P8:P9"); ws["P8"]="Bemerkung\nRemarks\n\n(Bild Nr.)\n(Picture No.)"; ws["P8"].font=h7; ws["P8"].alignment=wc
-    # Row 10 separator
-    ws.row_dimensions[10].height = 4
+    # The header is written once per printed page rather than repeated by Excel, because
+    # the page number has to differ on each one and no cell formula can know which page it
+    # is on. Each block carries its own "Seite / Page: n von N".
+    PAGE_ROWS = 10           # rows the header block occupies
+    HEADER_HEIGHT = 291      # its height in points, for the page budget below
+
+    def write_header_block(top, page_no, total_pages):
+        # ROW 1-2 merged (taller rows)
+        ws.row_dimensions[top+0].height = 25
+        ws.row_dimensions[top+1].height = 25
+        ws.merge_cells(f"A{top+0}:F{top+1}"); ws[f"A{top+0}"]="Hersteller / manufacturer: ISTinox AG"; ws[f"A{top+0}"].font=Font(bold=True,size=12); ws[f"A{top+0}"].alignment=Alignment(wrap_text=True,vertical="center",horizontal="center")
+        ws.merge_cells(f"G{top+0}:O{top+1}"); ws[f"G{top+0}"]="Schweissnahtprüfliste"; ws[f"G{top+0}"].font=Font(bold=True,size=18); ws[f"G{top+0}"].alignment=Alignment(horizontal="center",vertical="center")
+        ws.merge_cells(f"P{top+0}:Q{top+1}"); ws[f"P{top+0}"]=""; ws[f"P{top+0}"].alignment=wc  # Company logo
+        bdr(top+0,1,top+1,17)
+        logo_path = os.path.join(os.path.dirname(__file__), '..', '..', 'image.png')
+        if os.path.exists(logo_path):
+            from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+            from openpyxl.drawing.xdr import XDRPositiveSize2D
+            from openpyxl.utils.units import pixels_to_EMU
+
+            img = XlImage(logo_path)
+            img.width = 130
+            img.height = 45
+            # Centred in the merged P:Q block. add_image() pins a picture to the top-left
+            # corner of a cell, so without an offset the logo hangs in the upper left of that
+            # block instead of sitting in the middle of it.
+            block_w = sum(round(ws.column_dimensions[c].width * 7) + 5 for c in ("P", "Q"))
+            block_h = (ws.row_dimensions[top+0].height + ws.row_dimensions[top+1].height) * 4 / 3
+            img.anchor = OneCellAnchor(
+                _from=AnchorMarker(col=15, colOff=pixels_to_EMU(max(0, (block_w - img.width) // 2)),
+                                   row=top - 1, rowOff=pixels_to_EMU(max(0, int((block_h - img.height) // 2)))),
+                ext=XDRPositiveSize2D(pixels_to_EMU(img.width), pixels_to_EMU(img.height)))
+            ws.add_image(img)
+        # ROW 3
+        ws.merge_cells(f"A{top+2}:C{top+2}"); ws[f"A{top+2}"]="Auftrag - Nr. / Order No.:"; ws[f"A{top+2}"].font=sf
+        ws.merge_cells(f"D{top+2}:G{top+2}"); ws[f"D{top+2}"]=pr.order_no if pr else ""; bdr(top+2,4,top+2,7)
+        ws.merge_cells(f"H{top+2}:I{top+2}"); ws[f"H{top+2}"]="Kunde / Customer:"; ws[f"H{top+2}"].font=sf
+        ws.merge_cells(f"J{top+2}:N{top+2}"); ws[f"J{top+2}"]=cli.name if cli else ""; bdr(top+2,10,top+2,14)
+        # "Projekt / project:" labels this row and the project name sits under it in rows 4-5.
+        ws.merge_cells(f"O{top+2}:P{top+2}"); ws[f"O{top+2}"]="Projekt / project:"; ws[f"O{top+2}"].font=sf
+        # Each printed page is its own worksheet tab, so SHEET() is this page's number and
+        # SHEETS() is the total. Excel keeps both up to date by itself - no typing, and it
+        # stays right if tabs are added or removed.
+        # SHEET() and SHEETS() arrived in Excel 2013, and anything newer than the 2007 set
+        # has to be stored with the _xlfn. prefix. Written as plain SHEET() Excel does not
+        # recognise the name and the cell shows #NAME?. Excel displays it without the prefix.
+        ws[f"Q{top+2}"]='="Seite / Page: "&_xlfn.SHEET()&" von "&_xlfn.SHEETS()'; ws[f"Q{top+2}"].font=df
+        # ROW 4-5
+        ws.merge_cells(f"A{top+3}:C{top+4}"); ws[f"A{top+3}"]="Rohrleitungs- / Zeichnungs Nr.\nPipeline- / Drawing No."; ws[f"A{top+3}"].font=sf; ws[f"A{top+3}"].alignment=wr
+        ws.merge_cells(f"D{top+3}:G{top+4}"); ws[f"D{top+3}"]=pl.no; ws[f"D{top+3}"].font=bf; ws[f"D{top+3}"].alignment=wr; bdr(top+3,4,top+4,7)
+        ws.merge_cells(f"H{top+3}:I{top+4}"); ws[f"H{top+3}"]="Schweissverfahren\nWelding procedure:"; ws[f"H{top+3}"].font=sf; ws[f"H{top+3}"].alignment=wr
+        # Fixed to WIG on every sheet; changed by hand in the rare case it differs.
+        ws.merge_cells(f"J{top+3}:N{top+4}"); ws[f"J{top+3}"]="WIG"; ws[f"J{top+3}"].font=bf; ws[f"J{top+3}"].alignment=wr; bdr(top+3,10,top+4,14)
+        # O, P and Q of rows 4-5 are one cell, so the project name runs to the right edge.
+        ws.merge_cells(f"O{top+3}:Q{top+4}"); ws[f"O{top+3}"]=pr.title if pr else ""; ws[f"O{top+3}"].font=bf; ws[f"O{top+3}"].alignment=wr
+        bdr(top+2,1,top+4,17)
+        # ROW 6: the three responsibilities, regrouped - the weld and how it was made,
+        # then the welder, then the inspection.
+        ws.row_dimensions[top+5].height = 16
+        ws.merge_cells(f"A{top+5}:F{top+5}"); ws[f"A{top+5}"]="Schweissnaht & Schweissverfahren / Weld & weld process"; ws[f"A{top+5}"].font=sf
+        ws.merge_cells(f"G{top+5}:I{top+5}"); ws[f"G{top+5}"]="Schweisser / Welder"; ws[f"G{top+5}"].font=sf
+        ws.merge_cells(f"J{top+5}:Q{top+5}"); ws[f"J{top+5}"]="Prüfer / Tester"; ws[f"J{top+5}"].font=sf
+        bdr(top+5,1,top+5,17)
+        # ROW 7-8: Weld headers (narrow columns rotated like the IST reference form)
+        ws.row_dimensions[top+6].height = 76
+        ws.row_dimensions[top+7].height = 50
+        bdr(top+6,1,top+7,17)
+        ws.merge_cells(f"A{top+6}:A{top+7}"); ws[f"A{top+6}"]="Schweissnaht Nr.\nWeld seams no."; ws[f"A{top+6}"].font=h7; ws[f"A{top+6}"].alignment=rot
+        ws.merge_cells(f"B{top+6}:C{top+7}"); ws[f"B{top+6}"]="Zeichnungs Nummer\nDrawing No."; ws[f"B{top+6}"].font=h7; ws[f"B{top+6}"].alignment=wc
+        ws.merge_cells(f"D{top+6}:D{top+7}"); ws[f"D{top+6}"]="Wandstärke [mm]\nThickness"; ws[f"D{top+6}"].font=h7; ws[f"D{top+6}"].alignment=rot
+        ws.merge_cells(f"E{top+6}:E{top+7}"); ws[f"E{top+6}"]="Status ¹"; ws[f"E{top+6}"].font=h7; ws[f"E{top+6}"].alignment=rot
+        ws.merge_cells(f"F{top+6}:F{top+7}"); ws[f"F{top+6}"]="Schweissdraht Material\nWelding wire material"; ws[f"F{top+6}"].font=h7; ws[f"F{top+6}"].alignment=rot
+        ws.merge_cells(f"G{top+6}:G{top+7}"); ws[f"G{top+6}"]="Schweisser Nr.\nWelder no."; ws[f"G{top+6}"].font=h7; ws[f"G{top+6}"].alignment=rot
+        ws.merge_cells(f"H{top+6}:H{top+7}"); ws[f"H{top+6}"]="Datum\nDate"; ws[f"H{top+6}"].font=h7; ws[f"H{top+6}"].alignment=rot
+        ws.merge_cells(f"I{top+6}:I{top+7}"); ws[f"I{top+6}"]="Signatur\nShort mark ⁵"; ws[f"I{top+6}"].font=h7; ws[f"I{top+6}"].alignment=rot
+        ws.merge_cells(f"J{top+6}:J{top+7}"); ws[f"J{top+6}"]="Visuell"; ws[f"J{top+6}"].font=h7; ws[f"J{top+6}"].alignment=rot
+        ws.merge_cells(f"K{top+6}:L{top+6}"); ws[f"K{top+6}"]="Endoskopie\nEndoscopy"; ws[f"K{top+6}"].font=h7; ws[f"K{top+6}"].alignment=wc
+        ws[f"K{top+7}"]="Signatur"; ws[f"K{top+7}"].font=h6; ws[f"K{top+7}"].alignment=rot
+        ws[f"L{top+7}"]="Report ²"; ws[f"L{top+7}"].font=h6; ws[f"L{top+7}"].alignment=rot
+        ws.merge_cells(f"M{top+6}:N{top+6}"); ws[f"M{top+6}"]="Ferrit Test\nFerrite test ⁴"; ws[f"M{top+6}"].font=h7; ws[f"M{top+6}"].alignment=wc
+        ws[f"M{top+7}"]="Signatur"; ws[f"M{top+7}"].font=h6; ws[f"M{top+7}"].alignment=rot
+        ws[f"N{top+7}"]="Report ²"; ws[f"N{top+7}"].font=h6; ws[f"N{top+7}"].alignment=rot
+        ws.merge_cells(f"O{top+6}:O{top+7}"); ws[f"O{top+6}"]="Geprüft und akzeptiert\ntested and accepted\nDatum / Date\nSignatur / Short mark\nHersteller\nManufacturer"; ws[f"O{top+6}"].font=h6; ws[f"O{top+6}"].alignment=wc
+        ws.merge_cells(f"P{top+6}:P{top+7}"); ws[f"P{top+6}"]="Geprüft und akzeptiert\ntested and accepted\nDatum / Date\nSignatur / Short mark\nKunde (Optional)\nCustomer (optional)"; ws[f"P{top+6}"].font=h6; ws[f"P{top+6}"].alignment=wc
+        ws.merge_cells(f"Q{top+6}:Q{top+7}"); ws[f"Q{top+6}"]="Bemerkung\nRemarks\n\n(Bild Nr.)\n(Picture No.)"; ws[f"Q{top+6}"].font=h7; ws[f"Q{top+6}"].alignment=wc
+        # ROW 9: Material headers - directly above the material rows they describe
+        ws.row_dimensions[top+8].height = 50
+        fl(top+8,1,top+8,17,blue); bdr(top+8,1,top+8,17)
+        ws[f"A{top+8}"]="Teil Nr.\nPart Nr."; ws[f"A{top+8}"].font=h7; ws[f"A{top+8}"].alignment=rot
+        ws.merge_cells(f"B{top+8}:E{top+8}"); ws[f"B{top+8}"]="Beschreibung\nDescription"; ws[f"B{top+8}"].font=sf; ws[f"B{top+8}"].alignment=wc
+        ws[f"F{top+8}"]="DN"; ws[f"F{top+8}"].font=sf; ws[f"F{top+8}"].alignment=wc
+        ws[f"G{top+8}"]="Dimension"; ws[f"G{top+8}"].font=sf; ws[f"G{top+8}"].alignment=wc
+        ws[f"H{top+8}"]="Material"; ws[f"H{top+8}"].font=h7; ws[f"H{top+8}"].alignment=rot
+        ws[f"I{top+8}"]="Attest\nEN 10204"; ws[f"I{top+8}"].font=h7; ws[f"I{top+8}"].alignment=rot
+        ws.merge_cells(f"J{top+8}:N{top+8}"); ws[f"J{top+8}"]="Oberfläche\nSurface"; ws[f"J{top+8}"].font=sf; ws[f"J{top+8}"].alignment=wc
+        ws.merge_cells(f"O{top+8}:P{top+8}"); ws[f"O{top+8}"]="Schmelzen/Probe Nr.\nHeat Number"; ws[f"O{top+8}"].font=sf; ws[f"O{top+8}"].alignment=wc
+        ws[f"Q{top+8}"]="WAZ Nummer\nAttest Number"; ws[f"Q{top+8}"].font=sf; ws[f"Q{top+8}"].alignment=wc
+        # Row 10 separator
+        ws.row_dimensions[top+9].height = 4
+
     # === DATA ROWS ===
     def _clean_thk(v):
         return (v or "").replace(" mm","").replace("mm","")
     def _bare_dn(v):
         # the form prints the bare size ("15"), not the stored "DN 15"
         return (v or "").replace("DN", "").strip()
+    def _wire_label(w):
+        """The welding wire as its position letter, e.g. "Q".
+
+        The wire is a material in the pipeline like any other, so the form refers to it the
+        short way; the full description is already on its own row in the material list.
+        """
+        name = (getattr(w, 'welding_wire', '') or '').strip()
+        if not name:
+            return ""
+        for m in materials:
+            if (m.item_description or '').strip().lower() == name.lower():
+                return m.position or name
+        return name
+
     def _weld_thickness(w):
         # thickness of the joined materials (first non-empty)
         for p in (w.between_a, w.between_b):
@@ -253,81 +353,133 @@ def generate_builder_doc(pipeline_id):
             if m and m.thickness:
                 return _clean_thk(m.thickness)
         return ""
-    row = 11
-    for item_type, data, extra in combined_rows:
-        if item_type == "material":
-            m = data
-            pos = m.position or ""
-            if m.start_of_plumbing: pos = f"{m.position} (START)"
-            if m.end_of_plumbing: pos = f"{m.position} (END)"
-            dim = ""
-            if m.diameter and m.thickness:
-                dim = f"\u00d8{_clean_thk(m.diameter)}x{_clean_thk(m.thickness)}"
-            elif m.diameter: dim = m.diameter
-            surface = " - ".join(x for x in [m.dien_no, m.surface] if x)
-            ws.cell(row,1,pos).font=bf; ws.cell(row,1).alignment=wc
-            ws.merge_cells(start_row=row,start_column=2,end_row=row,end_column=4)
-            ws.cell(row,2,m.item_description or m.category or "").font=df; ws.cell(row,2).alignment=wr
-            ws.cell(row,5,_bare_dn(m.dn1)).font=df; ws.cell(row,5).alignment=wc
-            ws.cell(row,6,dim).font=df; ws.cell(row,6).alignment=wc
-            ws.cell(row,7,m.material_code or "").font=df; ws.cell(row,7).alignment=wc
-            ws.cell(row,8,m.certificate or "").font=df; ws.cell(row,8).alignment=wc
-            ws.merge_cells(start_row=row,start_column=9,end_row=row,end_column=13)
-            ws.cell(row,9,surface).font=df; ws.cell(row,9).alignment=wc
-            ws.merge_cells(start_row=row,start_column=14,end_row=row,end_column=15)
-            ws.cell(row,14,m.heat_no or "").font=df; ws.cell(row,14).alignment=wc
-            ws.cell(row,16,m.waz_no or "").font=df; ws.cell(row,16).alignment=wc
-            fl(row,1,row,16,blue); bdr(row,1,row,16); ws.row_dimensions[row].height = 26; row+=1
-        elif item_type == "branch":
-            label, key = data, extra
-            ws.merge_cells(start_row=row,start_column=1,end_row=row,end_column=16)
-            ws.cell(row,1,label or "").font=bf; ws.cell(row,1).alignment=wc
-            fl(row,1,row,16,branch_fill(key)); bdr(row,1,row,16)
-            ws.row_dimensions[row].height = 18; row+=1
-        elif item_type == "weld":
-            w = data
-            ws.cell(row,1,w.weld_no or "").font=df; ws.cell(row,1).alignment=wc
-            ws.merge_cells(start_row=row,start_column=2,end_row=row,end_column=3)
-            ws.cell(row,2,pl.no or "").font=df; ws.cell(row,2).alignment=wr
-            ws.cell(row,4,_weld_thickness(w)).font=df; ws.cell(row,4).alignment=wc
-            ws.cell(row,5,w.type or "").font=df; ws.cell(row,5).alignment=wc
-            welder_no = ""
-            if w.welder_id:
-                _wldr = Welder.query.get(w.welder_id)
-                if _wldr: welder_no = _wldr.no or _wldr.name or ""
-            if not welder_no: welder_no = w.welder or ""
-            ws.cell(row,6,welder_no).font=df; ws.cell(row,6).alignment=wc
-            ws.cell(row,7,fmt_date(w.date)).font=df; ws.cell(row,7).alignment=wc
-            for c in range(8,17): ws.cell(row,c,"").font=df
-            bdr(row,1,row,16); ws.row_dimensions[row].height = 24; row+=1
-    # Footer legend (four groups, matching the IST reference form)
-    lf = Font(size=8); lfb = Font(size=8, bold=True)
-    row+=1
-    legend = [
-        ("¹ H... Handnaht / Manual weld seam",            "² o.k... In Ordnung",                     "³ R... Reparatur / Repair",  "⁵ Signatur... Bestätigung Visuelle Prüfung /"),
-        ("O... Orbitalnaht / Orbital weld seam",          "F... Fehler / Failure",                   "⁴ <3.0%",                    "   acceptance visual test"),
-        ("V... Vorfertigung / Prefabrication",            "P... Photo",                              "",                           ""),
-        ("M... Montagenaht / Installation weld seam",     "n.a... nicht Anwendbar / not available",  "",                           ""),
-    ]
-    for c1, c2, c3, c4 in legend:
-        ws.merge_cells(start_row=row,start_column=1,end_row=row,end_column=4)
-        ws.cell(row,1,c1).font=lfb
-        ws.merge_cells(start_row=row,start_column=9,end_row=row,end_column=11)
-        ws.cell(row,9,c2).font=lf
-        ws.merge_cells(start_row=row,start_column=12,end_row=row,end_column=14)
-        ws.cell(row,12,c3).font=lf
-        ws.merge_cells(start_row=row,start_column=15,end_row=row,end_column=16)
-        ws.cell(row,15,c4).font=lf
-        row+=1
 
-    # Print setup: landscape, fit all 16 columns on one page width
+    def _write_rows(rows, row):
+        for item_type, data, extra in rows:
+            if item_type == "material":
+                m = data
+                pos = m.position or ""
+                if m.start_of_plumbing: pos = f"{m.position} (START)"
+                if m.end_of_plumbing: pos = f"{m.position} (END)"
+                dim = ""
+                if m.diameter and m.thickness:
+                    dim = f"\u00d8{_clean_thk(m.diameter)}x{_clean_thk(m.thickness)}"
+                elif m.diameter: dim = m.diameter
+                surface = " - ".join(x for x in [m.dien_no, m.surface] if x)
+                ws.cell(row,1,pos).font=bf; ws.cell(row,1).alignment=wc
+                ws.merge_cells(start_row=row,start_column=2,end_row=row,end_column=5)
+                ws.cell(row,2,m.item_description or m.category or "").font=df; ws.cell(row,2).alignment=wr
+                ws.cell(row,6,_bare_dn(m.dn1)).font=df; ws.cell(row,6).alignment=wc
+                ws.cell(row,7,dim).font=df; ws.cell(row,7).alignment=wc
+                ws.cell(row,8,m.material_code or "").font=df; ws.cell(row,8).alignment=wc
+                ws.cell(row,9,m.certificate or "").font=df; ws.cell(row,9).alignment=wc
+                ws.merge_cells(start_row=row,start_column=10,end_row=row,end_column=14)
+                ws.cell(row,10,surface).font=df; ws.cell(row,10).alignment=wc
+                ws.merge_cells(start_row=row,start_column=15,end_row=row,end_column=16)
+                ws.cell(row,15,m.heat_no or "").font=df; ws.cell(row,15).alignment=wc
+                ws.cell(row,17,m.waz_no or "").font=df; ws.cell(row,17).alignment=wc
+                fl(row,1,row,17,blue); bdr(row,1,row,17); ws.row_dimensions[row].height = 26; row+=1
+            elif item_type == "branch":
+                label, key = data, extra
+                ws.merge_cells(start_row=row,start_column=1,end_row=row,end_column=17)
+                ws.cell(row,1,label or "").font=bf; ws.cell(row,1).alignment=wc
+                fl(row,1,row,17,branch_fill(key)); bdr(row,1,row,17)
+                ws.row_dimensions[row].height = 18; row+=1
+            elif item_type == "weld":
+                w = data
+                ws.cell(row,1,w.weld_no or "").font=df; ws.cell(row,1).alignment=wc
+                ws.merge_cells(start_row=row,start_column=2,end_row=row,end_column=3)
+                ws.cell(row,2,pl.no or "").font=df; ws.cell(row,2).alignment=wr
+                ws.cell(row,4,_weld_thickness(w)).font=df; ws.cell(row,4).alignment=wc
+                ws.cell(row,5,w.type or "").font=df; ws.cell(row,5).alignment=wc
+                welder_no = ""
+                if w.welder_id:
+                    _wldr = Welder.query.get(w.welder_id)
+                    if _wldr: welder_no = _wldr.no or _wldr.name or ""
+                if not welder_no: welder_no = w.welder or ""
+                ws.cell(row,7,welder_no).font=df; ws.cell(row,7).alignment=wc
+                ws.cell(row,8,fmt_date(w.date)).font=df; ws.cell(row,8).alignment=wc
+                for c in range(9,18): ws.cell(row,c,"").font=df
+                # Welding wire, by the position letter of the wire material in this pipeline -
+                # the same short reference the combined view uses on screen.
+                ws.cell(row,6,_wire_label(w)).font=df; ws.cell(row,6).alignment=wc
+                # Recorded inspection results, in the short marks the legend defines.
+                ws.cell(row,10,_result_mark(getattr(w, 'visual', None))).font=df; ws.cell(row,10).alignment=wc
+                ws.cell(row,12,_result_mark(getattr(w, 'endoscopy', None))).font=df; ws.cell(row,12).alignment=wc
+                ws.cell(row,17,w.remarks or "").font=df; ws.cell(row,17).alignment=wr
+                bdr(row,1,row,17); ws.row_dimensions[row].height = 24; row+=1
+        return row
+
+    # Split the rows into printed pages. Each page becomes its own worksheet tab, so the
+    # "Seite / Page" cell can carry =SHEET() / =SHEETS() and number itself: within a single
+    # tab that cell is one cell and would read the same on every printed page.
+    # The budget is conservative on purpose - a tab that ends a little early just looks
+    # normal, whereas overfilling one pushes rows onto a second printed page of that tab.
+    ROW_HEIGHT = {"material": 26, "weld": 24, "branch": 18}
+    PAGE_BUDGET = 400          # points of data rows per tab, after the header block
+    pages, cur, used = [], [], 0
+    for item in combined_rows:
+        h = ROW_HEIGHT.get(item[0], 24)
+        if cur and used + h > PAGE_BUDGET:
+            pages.append(cur)
+            cur, used = [], 0
+        cur.append(item)
+        used += h
+    if cur or not pages:
+        pages.append(cur)
+
+    # A field with nothing in it is crossed out, so nobody can write into the document after
+    # it has been signed off. The signature boxes are the exception: they are deliberately
+    # left blank for ISTinox or the customer to sign by hand.
+    SIGNATURE_COLS = {9, 11, 13, 15, 16}   # I Signatur, K Endoskopie, M Ferrit, O Hersteller, P Kunde
+
+    lf = Font(size=6); lfb = Font(size=6, bold=True)
+    legend = [
+        ("¹ H... Handnaht / Manual weld seam",        "² o.k... In Ordnung",                 "³ R... Reparatur / Repair",  "⁵ Signatur... Bestätigung Visuelle Prüfung /"),
+        ("O... Orbitalnaht / Orbital weld seam",           "F... Fehler / Failure",                    "⁴ <3.0%",                    "   acceptance visual test"),
+        ("V... Vorfertigung / Prefabrication",             "P... Photo",                               "",                                ""),
+        ("M... Montagenaht / Installation weld seam",      "n.a... nicht Anwendbar / not available",   "",                                ""),
+    ]
+
     from openpyxl.worksheet.properties import PageSetupProperties
-    ws.page_setup.orientation = "landscape"
-    ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 0
-    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
-    # if the list ever outgrows one page, repeat the whole header block
-    ws.print_title_rows = "1:9"
+
+    for page_idx, page_rows in enumerate(pages, 1):
+        # `ws` is read by bdr/fl/write_header_block/_write_rows through the enclosing scope,
+        # so rebinding it here points all of them at the tab being built.
+        ws = wb.active if page_idx == 1 else wb.create_sheet()
+        ws.title = f"Blatt {page_idx}"
+
+        for c, w in {"A":7,"B":16,"C":16,"D":8,"E":8,"F":12,"G":15,"H":10,"I":8,"J":8,
+                     "K":8,"L":8,"M":8,"N":8,"O":24,"P":24,"Q":20}.items():
+            ws.column_dimensions[c].width = w
+
+        write_header_block(1, page_idx, len(pages))
+        first_data_row = 1 + PAGE_ROWS
+        row = _write_rows(page_rows, first_data_row)
+        _cross_out_empty_cells(ws, first_data_row, row - 1, SIGNATURE_COLS, thin)
+
+        # Footer legend (four groups, matching the IST reference form). Smaller than the
+        # table: it explains the abbreviations, it should not compete with the data.
+        row += 1
+        for c1, c2, c3, c4 in legend:
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+            ws.cell(row, 1, c1).font = lfb
+            ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=12)
+            ws.cell(row, 10, c2).font = lf
+            ws.merge_cells(start_row=row, start_column=13, end_row=row, end_column=15)
+            ws.cell(row, 13, c3).font = lf
+            ws.merge_cells(start_row=row, start_column=16, end_row=row, end_column=17)
+            ws.cell(row, 16, c4).font = lf
+            row += 1
+
+        # Print setup: landscape, all 17 columns on one page width.
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 1
+        ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+
+    # The first tab is the one that opens.
+    wb.active = 0
 
     # Save to memory
     output = io.BytesIO()
