@@ -100,6 +100,24 @@ async function apiPost(path, data) {
   }
 }
 
+async function apiDelete(path) {
+  showGlobalProgress();
+  try {
+    const r = await fetch(API_BASE + path, { method: 'DELETE' });
+    if (!r.ok) {
+      let body = null;
+      try { body = await r.json(); } catch (_) { /* not JSON */ }
+      const err = new Error((body && body.message) || r.statusText);
+      err.status = r.status;
+      err.body = body;
+      throw err;
+    }
+    return await r.json();
+  } finally {
+    hideGlobalProgress();
+  }
+}
+
 async function apiUpload(path, formData) {
   showGlobalProgress();
   try {
@@ -658,14 +676,17 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true)
       include_welder_sign: includeWelder ? 'true' : 'false',
       include_inspector_sign: includeInspector ? 'true' : 'false'
     });
-    const resp = await fetch(`${API_BASE}/pipelines/${id}/export-final?${params.toString()}`);
+    /* The final export is the weld list Excel (same as the welder document), now with the
+       recorded welding details and, if chosen, the signatures. The PDF export route is
+       kept on the server but no longer called. */
+    const resp = await fetch(`${API_BASE}/pipelines/${id}/export-final-excel?${params.toString()}`);
     if (!resp.ok) {
       const errData = await resp.json().catch(() => ({}));
       throw new Error(errData.error || resp.statusText || 'Export failed');
     }
     const blob = await resp.blob();
     const cd = resp.headers.get('Content-Disposition');
-    let filename = `${pl.no}_final_documentation.pdf`;
+    let filename = `${pl.no}_final.xlsx`;
     if (cd && cd.includes('filename=')) {
       filename = cd.split('filename=')[1].replace(/["']/g, '').trim();
     }
@@ -1043,21 +1064,21 @@ function mountModals() {
   <div class="modal-overlay" id="modal-export-final"><div class="modal" style="max-width:440px;">
     <button class="modal-close" onclick="closeModal('modal-export-final')">&times;</button>
     <h2 data-i18n="export_final_doc">Export final document</h2>
-    <p style="font-size:0.86rem;color:var(--text-muted);margin:0 0 16px;" data-i18n="export_final_modal_sub">Choose which signatures should be included in the exported PDF.</p>
+    <p style="font-size:0.86rem;color:var(--text-muted);margin:0 0 16px;" data-i18n="export_final_modal_sub">Choose which signatures should be included in the exported document.</p>
     <form id="export-final-form">
       <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px;padding:12px;background:#F8FAFC;border:1px solid var(--border);border-radius:6px;">
         <label style="display:flex;align-items:center;gap:10px;font-size:0.9rem;cursor:pointer;">
           <input type="checkbox" id="input-exp-welder-sign" checked style="width:16px;height:16px;accent-color:var(--copper,#C85A17);cursor:pointer;">
-          <span data-i18n="include_welder_signature">Include welder signature in PDF</span>
+          <span data-i18n="include_welder_signature">Include welder signature</span>
         </label>
         <label style="display:flex;align-items:center;gap:10px;font-size:0.9rem;cursor:pointer;">
           <input type="checkbox" id="input-exp-inspector-sign" checked style="width:16px;height:16px;accent-color:var(--copper,#C85A17);cursor:pointer;">
-          <span data-i18n="include_inspector_signature">Include inspector signature in PDF</span>
+          <span data-i18n="include_inspector_signature">Include inspector signature</span>
         </label>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" onclick="closeModal('modal-export-final')" data-i18n="cancel">Cancel</button>
-        <button type="submit" class="btn btn-success" data-i18n="export_pdf">Export PDF</button>
+        <button type="submit" class="btn btn-success" data-i18n="export_excel">Export Excel</button>
       </div>
     </form>
   </div></div>
@@ -4769,7 +4790,7 @@ function renderWorkflowBar(pl) {
   else if (pl.status === 3) action = `<button class="btn btn-primary btn-sm" onclick="openWeldingUpdate(${pl.id})">${t('update_welding_details', 'Update welding details')}</button>`;
   else if (pl.status === 4) {
     if (isExporting) {
-      action = `<button class="btn btn-success btn-sm is-loading" disabled style="display:inline-flex;align-items:center;gap:6px;cursor:wait;"><span class="doc-spinner"></span> <span>${t('exporting', 'Exporting PDF…')}</span></button>`;
+      action = `<button class="btn btn-success btn-sm is-loading" disabled style="display:inline-flex;align-items:center;gap:6px;cursor:wait;"><span class="doc-spinner"></span> <span>${t('exporting', 'Exporting…')}</span></button>`;
     } else {
       action = `<button class="btn btn-success btn-sm" onclick="openExportFinalModal(${pl.id})">${t('export_final_doc', 'Export final document')}</button>`;
     }
@@ -6026,6 +6047,7 @@ async function archiveProjectMaterial(pmId) {
   }
 }
 let MU_PROJECT_MATERIAL = null;
+let MU_GLOBAL_MATERIAL = null; /* the global material this usage page is about, for "Add to project" */
 /* A project material may only be archived while nothing uses it: archiving one that is
    still built into a run would hide the specification the weld list and WAZ documents are
    printed from, while the part stays welded in the pipe. */
@@ -6070,6 +6092,7 @@ async function initMaterialUsagePage() {
     DB.pipelines = data.pipelines || [];
     DB.materials = normalizeMaterials(data.materials || []);
     MU_PROJECT_MATERIAL = data.projectMaterial || null;
+    MU_GLOBAL_MATERIAL = data.globalMaterial || null;
   } catch (e) { console.error('API error:', e); }
   renderChrome('materials', `<a href="materials.html">${t('materials', 'Materials')}</a> / ${t('usage', 'Usage')}`); mountModals(); wireModalDismiss();
   renderMaterialUsagePage();
@@ -6668,7 +6691,8 @@ async function initMaterialsPage() {
     DB.projects = normalizeProjects(data.projects || []);
     DB.pipelines = data.pipelines || [];
     DB.materials = normalizeMaterials(data.materials || []);
-    DB.globalMaterialCount = DB.materials.length;
+    DB.globalMaterials = data.globalMaterials || [];
+    DB.globalMaterialCount = DB.globalMaterials.length;
     renderChrome('materials', t('materials', 'Materials'));
     buildMatClientProjectFilters();
     renderMaterialsPage();
@@ -6740,15 +6764,255 @@ function clearMaterialsFilters() {
   buildMatClientProjectFilters();
   renderMaterialsPage();
 }
-function matSpecKey(m) {
-  let k = `${m.piece || ''}|${m.itemDescription || m.piece || ''}|${m.dimension || ''}|${m.dienNo || ''}|${m.diameter || ''}|${m.diameter2 || ''}|${m.diameter3 || ''}|${m.thickness || ''}|${m.thickness2 || ''}|${m.thickness3 || ''}|${m.surface || ''}|${m.materialCode || ''}`;
-  for (let i = 2; i <= 6; i++) {
-    k += `|${m['dimension' + i] || m['dn' + i] || ''}`;
+/* A global material may only be deleted while no project material points at it - archived
+   ones included, since they still reference it. The counts come with the page data; the
+   server checks again and refuses with 409, because this copy can be out of date. */
+function gmDeleteBtn(g) {
+  const label = t('delete', 'Delete');
+  if (g.refCount === undefined || g.refCount === null) {
+    return `<button class="btn-link" disabled style="opacity:0.45;cursor:not-allowed;">${label}</button>`;
   }
-  return k;
+  if (g.refCount > 0) {
+    let tip = `${t('gm_in_use_projects', 'This material is used in')} ${g.projectCount} ${g.projectCount === 1 ? t('project_singular', 'project') : t('project_plural', 'projects')}`;
+    if (g.pipelineUseCount) tip += ` · ${g.pipelineUseCount} ${g.pipelineUseCount === 1 ? t('pipeline_place_singular', 'pipeline place') : t('pipeline_place_plural', 'pipeline places')}`;
+    if (g.archivedRefCount) tip += ` · ${g.archivedRefCount} ${t('gm_archived_refs', 'archived project material(s)')}`;
+    tip += `. ${t('gm_delete_blocked_hint', 'It can only be deleted once no project uses it.')}`;
+    return `<button class="btn-link" disabled style="opacity:0.45;cursor:not-allowed;" title="${escapeHtml(tip)}">${label}</button>`;
+  }
+  return `<button class="btn-link btn-link-danger" onclick="deleteGlobalMaterial(${g.id})" title="${escapeHtml(t('gm_unused_hint', 'Not used in any project or pipeline'))}">${label}</button>`;
+}
+async function reloadMaterialsPageData() {
+  try {
+    const data = await apiGet('/page/materials');
+    if (data && data.materials) DB.materials = normalizeMaterials(data.materials);
+    if (data && data.globalMaterials) {
+      DB.globalMaterials = data.globalMaterials;
+      DB.globalMaterialCount = DB.globalMaterials.length;
+    }
+  } catch (e) { console.error('API error:', e); }
+}
+async function deleteGlobalMaterial(gmId) {
+  const gm = (DB.globalMaterials || []).find(g => g.id === gmId);
+  const desc = gm ? [gm.category, gm.itemDescription, gm.dn1, gm.materialCode].filter(Boolean).join(' · ') : '';
+  if (!confirm(`${t('gm_delete_q', 'Delete this material permanently? This cannot be undone.')}\n\n${desc}`)) return;
+  try {
+    await apiDelete('/global-materials/' + gmId);
+    DB.globalMaterials = (DB.globalMaterials || []).filter(g => g.id !== gmId);
+    DB.globalMaterialCount = DB.globalMaterials.length;
+    saveDB();
+  } catch (e) {
+    alert(e.status === 409
+      ? (e.message || t('gm_delete_blocked', 'This material cannot be deleted while a project uses it.'))
+      : 'Error: ' + e.message);
+    /* The counts were out of date - fetch them again so the button reflects reality */
+    if (e.status === 409 || e.status === 404) await reloadMaterialsPageData();
+  }
+  renderChrome('materials', t('materials', 'Materials'));
+  renderMaterialsPage();
+}
+
+/* ---------------- Add an existing global material to a project ----------------
+   Shared by the Materials page and the Material usage page. The specification is taken
+   as-is from the global material, so only project, heat, certificate and PDF are asked
+   for - nothing to retype, and no near-duplicate global material from a typo. */
+let _atpGm = null;          /* the global material being added */
+let _atpOnDone = null;      /* callback after a successful add */
+let _atpLists = null;       /* { clients, projects } - fetched once per page */
+let _atpExisting = [];      /* this material's project materials (all projects) - heat / cert / PDF */
+/* The existing project material for a heat number, preferring one that has a PDF */
+function _atpExistingForHeat(heat) {
+  const h = (heat || '').trim().toLowerCase();
+  if (!h) return null;
+  const same = _atpExisting.filter(x => (x.heatNo || '').trim().toLowerCase() === h);
+  return same.find(x => x.wazPdfUrl) || same[0] || null;
+}
+function _atpOnHeatChange() {
+  toggleSelectOther('atp-heat', 'atp-heat-new');
+  /* A heat number is one melt with one certificate - picking a known heat fills it in */
+  const hit = _atpExistingForHeat(readSelectOther('atp-heat', 'atp-heat-new'));
+  if (hit && hit.certificate) {
+    const certSel = document.getElementById('atp-cert');
+    const opts = [...certSel.options].map(o => o.value);
+    buildSelectOther('atp-cert', 'atp-cert-new', opts.filter(v => v && v !== '__other__'), hit.certificate.trim());
+  }
+  _atpUpdatePdfHint();
+}
+function _atpUpdatePdfHint() {
+  const hint = document.getElementById('atp-pdf-hint');
+  if (!hint) return;
+  const hasFile = !!document.getElementById('atp-file').files[0];
+  const hit = _atpExistingForHeat(readSelectOther('atp-heat', 'atp-heat-new'));
+  hint.textContent = (!hasFile && hit && hit.wazPdfUrl)
+    ? t('atp_pdf_reused', 'The certificate PDF already on file for this heat number will be used. Choose a file only to replace it.')
+    : '';
+}
+function openGlobalAddToProject(gmId) {
+  const gm = (DB.globalMaterials || []).find(g => g.id === gmId);
+  if (!gm) return;
+  openAddToProjectModal(gm, async () => {
+    await reloadMaterialsPageData();
+    renderMaterialsPage();
+  }, matFilters.projectId ? Number(matFilters.projectId) : null);
+}
+function openMuAddToProject() {
+  if (!MU_GLOBAL_MATERIAL) {
+    alert(t('atp_no_material', 'This material could not be identified. Please open it again from the Materials list.'));
+    return;
+  }
+  openAddToProjectModal(MU_GLOBAL_MATERIAL, null, null);
+}
+function _gmSummary(gm) {
+  const dns = [1, 2, 3, 4, 5, 6].map(i => gm['dn' + i]).filter(Boolean);
+  const dias = [gm.diameter, gm.diameter2, gm.diameter3].filter(Boolean).map(fmtDia);
+  const thks = [gm.thickness, gm.thickness2, gm.thickness3].filter(Boolean);
+  return [
+    gm.category,
+    gm.itemDescription && gm.itemDescription !== gm.category ? gm.itemDescription : '',
+    dns.join(' / '),
+    gm.dienNo,
+    dias.join(' / '),
+    thks.join(' / '),
+    gm.surface,
+    gm.materialCode
+  ].filter(Boolean).join(' · ');
+}
+async function openAddToProjectModal(gm, onDone, presetProjectId) {
+  _atpGm = gm;
+  _atpOnDone = onDone || null;
+  let modal = document.getElementById('modal-add-to-project');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'modal-add-to-project';
+    modal.innerHTML = `<div class="modal">
+      <button class="modal-close" onclick="closeModal('modal-add-to-project')">&times;</button>
+      <h2>${t('add_to_project', 'Add to project')}</h2>
+      <div class="muted" id="atp-summary" style="margin:-4px 0 16px;font-size:0.85rem;"></div>
+      <form id="atp-form"><div class="form-grid">
+        <div class="field"><span class="lbl">${t('client', 'Client')}</span><select id="atp-client" onchange="_atpFillProjects()"></select></div>
+        <div class="field"><span class="lbl">${t('project', 'Project')} <span class="req">*</span></span><select id="atp-project"></select></div>
+        <div class="field"><span class="lbl">${t('heat_melt_no', 'Heat number')}</span><select id="atp-heat" onchange="_atpOnHeatChange()"></select><input type="text" id="atp-heat-new" class="select-other-text" style="display:none" placeholder="${t('type_heat_no', 'Type heat no…')}" oninput="_atpUpdatePdfHint()"></div>
+        <div class="field"><span class="lbl">${t('cert_no', 'Certificate number')}</span><select id="atp-cert" onchange="toggleSelectOther('atp-cert','atp-cert-new')"></select><input type="text" id="atp-cert-new" class="select-other-text" style="display:none" placeholder="${t('type_cert_no', 'Type cert no…')}"></div>
+        <div class="field wide"><span class="lbl">${t('mat_cert_pdf', 'Material certificate (PDF)')}</span><input type="file" id="atp-file" accept="application/pdf,.pdf" onchange="_atpUpdatePdfHint()"><div class="muted" id="atp-pdf-hint" style="font-size:0.8rem;margin-top:4px;"></div></div>
+        <div class="modal-err" id="atp-err"></div>
+      </div><div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal('modal-add-to-project')">${t('cancel', 'Cancel')}</button><button type="submit" class="btn btn-primary" id="atp-submit">${t('add_to_project', 'Add to project')}</button></div></form>
+    </div>`;
+    document.getElementById('modal-root').appendChild(modal);
+    document.getElementById('atp-form').addEventListener('submit', submitAddToProject);
+  }
+  document.getElementById('atp-summary').textContent = _gmSummary(gm);
+  document.getElementById('atp-file').value = '';
+  document.getElementById('atp-err').classList.remove('show');
+
+  /* Heat numbers and certificates this material already has, in any project. Picking one
+     brings its certificate along; "+ Other" allows a new one. */
+  _atpExisting = [];
+  try {
+    _atpExisting = await apiGet('/project-materials?globalMaterialId=' + gm.id) || [];
+  } catch (e) { console.error('API error:', e); }
+  const heats = [...new Set(_atpExisting.map(x => (x.heatNo || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const ownCerts = _atpExisting.map(x => (x.certificate || '').trim()).filter(Boolean);
+  const usedCerts = (DB.materials || []).map(m => (m.certificate || '').trim()).filter(Boolean);
+  const certs = [...new Set([...ownCerts, ...usedCerts])].sort();
+  buildSelectOther('atp-heat', 'atp-heat-new', heats, '');
+  buildSelectOther('atp-cert', 'atp-cert-new', certs, '');
+  _atpUpdatePdfHint();
+
+  /* The usage page only knows the projects this material is already in, so the full
+     client / project list is fetched here */
+  if (!_atpLists) {
+    try {
+      const data = await apiGet('/page/projects');
+      _atpLists = { clients: data.clients || [], projects: normalizeProjects(data.projects || []) };
+    } catch (e) {
+      _atpLists = { clients: DB.clients || [], projects: DB.projects || [] };
+    }
+  }
+  const cliSel = document.getElementById('atp-client');
+  cliSel.innerHTML = `<option value="">${t('all_clients', 'All clients')}</option>` +
+    _atpLists.clients.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  const preset = presetProjectId ? _atpLists.projects.find(p => p.id === presetProjectId) : null;
+  cliSel.value = preset ? String(preset.clientId) : '';
+  _atpFillProjects(preset ? preset.id : null);
+  openModal('modal-add-to-project');
+}
+function _atpFillProjects(selectId) {
+  const clientId = Number(document.getElementById('atp-client').value) || 0;
+  const list = (_atpLists ? _atpLists.projects : []).filter(p => !clientId || p.clientId === clientId);
+  const prSel = document.getElementById('atp-project');
+  prSel.innerHTML = `<option value="">${t('select_project', 'Select a project…')}</option>` +
+    list.map(p => `<option value="${p.id}">${escapeHtml(p.title || p.istProjectNo || ('#' + p.id))}</option>`).join('');
+  if (selectId) prSel.value = String(selectId);
+}
+async function submitAddToProject(e) {
+  e.preventDefault();
+  const gm = _atpGm; if (!gm) return;
+  const err = document.getElementById('atp-err');
+  const showErr = msg => { err.textContent = msg; err.classList.add('show'); };
+  err.classList.remove('show');
+
+  const projectId = Number(document.getElementById('atp-project').value) || 0;
+  if (!projectId) { showErr(t('atp_select_project', 'Please select a project.')); return; }
+  const heatNo = readSelectOther('atp-heat', 'atp-heat-new').trim();
+  const certificate = readSelectOther('atp-cert', 'atp-cert-new').trim();
+  const file = document.getElementById('atp-file').files[0] || null;
+  /* Same heat = same melt = same certificate PDF: reuse the one on file unless a new file
+     was chosen. The server copies it into this project's folder. */
+  const known = _atpExistingForHeat(heatNo);
+  const reusePdfUrl = (!file && known && known.wazPdfUrl) ? known.wazPdfUrl : '';
+  const project = (_atpLists ? _atpLists.projects : []).find(p => p.id === projectId);
+  const projectName = project ? (project.title || project.istProjectNo) : '';
+
+  const btn = document.getElementById('atp-submit');
+  setButtonLoading(btn, true, t('saving', 'Saving…'));
+  try {
+    /* A heat number is one melt. If it is already recorded with other specifications,
+       say so before adding - the same check the project material form runs. */
+    if (heatNo) {
+      const chk = await apiPost('/project-materials/check-heat-diff', {
+        projectId, heatNo, certificate,
+        category: gm.category, itemDescription: gm.itemDescription,
+        dn1: gm.dn1, dn2: gm.dn2, dn3: gm.dn3, dn4: gm.dn4, dn5: gm.dn5, dn6: gm.dn6,
+        diameter: gm.diameter, diameter2: gm.diameter2, diameter3: gm.diameter3,
+        thickness: gm.thickness, thickness2: gm.thickness2, thickness3: gm.thickness3,
+        surface: gm.surface, materialCode: gm.materialCode, dienNo: gm.dienNo
+      });
+      if (chk && chk.hasDuplicateHeat && chk.hasDifferences) {
+        const lines = (chk.diffs || []).map(d => `• ${d.label}: ${d.existingVal || '—'} → ${d.newVal || '—'}`).join('\n');
+        if (!confirm(`${t('atp_heat_conflict', 'This heat number is already recorded with different specifications:')}\n\n${lines}\n\n${t('atp_add_anyway', 'Add it anyway?')}`)) return;
+      }
+    }
+
+    const pm = await apiPost('/project-materials', { projectId, globalMaterialId: gm.id, certificate, heatNo, wazPdfUrl: reusePdfUrl });
+
+    let pdfNote = '';
+    if (file && !(pm.alreadyExisted && pm.wazPdfUrl)) {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await fetch(`${API_BASE}/project-materials/${pm.id}/upload-waz`, { method: 'POST', body: fd });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        pdfNote = `\n\n${t('atp_pdf_failed', 'The PDF could not be uploaded:')} ${body.error || r.statusText}`;
+      }
+    }
+
+    closeModal('modal-add-to-project');
+    if (pm.alreadyExisted) {
+      alert(`${t('atp_already', 'This material is already in this project with the same heat number and certificate.')} (${projectName})${pdfNote}`);
+    } else {
+      alert(`${t('atp_added', 'Material added to project')}: ${projectName}${pdfNote}`);
+    }
+    if (_atpOnDone) await _atpOnDone();
+  } catch (ex) {
+    showErr('Error: ' + ex.message);
+  } finally {
+    setButtonLoading(btn, false);
+  }
 }
 function renderMaterialsPage() {
-  // 1. Filter raw materials by Client and Project filters (from top filter-bar)
+  // 1. Pipeline uses in scope of the Client / Project filters - they supply the heat
+  //    chips and the "Total used" count
   const scopedMats = materials().filter(m => {
     const pl = getPipeline(m.pipelineId);
     if (matFilters.projectId && (!pl || pl.projectId !== Number(matFilters.projectId))) return false;
@@ -6759,45 +7023,61 @@ function renderMaterialsPage() {
     }
     return true;
   });
-
-  // 2. Group materials by unique specification
-  const groupMap = new Map();
+  const usesByGm = new Map();
   scopedMats.forEach(m => {
-    const k = matSpecKey(m);
-    if (!groupMap.has(k)) {
-      groupMap.set(k, {
-        id: m.id,
-        piece: m.piece,
-        itemDescription: m.itemDescription || m.piece,
-        dimension: m.dimension,
-        dimension2: m.dimension2 || m.dn2 || '',
-        dimension3: m.dimension3 || m.dn3 || '',
-        dimension4: m.dimension4 || m.dn4 || '',
-        dimension5: m.dimension5 || m.dn5 || '',
-        dimension6: m.dimension6 || m.dn6 || '',
-        dienNo: m.dienNo || '',
-        diameter: m.diameter || '',
-        diameter2: m.diameter2 || '',
-        diameter3: m.diameter3 || '',
-        thickness: m.thickness || '',
-        thickness2: m.thickness2 || '',
-        thickness3: m.thickness3 || '',
-        surface: m.surface || '',
-        materialCode: m.materialCode || '',
-        allIds: [m.id],
-        heatEntries: [],
-        totalCount: 0
-      });
-    }
-    const g = groupMap.get(k);
-    g.totalCount++;
-    if (m.id && !g.allIds.includes(m.id)) g.allIds.push(m.id);
-    if (m.heatNo && !g.heatEntries.some(h => h.heatNo === m.heatNo)) {
-      g.heatEntries.push({ heatNo: m.heatNo, matId: m.id, wazPdfUrl: m.wazPdfUrl || m.wazPackageUrl || '' });
-    }
+    if (!m.globalMaterialId) return;
+    if (!usesByGm.has(m.globalMaterialId)) usesByGm.set(m.globalMaterialId, []);
+    usesByGm.get(m.globalMaterialId).push(m);
   });
 
-  const allGroups = Array.from(groupMap.values());
+  // 2. One row per active global material. Built from the global list rather than from
+  //    the pipeline rows, so a material that is only in a project, or not used at all,
+  //    is listed too - those are the ones that can be deleted.
+  const inScope = gm => {
+    if (!matFilters.projectId && !matFilters.clientId) return true;
+    if (usesByGm.has(gm.id)) return true;
+    const pids = gm.projectIds || [];
+    if (matFilters.projectId) return pids.includes(Number(matFilters.projectId));
+    return pids.some(pid => {
+      const pr = getProject(pid);
+      return pr && pr.clientId === Number(matFilters.clientId);
+    });
+  };
+  const allGroups = (DB.globalMaterials || []).filter(gm => !gm.archived && inScope(gm)).map(gm => {
+    const uses = usesByGm.get(gm.id) || [];
+    const heatEntries = [];
+    uses.forEach(m => {
+      if (m.heatNo && !heatEntries.some(h => h.heatNo === m.heatNo)) {
+        heatEntries.push({ heatNo: m.heatNo, matId: m.id, wazPdfUrl: m.wazPdfUrl || m.wazPackageUrl || '' });
+      }
+    });
+    return {
+      id: gm.id,
+      piece: gm.category || '',
+      itemDescription: gm.itemDescription || gm.category || '',
+      dimension: gm.dn1 || '',
+      dimension2: gm.dn2 || '',
+      dimension3: gm.dn3 || '',
+      dimension4: gm.dn4 || '',
+      dimension5: gm.dn5 || '',
+      dimension6: gm.dn6 || '',
+      dienNo: gm.dienNo || '',
+      diameter: gm.diameter || '',
+      diameter2: gm.diameter2 || '',
+      diameter3: gm.diameter3 || '',
+      thickness: gm.thickness || '',
+      thickness2: gm.thickness2 || '',
+      thickness3: gm.thickness3 || '',
+      surface: gm.surface || '',
+      materialCode: gm.materialCode || '',
+      heatEntries,
+      totalCount: uses.length,
+      refCount: gm.refCount,
+      archivedRefCount: gm.archivedRefCount || 0,
+      projectCount: gm.projectCount || 0,
+      pipelineUseCount: gm.pipelineUseCount || 0
+    };
+  });
   // Sort Heat entries for each material group
   allGroups.forEach(g => {
     g.heatEntries.sort((a, b) => {
@@ -6824,11 +7104,12 @@ function renderMaterialsPage() {
   document.getElementById('materials-stats').innerHTML =
     tile(filteredGroups.length, t('unique_materials', 'Unique materials'), '') +
     tile(totalUsages, t('total_used', 'Total used'), 't-neutral') +
-    tile(totalHeatSet.size, t('heat_numbers', 'Heat numbers'), 't-success');
+    tile(totalHeatSet.size, t('heat_numbers', 'Heat numbers'), 't-success') +
+    tile(filteredGroups.filter(g => g.refCount === 0).length, t('unused_materials', 'Unused'), 't-neutral');
 
-  // 5. Max DN, Diameter, Thickness for multi-port pieces
-  // On the global materials page, always show at least 2 columns for Diameter & Thickness
-  let maxDn = 1, maxDia = 2, maxThk = 2;
+  // 5. Max DN, Diameter, Thickness for multi-port pieces. An extra column is only shown
+  // when a listed material actually has a value for it, so the table fits the screen.
+  let maxDn = 1, maxDia = 1, maxThk = 1;
   filteredGroups.forEach(g => {
     for (let i = 2; i <= 6; i++) { if (g[`dimension${i}`]) maxDn = Math.max(maxDn, i); }
     for (let i = 2; i <= 3; i++) { if (g[`diameter${i}`]) maxDia = Math.max(maxDia, i); }
@@ -6867,7 +7148,7 @@ function renderMaterialsPage() {
 
     return `<tr>
       <td>${escapeHtml(g.piece)}</td>
-      <td class="td-mat-desc"><a class="cell-link text-truncate-desc" href="material-usage.html?piece=${encodeURIComponent(g.piece)}&desc=${encodeURIComponent(g.itemDescription)}&dn=${encodeURIComponent(g.dimension)}&dien=${encodeURIComponent(g.dienNo || '')}&dia=${encodeURIComponent(g.diameter || '')}&thk=${encodeURIComponent(g.thickness || '')}&code=${encodeURIComponent(g.materialCode)}" title="${escapeHtml(g.itemDescription)}">${escapeHtml(g.itemDescription)}</a></td>
+      <td class="td-mat-desc"><a class="cell-link text-truncate-desc" href="material-usage.html?gm=${g.id}&piece=${encodeURIComponent(g.piece)}&desc=${encodeURIComponent(g.itemDescription)}&dn=${encodeURIComponent(g.dimension)}&dien=${encodeURIComponent(g.dienNo || '')}&dia=${encodeURIComponent(g.diameter || '')}&thk=${encodeURIComponent(g.thickness || '')}&code=${encodeURIComponent(g.materialCode)}" title="${escapeHtml(g.itemDescription)}">${escapeHtml(g.itemDescription)}</a></td>
       <td class="col-mono">${escapeHtml(g.dimension)}</td>${extraDnCells}
       <td class="col-mono">${escapeHtml(g.dienNo || '')}</td>
       <td class="col-mono">${g.diameter ? fmtDia(g.diameter) : '<span class="muted">—</span>'}</td>${extraDiaCells}
@@ -6875,7 +7156,7 @@ function renderMaterialsPage() {
       <td class="col-mono">${escapeHtml(g.surface || '')}</td>
       <td class="col-mono">${escapeHtml(g.materialCode)}</td>
       <td class="td-waz-cell">${heatChips}</td>
-      <td class="col-actions"><button class="btn-link" onclick="openMaterialsPageEdit(${g.id})">${t('edit', 'Edit')}</button></td>
+      <td class="col-actions"><button class="btn-link" onclick="openGlobalMaterialEdit(${g.id})">${t('edit', 'Edit')}</button> <button class="btn-link" onclick="openGlobalAddToProject(${g.id})" title="${escapeHtml(t('add_to_project', 'Add to project'))}">${t('add_to_project_short', '+ Project')}</button> ${gmDeleteBtn(g)}</td>
     </tr>`;
   }).join('') : `<tr class="empty-row"><td colspan="${10 + (maxDn - 1) + (maxDia - 1) + (maxThk - 1)}">${t('no_materials_match', 'No materials match these filters.')}</td></tr>`;
 
@@ -6908,10 +7189,32 @@ function renderMaterialsPage() {
 }
 /* Edit from materials page — separate simple modal (no connections/position) */
 let _materialsPageEditId = null;
+let _mpEditObj = null; /* the row being edited: a pipeline material, or a global material in the same shape */
 let _mpOriginal = null; /* snapshot of original values before edit */
-function openMaterialsPageEdit(id) {
-  _materialsPageEditId = id;
-  const m = getMaterial(id);
+/* The Materials page lists global materials, many of which are in no pipeline, so the edit
+   works on the global material itself, reshaped to the field names the modal uses. */
+function openGlobalMaterialEdit(gmId) {
+  const gm = (DB.globalMaterials || []).find(g => g.id === gmId);
+  if (!gm) return;
+  const m = {
+    globalMaterialId: gm.id,
+    piece: gm.category || '',
+    itemDescription: gm.itemDescription || gm.category || '',
+    dimension: gm.dn1 || '',
+    dienNo: gm.dienNo || '',
+    materialCode: gm.materialCode || '',
+    diameter: gm.diameter || '', diameter2: gm.diameter2 || '', diameter3: gm.diameter3 || '',
+    thickness: gm.thickness || '', thickness2: gm.thickness2 || '', thickness3: gm.thickness3 || '',
+    surface: gm.surface || ''
+  };
+  for (let i = 2; i <= 6; i++) m[`dimension${i}`] = gm[`dn${i}`] || '';
+  openMaterialsPageEdit(m);
+}
+function openMaterialsPageEdit(idOrMat) {
+  const m = (idOrMat && typeof idOrMat === 'object') ? idOrMat : getMaterial(idOrMat);
+  if (!m) return;
+  _materialsPageEditId = m.id ?? null;
+  _mpEditObj = m;
   /* Save original values to find matching materials later */
   _mpOriginal = {
     piece: m.piece, itemDescription: m.itemDescription, dimension: m.dimension,
@@ -7040,7 +7343,7 @@ function onMpCategoryChange() {
 function onMpDescChange() { toggleSelectOther('mp-desc', 'mp-desc-new'); }
 function saveMaterialProps(e) {
   e.preventDefault();
-  const m = getMaterial(_materialsPageEditId); if (!m) return;
+  const m = _mpEditObj; if (!m) return;
   m.piece = document.getElementById('mp-piece').value;
   m.itemDescription = readSelectOther('mp-desc', 'mp-desc-new') || m.piece;
   m.dimension = readSelectOther('mp-dimension', 'mp-dimension-new');
@@ -7079,7 +7382,7 @@ function saveMaterialProps(e) {
 }
 
 async function confirmGlobalEdit() {
-  const m = getMaterial(_materialsPageEditId); if (!m) return;
+  const m = _mpEditObj; if (!m) return;
   const submitBtn = document.querySelector('#modal-apply-all .btn-primary');
   if (submitBtn) setButtonLoading(submitBtn, true, t('saving', 'Saving…'));
   try {
@@ -7159,19 +7462,16 @@ async function confirmGlobalEdit() {
     if (submitBtn) setButtonLoading(submitBtn, false);
     closeModal('modal-apply-all');
     _materialsPageEditId = null;
+    _mpEditObj = null;
     _mpOriginal = null;
-    try {
-      const data = await apiGet('/page/materials');
-      if (data && data.materials) DB.materials = normalizeMaterials(data.materials);
-      if (data && data.globalMaterials) DB.globalMaterials = data.globalMaterials;
-    } catch (e) { }
-    renderMaterialsPage();
+    await reloadMaterialsPageData();
+    rerenderPage();
   }
 }
 
 function cancelGlobalEdit() {
   /* Revert local changes */
-  const m = getMaterial(_materialsPageEditId);
+  const m = _mpEditObj;
   if (m && _mpOriginal) {
     m.piece = _mpOriginal.piece; m.itemDescription = _mpOriginal.itemDescription;
     m.dimension = _mpOriginal.dimension; m.dienNo = _mpOriginal.dienNo;
@@ -7185,7 +7485,7 @@ function cancelGlobalEdit() {
     m.surface = _mpOriginal.surface || '';
     for (let i = 2; i <= 6; i++) m[`dimension${i}`] = _mpOriginal[`dimension${i}`] || '';
   }
-  closeModal('modal-apply-all'); _materialsPageEditId = null; _mpOriginal = null; renderMaterialsPage();
+  closeModal('modal-apply-all'); _materialsPageEditId = null; _mpEditObj = null; _mpOriginal = null; renderMaterialsPage();
 }
 
 /* ================================================================ PROJECT DETAIL PAGE ================================================================ */

@@ -440,10 +440,66 @@ def get_materials_page():
         ORDER BY pm.position
     """)).fetchall()
 
+    # Every active global material, including the ones no pipeline or project uses yet -
+    # those are the ones that can be deleted, so the page has to be able to list them.
+    # ref_count counts archived project materials too: they still hold a foreign key to
+    # the global material, so it cannot be deleted while any of them exists.
+    gm_rows = db.session.execute(db.text("""
+        SELECT gm.id, gm.category, gm.item_description,
+               gm.dn1, gm.dn2, gm.dn3, gm.dn4, gm.dn5, gm.dn6,
+               gm.diameter, gm.diameter2, gm.diameter3,
+               gm.thickness, gm.thickness2, gm.thickness3,
+               gm.surface, gm.material_code, gm.dien_no, gm.archived,
+               COALESCE(u.ref_count, 0) AS ref_count,
+               COALESCE(u.archived_ref_count, 0) AS archived_ref_count,
+               COALESCE(u.project_count, 0) AS project_count,
+               COALESCE(p.pipeline_use_count, 0) AS pipeline_use_count
+        FROM weldoc_global_materials gm
+        LEFT JOIN (
+            SELECT global_material_id,
+                   COUNT(*) AS ref_count,
+                   SUM(CASE WHEN archived = 1 THEN 1 ELSE 0 END) AS archived_ref_count,
+                   COUNT(DISTINCT project_id) AS project_count
+            FROM weldoc_project_materials
+            GROUP BY global_material_id
+        ) u ON u.global_material_id = gm.id
+        LEFT JOIN (
+            SELECT prm.global_material_id, COUNT(*) AS pipeline_use_count
+            FROM weldoc_pipeline_materials pm
+            JOIN weldoc_project_materials prm ON prm.id = pm.project_material_id
+            WHERE pm.archived = 0
+            GROUP BY prm.global_material_id
+        ) p ON p.global_material_id = gm.id
+        WHERE gm.archived = 0
+        ORDER BY gm.category, gm.item_description
+    """)).fetchall()
+
+    # Which projects each global material belongs to, for the client / project filters
+    gm_projects = {}
+    for r in db.session.execute(db.text("""
+        SELECT DISTINCT global_material_id, project_id
+        FROM weldoc_project_materials
+        WHERE archived = 0
+    """)).fetchall():
+        gm_projects.setdefault(r.global_material_id, []).append(r.project_id)
+
     return jsonify({
         "clients": [_ser_client(r) for r in c_rows],
         "projects": [_ser_project(r) for r in pr_rows],
         "pipelines": [_ser_pipeline(r) for r in pl_rows],
+        "globalMaterials": [{
+            "id": r.id, "category": r.category, "itemDescription": r.item_description,
+            "dn1": r.dn1, "dn2": r.dn2, "dn3": r.dn3, "dn4": r.dn4, "dn5": r.dn5, "dn6": r.dn6,
+            "diameter": r.diameter, "diameter2": r.diameter2, "diameter3": r.diameter3,
+            "thickness": r.thickness, "thickness2": r.thickness2, "thickness3": r.thickness3,
+            "surface": r.surface, "materialCode": r.material_code, "dienNo": r.dien_no,
+            "archived": bool(r.archived),
+            "refCount": r.ref_count,
+            "archivedRefCount": r.archived_ref_count,
+            "projectCount": r.project_count,
+            "pipelineUseCount": r.pipeline_use_count,
+            "projectIds": gm_projects.get(r.id, []),
+        } for r in gm_rows],
         "materials": [{
             "id": r.id, "pipelineId": r.pipeline_id, "position": r.position,
             "globalMaterialId": r.global_material_id,
@@ -578,6 +634,7 @@ def get_material_usage_page():
     thk = request.args.get("thk")
     code = request.args.get("code")
     pm_id = request.args.get("pmId", type=int)
+    gm_id = request.args.get("gm", type=int)
 
     sql_conds = ["pm.archived = 0"]
     params = {}
@@ -620,6 +677,7 @@ def get_material_usage_page():
                gm.surface, gm.material_code, gm.dien_no,
                proj.certificate, proj.heat_no, proj.waz_pdf_url,
                proj.id as project_material_id, proj.archived as pm_archived,
+               proj.global_material_id,
                pl.no as pipeline_no, pl.project_id,
                pr.title as project_title, pr.client_id,
                c.name as client_name
@@ -662,14 +720,44 @@ def get_material_usage_page():
             "startOfPlumbing": bool(r.start_of_plumbing),
             "endOfPlumbing": bool(r.end_of_plumbing), "archived": bool(r.archived),
             "projectMaterialId": r.project_material_id,
+            "globalMaterialId": r.global_material_id,
         })
+
+    # The global material this page is about, for "Add to project". Resolved from the
+    # explicit id when the link carries one, otherwise from the project material, the
+    # uses found above, or - for a material used nowhere - its specification.
+    from app.models.global_material import GlobalMaterial
+    gm = None
+    if gm_id:
+        gm = GlobalMaterial.query.get(gm_id)
+    if not gm and pm_id:
+        from app.models.project_material import ProjectMaterial
+        _pm = ProjectMaterial.query.get(pm_id)
+        gm = _pm.global_material if _pm else None
+    if not gm and rows and rows[0].global_material_id:
+        gm = GlobalMaterial.query.get(rows[0].global_material_id)
+    if not gm and (piece or desc):
+        q = GlobalMaterial.query.filter_by(archived=False)
+        if piece:
+            q = q.filter(GlobalMaterial.category == piece)
+        if desc:
+            q = q.filter(GlobalMaterial.item_description == desc)
+        if dn:
+            q = q.filter(GlobalMaterial.dn1 == dn)
+        if code:
+            q = q.filter(GlobalMaterial.material_code == code)
+        gm = q.first()
 
     payload = {
         "clients": list(clients_map.values()),
         "projects": list(projects_map.values()),
         "pipelines": list(pipelines_map.values()),
         "materials": materials_list,
+        "globalMaterial": None,
     }
+    if gm and not gm.archived:
+        from app.routes.global_materials import _serialize as _ser_gm
+        payload["globalMaterial"] = _ser_gm(gm)
 
     if pm_id:
         # The rows above are the USES. A material used nowhere returns none of them, and

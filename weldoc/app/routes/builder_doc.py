@@ -76,8 +76,152 @@ def _cross_out_empty_cells(ws, first_row, last_row, skip_cols, box_border):
             c += 1
 
 
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _signature_placer(include_welder_sign, include_inspector_sign):
+    """Return place(ws, row, weld): puts the welder's and inspector's signature images into
+    a weld row - welder in I (Signatur / Short mark), inspector in K (Endoskopie Signatur),
+    the same cells the PDF export used. Images are downloaded once per URL."""
+    if not (include_welder_sign or include_inspector_sign):
+        return None
+
+    from PIL import Image as PILImage
+    from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+    from openpyxl.drawing.xdr import XDRPositiveSize2D
+    from openpyxl.utils.units import pixels_to_EMU
+    from app.routes.export_final import _download_sharepoint_file
+
+    cache = {}  # url -> (bytes, w_px, h_px) or None
+
+    def _load(url):
+        if url not in cache:
+            cache[url] = None
+            content = _download_sharepoint_file(url)
+            if content:
+                try:
+                    w_px, h_px = PILImage.open(io.BytesIO(content)).size
+                    cache[url] = (content, w_px, h_px)
+                except Exception as ex:
+                    from flask import current_app
+                    current_app.logger.error(f"Failed to load signature image: {ex}")
+        return cache[url]
+
+    def _person_for(person_id, legacy_name):
+        if person_id:
+            return Welder.query.get(person_id)
+        if legacy_name:
+            return Welder.query.filter((Welder.name == legacy_name) | (Welder.no == legacy_name)).first()
+        return None
+
+    def _put(ws, row, col, url):
+        entry = _load(url) if url else None
+        if not entry:
+            return
+        content, w_px, h_px = entry
+        # Fit inside the cell with a small margin, keeping the aspect ratio, and centre it.
+        cell_w = round(ws.column_dimensions[get_column_letter(col)].width * 7) + 5
+        cell_h = (ws.row_dimensions[row].height or 15) * 4 / 3
+        max_w, max_h = cell_w - 6, cell_h - 6
+        scale = min(max_w / max(w_px, 1), max_h / max(h_px, 1))
+        img_w, img_h = max(1, int(w_px * scale)), max(1, int(h_px * scale))
+        img = XlImage(io.BytesIO(content))   # a fresh stream per image - openpyxl reads it on save
+        img.width, img.height = img_w, img_h
+        img.anchor = OneCellAnchor(
+            _from=AnchorMarker(col=col - 1, colOff=pixels_to_EMU(int((cell_w - img_w) // 2)),
+                               row=row - 1, rowOff=pixels_to_EMU(int((cell_h - img_h) // 2))),
+            ext=XDRPositiveSize2D(pixels_to_EMU(img_w), pixels_to_EMU(img_h)))
+        ws.add_image(img)
+
+    def place(ws, row, w):
+        if include_welder_sign:
+            p = _person_for(w.welder_id, w.welder)
+            if p and p.signature_url:
+                _put(ws, row, 9, p.signature_url)
+        if include_inspector_sign:
+            p = _person_for(getattr(w, "inspector_id", None), getattr(w, "inspector", None))
+            if p and p.signature_url:
+                _put(ws, row, 11, p.signature_url)
+
+    return place
+
+
 @builder_doc_bp.route("/<int:pipeline_id>/builder-doc", methods=["GET"])
 def generate_builder_doc(pipeline_id):
+    """Welder document (stage 3): the weld inspection list, without signatures."""
+    pl, pr, file_bytes = build_weld_list_workbook(pipeline_id)
+
+    # Save to SharePoint: {pipeline_no}/{filename}
+    if pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id:
+        import threading
+        from flask import current_app
+        app = current_app._get_current_object()
+        drive_id = pr.sharepoint_drive_id
+        folder_id = pr.sharepoint_folder_id
+        pipe_no = pl.no
+        pl_id = pl.id
+        content = file_bytes
+
+        def _bg_upload():
+            with app.app_context():
+                from app.sharepoint import upload_to_pipeline_subfolder
+                import logging
+                try:
+                    url = upload_to_pipeline_subfolder(
+                        drive_id, folder_id,
+                        pipe_no, "02 Schweissnahtliste",
+                        f"{pipe_no}_welder.xlsx", content,
+                        XLSX_MIME
+                    )
+                    if url:
+                        pipeline = Pipeline.query.get(pl_id)
+                        pipeline.doc_builder = url
+                        db.session.commit()
+                except Exception as e:
+                    logging.getLogger(__name__).error(f"Failed to upload builder doc to SharePoint: {e}")
+
+        threading.Thread(target=_bg_upload, daemon=True).start()
+
+    filename = f"{pl.no}_welder.xlsx"
+    return send_file(io.BytesIO(file_bytes), mimetype=XLSX_MIME, as_attachment=True, download_name=filename)
+
+
+@builder_doc_bp.route("/<int:pipeline_id>/export-final-excel", methods=["GET"])
+def export_final_excel(pipeline_id):
+    """Final export (stage 5): the same weld inspection list as the welder document, now
+    carrying the recorded welding details, with the welder / inspector signatures if asked.
+
+    Replaces the PDF export in the UI; the PDF code in export_final.py is kept, unused.
+    """
+    from flask import request
+    include_welder_sign = request.args.get("include_welder_sign", "true").lower() in ("true", "1", "yes")
+    include_inspector_sign = request.args.get("include_inspector_sign", "true").lower() in ("true", "1", "yes")
+
+    pl, pr, file_bytes = build_weld_list_workbook(
+        pipeline_id,
+        include_welder_sign=include_welder_sign,
+        include_inspector_sign=include_inspector_sign,
+    )
+
+    filename = f"{pl.no}_final.xlsx"
+    if pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id:
+        from app.sharepoint import upload_to_pipeline_subfolder
+        url = upload_to_pipeline_subfolder(
+            pr.sharepoint_drive_id, pr.sharepoint_folder_id,
+            pl.no, "Final", filename, file_bytes, XLSX_MIME
+        )
+        if url:
+            pl.doc_final = url
+
+    pl.status = max(pl.status or 0, 5)
+    db.session.commit()
+
+    return send_file(io.BytesIO(file_bytes), mimetype=XLSX_MIME, as_attachment=True, download_name=filename)
+
+
+def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_inspector_sign=False):
+    """Build the weld inspection list workbook. Returns (pipeline, project, xlsx bytes)."""
+    place_signatures = _signature_placer(include_welder_sign, include_inspector_sign)
     pl = Pipeline.query.get_or_404(pipeline_id)
     pr = Project.query.get(pl.project_id) if pl.project_id else None
     cli = Client.query.get(pr.client_id) if pr and pr.client_id else None
@@ -407,7 +551,10 @@ def generate_builder_doc(pipeline_id):
                 ws.cell(row,10,_result_mark(getattr(w, 'visual', None))).font=df; ws.cell(row,10).alignment=wc
                 ws.cell(row,12,_result_mark(getattr(w, 'endoscopy', None))).font=df; ws.cell(row,12).alignment=wc
                 ws.cell(row,17,w.remarks or "").font=df; ws.cell(row,17).alignment=wr
-                bdr(row,1,row,17); ws.row_dimensions[row].height = 24; row+=1
+                bdr(row,1,row,17); ws.row_dimensions[row].height = 24
+                if place_signatures:
+                    place_signatures(ws, row, w)
+                row+=1
         return row
 
     # Split the rows into printed pages. Each page becomes its own worksheet tab, so the
@@ -486,37 +633,4 @@ def generate_builder_doc(pipeline_id):
     wb.save(output)
     output.seek(0)
     file_bytes = output.getvalue()
-
-    # Save to SharePoint: {pipeline_no}/{filename}
-    if pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id:
-        import threading
-        from flask import current_app
-        app = current_app._get_current_object()
-        drive_id = pr.sharepoint_drive_id
-        folder_id = pr.sharepoint_folder_id
-        pipe_no = pl.no
-        pl_id = pl.id
-        content = file_bytes
-
-        def _bg_upload():
-            with app.app_context():
-                from app.sharepoint import upload_to_pipeline_subfolder
-                import logging
-                try:
-                    url = upload_to_pipeline_subfolder(
-                        drive_id, folder_id,
-                        pipe_no, "02 Schweissnahtliste",
-                        f"{pipe_no}_welder.xlsx", content,
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                    if url:
-                        pipeline = Pipeline.query.get(pl_id)
-                        pipeline.doc_builder = url
-                        db.session.commit()
-                except Exception as e:
-                    logging.getLogger(__name__).error(f"Failed to upload builder doc to SharePoint: {e}")
-
-        threading.Thread(target=_bg_upload, daemon=True).start()
-
-    filename = f"{pl.no}_welder.xlsx"
-    return send_file(io.BytesIO(file_bytes), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", as_attachment=True, download_name=filename)
+    return pl, pr, file_bytes

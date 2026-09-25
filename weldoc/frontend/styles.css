@@ -609,6 +609,37 @@ body.page-pipeline-detail .img-btn {
   font-size: 0.75rem;
 }
 
+/* Materials (global list) compact layout - same idea as Project Detail below: tighter cells
+   and no forced min-width, so all columns fit without scrolling right. A narrow screen
+   still scrolls, because .table-card keeps overflow-x:auto. */
+body.page-materials table.table-wide {
+  min-width: unset;
+  width: 100%;
+}
+body.page-materials table th {
+  padding: 8px 8px;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+}
+body.page-materials table td {
+  padding: 7px 8px;
+  font-size: 0.82rem;
+}
+body.page-materials table td.col-mono {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+body.page-materials .td-mat-desc,
+body.page-materials .td-mat-desc .cell-link {
+  max-width: 140px;
+}
+body.page-materials .td-waz-cell {
+  min-width: 0;
+}
+body.page-materials .col-actions .btn-link + .btn-link {
+  margin-left: 8px;
+}
+
 /* Project Detail & Project Materials table compact layout - fits all columns cleanly without right scroll */
 body.page-project-detail .table-card {
   box-shadow: var(--shadow-sm);

@@ -34,10 +34,13 @@ def check_heat_diff():
 @project_materials_bp.route("", methods=["GET"])
 def get_project_materials():
     project_id = request.args.get("projectId", type=int)
+    global_material_id = request.args.get("globalMaterialId", type=int)
     archived = request.args.get("archived", "false").lower() == "true"
     query = ProjectMaterial.query.filter_by(archived=archived)
     if project_id:
         query = query.filter_by(project_id=project_id)
+    if global_material_id:
+        query = query.filter_by(global_material_id=global_material_id)
     rows = query.all()
     return jsonify([_serialize(m) for m in rows])
 
@@ -198,7 +201,8 @@ def create_or_update_project_material():
             if waz_pdf_url and not existing.waz_pdf_url:
                 existing.waz_pdf_url = waz_pdf_url
                 db.session.commit()
-            return jsonify(_serialize(existing)), 200
+            # alreadyExisted lets the caller tell the user nothing new was created
+            return jsonify({**_serialize(existing), "alreadyExisted": True}), 200
 
         m = ProjectMaterial(
             project_id=project_id,

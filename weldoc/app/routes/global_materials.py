@@ -115,6 +115,55 @@ def edit_global_material(gm_id):
     return jsonify(_serialize(m)), 200
 
 
+@global_materials_bp.route("/<int:gm_id>", methods=["DELETE"])
+def delete_global_material(gm_id):
+    """Permanently delete a global material that nothing uses.
+
+    Only allowed while no project material - active or archived - points at it. The page
+    greys the button out for used materials, but its copy can be out of date, so the check
+    is repeated here.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from app.models.project_material import ProjectMaterial
+    from app.models.project import Project
+
+    m = GlobalMaterial.query.get_or_404(gm_id)
+
+    refs = ProjectMaterial.query.filter_by(global_material_id=gm_id).all()
+    if refs:
+        project_ids = {r.project_id for r in refs}
+        titles = sorted(
+            (p.title or p.ist_project_no or str(p.id))
+            for p in Project.query.filter(Project.id.in_(project_ids)).all()
+        )
+        archived_refs = sum(1 for r in refs if r.archived)
+        return jsonify({
+            "error": "material_in_use",
+            "usedCount": len(refs),
+            "archivedCount": archived_refs,
+            "projects": titles,
+            "message": (
+                f"This material cannot be deleted: it is used in {len(project_ids)} "
+                f"project(s) ({', '.join(titles) or '-'})"
+                + (f", {archived_refs} of them archived" if archived_refs else "")
+                + "."
+            ),
+        }), 409
+
+    try:
+        db.session.delete(m)
+        db.session.commit()
+    except IntegrityError:
+        # Something started using it between the check and the delete
+        db.session.rollback()
+        return jsonify({
+            "error": "material_in_use",
+            "message": "This material cannot be deleted: it is in use.",
+        }), 409
+
+    return jsonify({"ok": True, "id": gm_id}), 200
+
+
 @global_materials_bp.route("/update-spec", methods=["POST"])
 def update_global_material_spec():
     """Update global material specification with auto-merge."""
