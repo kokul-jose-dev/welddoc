@@ -1,4 +1,5 @@
 from app.database import db
+from app.spec_values import WholeNumberColumn
 
 
 class Project(db.Model):
@@ -9,7 +10,8 @@ class Project(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     client_id = db.Column(db.Integer, db.ForeignKey("weldoc_clients.id"), nullable=False)
-    ist_project_no = db.Column(db.String(100), nullable=False)
+    # A whole number; may be empty (an existing production project has none).
+    ist_project_no = db.Column(WholeNumberColumn(100, label="IST project number"), nullable=True)
     title = db.Column(db.String(300))
     location = db.Column(db.String(200))
     order_no = db.Column(db.String(100))

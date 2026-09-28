@@ -1,4 +1,5 @@
 from app.database import db
+from app.spec_values import DateColumn
 
 
 class Welder(db.Model):
@@ -21,8 +22,8 @@ class Certificate(db.Model):
     cert_no = db.Column(db.String(100), nullable=False)
     process = db.Column(db.String(50))
     standard = db.Column(db.String(100))
-    valid_until = db.Column(db.String(20))
-    renewal_due = db.Column(db.String(20))
+    valid_until = db.Column(DateColumn(20, label="Valid until"))
+    renewal_due = db.Column(DateColumn(20, label="Renewal due"))
     pdf_url = db.Column(db.String(500))
     archived = db.Column(db.Boolean, default=False)
 

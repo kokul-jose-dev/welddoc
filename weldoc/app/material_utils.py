@@ -4,6 +4,9 @@ from app.database import db
 from app.models.global_material import GlobalMaterial
 from app.models.project_material import ProjectMaterial
 from app.models.pipeline_material import PipelineMaterial
+from app.spec_values import (
+    canon_dn, canon_diameter, canon_thickness, canon_surface, canon_material_code,
+)
 
 
 def clean_str(val):
@@ -14,13 +17,18 @@ def clean_str(val):
 
 
 def clean_dim(val):
-    """Preserve exact diameter or thickness as entered with basic whitespace trimming."""
-    return clean_str(val)
+    """A diameter in its display form ("33.7"). Refuses anything that is not a number."""
+    return canon_diameter(val)
+
+
+def clean_thk(val):
+    """A thickness in its display form ("2.0 mm"). Refuses anything that is not a number."""
+    return canon_thickness(val)
 
 
 def clean_dn(val):
-    """Preserve exact DN dimension string as entered with basic whitespace trimming."""
-    return clean_str(val)
+    """A DN in its display form ("DN 25"). Refuses anything that is not a whole number."""
+    return canon_dn(val)
 
 
 
@@ -28,15 +36,15 @@ def normalize_gm_data(data):
     """Normalize all GlobalMaterial fields from request payload dictionary."""
     cat = clean_str(data.get("category") or data.get("piece"))
     desc = clean_str(data.get("itemDescription") or data.get("item_description") or cat)
-    code = clean_str(data.get("materialCode") or data.get("material_code"))
+    code = canon_material_code(data.get("materialCode") or data.get("material_code"))
     dien = clean_str(data.get("dienNo") or data.get("dien_no"))
     dia = clean_dim(data.get("diameter") or data.get("diameter1"))
     dia2 = clean_dim(data.get("diameter2"))
     dia3 = clean_dim(data.get("diameter3"))
-    thk = clean_dim(data.get("thickness") or data.get("thickness1"))
-    thk2 = clean_dim(data.get("thickness2"))
-    thk3 = clean_dim(data.get("thickness3"))
-    surface = clean_str(data.get("surface"))
+    thk = clean_thk(data.get("thickness") or data.get("thickness1"))
+    thk2 = clean_thk(data.get("thickness2"))
+    thk3 = clean_thk(data.get("thickness3"))
+    surface = canon_surface(data.get("surface"))
     
     dn1 = clean_dn(data.get("dn1") or data.get("dimension"))
     dns = {"dn1": dn1}
@@ -62,52 +70,43 @@ def normalize_gm_data(data):
     }
 
 
+SPEC_FIELDS = (
+    "category", "item_description", "material_code", "dien_no", "surface",
+    "diameter", "diameter2", "diameter3", "thickness", "thickness2", "thickness3",
+    "dn1", "dn2", "dn3", "dn4", "dn5", "dn6",
+)
+
+
+def spec_key(values):
+    """The specification as a comparable tuple, from a GlobalMaterial or a normalized dict.
+
+    Number fields are already in one display form on both sides (2 and 2.0 are both
+    "2.0 mm"), text fields are compared ignoring case and surrounding spaces.
+    """
+    get = values.get if isinstance(values, dict) else (lambda k, d=None: getattr(values, k, d))
+    return tuple(clean_str(get(f, "")).lower() for f in SPEC_FIELDS)
+
+
 def find_matching_global_material(norm_data, exclude_id=None):
     """
-    Search for an existing active GlobalMaterial matching normalized fields
-    case-insensitively and treating NULL as ''.
+    Search for an existing active GlobalMaterial with exactly this specification
+    (case-insensitive, NULL treated as '').
+
+    Compared in Python rather than SQL: the number columns change type (text -> number)
+    with the migration, and comparing their display forms works the same before and after.
     """
     query = GlobalMaterial.query.filter_by(archived=False)
     if exclude_id:
         query = query.filter(GlobalMaterial.id != exclude_id)
-
-    cat = norm_data["category"].lower()
-    desc = norm_data["item_description"].lower()
-    code = norm_data["material_code"].lower()
-    dien = norm_data["dien_no"].lower()
-    surface = norm_data["surface"].lower()
-    dia = norm_data["diameter"].lower()
-    dia2 = norm_data.get("diameter2", "").lower()
-    dia3 = norm_data.get("diameter3", "").lower()
-    thk = norm_data["thickness"].lower()
-    thk2 = norm_data.get("thickness2", "").lower()
-    thk3 = norm_data.get("thickness3", "").lower()
-    dn1 = norm_data["dn1"].lower()
-
-    query = query.filter(
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.category, "")))) == cat,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.item_description, "")))) == desc,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.material_code, "")))) == code,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.dien_no, "")))) == dien,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.surface, "")))) == surface,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.diameter, "")))) == dia,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.diameter2, "")))) == dia2,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.diameter3, "")))) == dia3,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.thickness, "")))) == thk,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.thickness2, "")))) == thk2,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.thickness3, "")))) == thk3,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(GlobalMaterial.dn1, "")))) == dn1,
-    )
-
-    for i in range(2, 7):
-        k = f"dn{i}"
-        val = norm_data.get(k, "").lower()
-        col = getattr(GlobalMaterial, k)
-        query = query.filter(
-            func.lower(func.rtrim(func.ltrim(func.coalesce(col, "")))) == val
-        )
-
-    return query.first()
+    cat = clean_str(norm_data.get("category"))
+    if cat:
+        # Narrow the candidates on a plain text column first
+        query = query.filter(func.lower(func.ltrim(func.rtrim(GlobalMaterial.category))) == cat.lower())
+    wanted = spec_key(norm_data)
+    for gm in query.order_by(GlobalMaterial.id).all():
+        if spec_key(gm) == wanted:
+            return gm
+    return None
 
 
 def find_matching_project_material(project_id, global_material_id, certificate, heat_no, exclude_id=None):

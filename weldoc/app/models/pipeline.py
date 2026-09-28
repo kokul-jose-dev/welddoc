@@ -1,4 +1,5 @@
 from app.database import db
+from app.spec_values import DateColumn
 
 
 class Pipeline(db.Model):
@@ -15,8 +16,8 @@ class Pipeline(db.Model):
     doc_iso = db.Column(db.String(500))
     doc_builder = db.Column(db.String(500))
     doc_final = db.Column(db.String(500))
-    welding_start = db.Column(db.String(20))
-    welding_end = db.Column(db.String(20))
+    welding_start = db.Column(DateColumn(20, label="Welding start"))
+    welding_end = db.Column(DateColumn(20, label="Welding end"))
     welding_remarks = db.Column(db.Text)
     archived = db.Column(db.Boolean, default=False)
 

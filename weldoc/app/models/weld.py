@@ -1,4 +1,5 @@
 from app.database import db
+from app.spec_values import WholeNumberColumn, DateColumn
 
 
 class Weld(db.Model):
@@ -9,17 +10,17 @@ class Weld(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     pipeline_id = db.Column(db.Integer, db.ForeignKey("weldoc_pipelines.id"), nullable=False)
-    weld_no = db.Column(db.String(20))
+    weld_no = db.Column(WholeNumberColumn(20, label="Weld number"))
     between_a = db.Column(db.String(5))
     between_b = db.Column(db.String(5))
     type = db.Column(db.String(10))
-    procedure = db.Column(db.String(50))
+    procedure = db.Column(WholeNumberColumn(50, label="Welding procedure"))
     welding_wire = db.Column(db.String(200))
     welder = db.Column(db.String(200))
     inspector = db.Column(db.String(200))
     welder_id = db.Column(db.Integer, db.ForeignKey("weldoc_welders.id"), nullable=True)
     inspector_id = db.Column(db.Integer, db.ForeignKey("weldoc_welders.id"), nullable=True)
-    date = db.Column(db.String(20))
+    date = db.Column(DateColumn(20, label="Weld date"))
     visual = db.Column(db.String(20))
     endoscopy = db.Column(db.String(20))
     endoscopy_video_url = db.Column(db.String(500))

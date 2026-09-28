@@ -13,6 +13,25 @@ def create_app():
     app = Flask(__name__, static_folder=os.path.abspath(frontend_folder), static_url_path='')
     app.config.from_object("app.config.Config")
 
+    # Dates go to the browser as YYYY-MM-DD, the form the pages read. Flask's default would be
+    # "Fri, 10 Jul 2026 00:00:00 GMT". The models and raw-SQL readers already turn dates into
+    # that string (app/spec_values.py); this catches any date that reaches jsonify directly.
+    import datetime as _dt
+    from flask.json.provider import DefaultJSONProvider
+
+    class _JSONProvider(DefaultJSONProvider):
+        @staticmethod
+        def default(o):
+            if isinstance(o, (_dt.date, _dt.datetime)):
+                return o.isoformat()
+            return DefaultJSONProvider.default(o)
+
+    app.json = _JSONProvider(app)
+    if app.config.get("SECRET_KEY") in (None, "", "change-me-in-production"):
+        # The login session is signed with this key; with the built-in default anyone who
+        # knows it could forge a login. Set FLASK_SECRET_KEY in the environment.
+        app.logger.warning("FLASK_SECRET_KEY is not set - the login session uses the built-in default key.")
+
     CORS(app)
     try:
         from flask_compress import Compress
@@ -20,6 +39,32 @@ def create_app():
     except ImportError:
         pass
     db.init_app(app)
+
+    # A DN, diameter, thickness, surface or material code that is not a number is refused
+    # with a message the forms can show, instead of a server error. See app/spec_values.py.
+    from app.spec_values import SpecValueError
+    from sqlalchemy.exc import StatementError
+
+    @app.errorhandler(SpecValueError)
+    def _invalid_spec_value(e):
+        db.session.rollback()
+        return jsonify({"error": "invalid_value", "message": str(e)}), 400
+
+    @app.errorhandler(StatementError)
+    def _statement_error(e):
+        if isinstance(getattr(e, "orig", None), SpecValueError):
+            return _invalid_spec_value(e.orig)
+        # A save the database refused (rules from db/migrations): say what is wrong instead
+        # of "INTERNAL SERVER ERROR". Anything not recognised carries on exactly as before
+        # (500, and the traceback in debug mode). See app/db_errors.py.
+        from app.db_errors import friendly_db_error
+        friendly = friendly_db_error(e)
+        if friendly:
+            status, code, message = friendly
+            db.session.rollback()
+            app.logger.warning(f"Save refused by the database ({code}): {getattr(e, 'orig', e)}")
+            return jsonify({"error": code, "message": message}), status
+        raise e
 
     with app.app_context():
         try:
@@ -71,10 +116,16 @@ def create_app():
         if app.debug and 'user' not in session:
             session['user'] = {'email': 'jeny@istinox.ch', 'name': 'Jeny M Jerry', 'role': 'office'}
         path = request.path
-        # Allow public paths, API routes, and static assets (css/js/images)
+        # Allow public paths and static assets (css/js/images)
         if path in PUBLIC_PATHS:
             return
+        # The API is where the data is, so it needs a login just like the pages. It answers
+        # 401 as JSON rather than redirecting, so the browser code can send the user to the
+        # login page (see the fetch wrapper at the top of app.js). The login page itself
+        # makes no API calls.
         if path.startswith('/api/'):
+            if 'user' not in session:
+                return jsonify({"error": "not_logged_in", "message": "Please log in again."}), 401
             return
         if path.startswith('/auth/'):
             return
@@ -212,6 +263,8 @@ def create_app():
                     WHERE pm.archived = :archived
                     ORDER BY pm.position
                 """), {"archived": 1 if archived else 0}).fetchall()
+            from app.spec_values import spec_rows
+            mat_rows = spec_rows(mat_rows)
 
             result["pipelineMaterials"] = [{
                 "id": r.id, "pipelineId": r.pipeline_id, "projectMaterialId": r.project_material_id,

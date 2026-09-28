@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify, request
 from app.database import db
+from app.spec_values import spec_rows, spec_row
 
 page_views_bp = Blueprint("page_views", __name__)
 
@@ -58,6 +59,7 @@ def get_clients_page():
         SELECT id, name, street, zip_code, location, remarks, archived
         FROM weldoc_clients WHERE archived = 0 ORDER BY name
     """)).fetchall()
+    c_rows = spec_rows(c_rows)
 
     p_rows = db.session.execute(db.text("""
         SELECT p.id, p.client_id, p.ist_project_no, p.title, p.location, p.order_no,
@@ -68,6 +70,7 @@ def get_clients_page():
         WHERE p.archived = 0 AND c.archived = 0
         ORDER BY p.id DESC
     """)).fetchall()
+    p_rows = spec_rows(p_rows)
 
     pl_rows = db.session.execute(db.text("""
         SELECT pl.id, pl.project_id, pl.no, pl.plant, pl.status, pl.doc_iso, pl.doc_builder,
@@ -78,6 +81,7 @@ def get_clients_page():
         WHERE pl.archived = 0 AND p.archived = 0 AND c.archived = 0
         ORDER BY pl.id DESC
     """)).fetchall()
+    pl_rows = spec_rows(pl_rows)
 
     return jsonify({
         "clients": [_ser_client(r) for r in c_rows],
@@ -93,6 +97,7 @@ def get_projects_page():
         SELECT id, name, street, zip_code, location, remarks, archived
         FROM weldoc_clients WHERE archived = 0 ORDER BY name
     """)).fetchall()
+    c_rows = spec_rows(c_rows)
 
     p_rows = db.session.execute(db.text("""
         SELECT p.id, p.client_id, p.ist_project_no, p.title, p.location, p.order_no,
@@ -103,6 +108,7 @@ def get_projects_page():
         WHERE p.archived = 0 AND c.archived = 0
         ORDER BY p.id DESC
     """)).fetchall()
+    p_rows = spec_rows(p_rows)
 
     pl_rows = db.session.execute(db.text("""
         SELECT pl.id, pl.project_id, pl.no, pl.plant, pl.status, pl.doc_iso, pl.doc_builder,
@@ -113,6 +119,7 @@ def get_projects_page():
         WHERE pl.archived = 0 AND p.archived = 0 AND c.archived = 0
         ORDER BY pl.id DESC
     """)).fetchall()
+    pl_rows = spec_rows(pl_rows)
 
     return jsonify({
         "clients": [_ser_client(r) for r in c_rows],
@@ -128,6 +135,7 @@ def get_pipelines_page():
         SELECT id, name, street, zip_code, location, remarks, archived
         FROM weldoc_clients WHERE archived = 0 ORDER BY name
     """)).fetchall()
+    c_rows = spec_rows(c_rows)
 
     pr_rows = db.session.execute(db.text("""
         SELECT p.id, p.client_id, p.ist_project_no, p.title, p.location, p.order_no,
@@ -138,6 +146,7 @@ def get_pipelines_page():
         WHERE p.archived = 0 AND c.archived = 0
         ORDER BY p.id DESC
     """)).fetchall()
+    pr_rows = spec_rows(pr_rows)
 
     pl_rows = db.session.execute(db.text("""
         SELECT pl.id, pl.project_id, pl.no, pl.plant, pl.status, pl.doc_iso, pl.doc_builder,
@@ -148,6 +157,7 @@ def get_pipelines_page():
         WHERE pl.archived = 0 AND p.archived = 0 AND c.archived = 0
         ORDER BY pl.id DESC
     """)).fetchall()
+    pl_rows = spec_rows(pl_rows)
 
     return jsonify({
         "clients": [_ser_client(r) for r in c_rows],
@@ -163,6 +173,7 @@ def get_client_detail_page(client_id):
         SELECT id, name, street, zip_code, location, remarks, archived
         FROM weldoc_clients WHERE id = :cid
     """), {"cid": client_id}).fetchone()
+    cli = spec_row(cli)
 
     if not cli:
         return jsonify({"error": "Client not found"}), 404
@@ -172,6 +183,7 @@ def get_client_detail_page(client_id):
         SELECT id, name, street, zip_code, location, remarks, archived
         FROM weldoc_clients WHERE archived = 0 ORDER BY name
     """)).fetchall()
+    all_clients = spec_rows(all_clients)
 
     # Only projects for THIS client
     p_rows = db.session.execute(db.text("""
@@ -180,6 +192,7 @@ def get_client_detail_page(client_id):
                sharepoint_folder_id, sharepoint_folder_url
         FROM weldoc_projects WHERE client_id = :cid AND archived = 0 ORDER BY id DESC
     """), {"cid": client_id}).fetchall()
+    p_rows = spec_rows(p_rows)
 
     # Pipelines for this client's projects
     proj_ids = [r.id for r in p_rows]
@@ -193,6 +206,7 @@ def get_client_detail_page(client_id):
             WHERE project_id IN ({placeholders}) AND archived = 0
             ORDER BY id DESC
         """)).fetchall()
+        pl_rows = spec_rows(pl_rows)
 
     return jsonify({
         "client": _ser_client(cli),
@@ -216,6 +230,7 @@ def get_project_detail_page(project_id):
         LEFT JOIN weldoc_clients c ON p.client_id = c.id
         WHERE p.id = :pid
     """), {"pid": project_id}).fetchone()
+    pr_row = spec_row(pr_row)
 
     if not pr_row:
         return jsonify({"error": "Project not found"}), 404
@@ -227,6 +242,7 @@ def get_project_detail_page(project_id):
                sharepoint_folder_id, sharepoint_folder_url
         FROM weldoc_projects WHERE client_id = :cid AND archived = 0
     """), {"cid": pr_row.client_id}).fetchall()
+    sib_projects = spec_rows(sib_projects)
 
     # Pipelines in this project
     pl_rows = db.session.execute(db.text("""
@@ -234,6 +250,7 @@ def get_project_detail_page(project_id):
                doc_final, welding_start, welding_end, welding_remarks, archived
         FROM weldoc_pipelines WHERE project_id = :pid AND archived = 0 ORDER BY id DESC
     """), {"pid": project_id}).fetchall()
+    pl_rows = spec_rows(pl_rows)
 
     # Project materials JOINed with global materials
     pm_rows = db.session.execute(db.text("""
@@ -247,6 +264,7 @@ def get_project_detail_page(project_id):
         LEFT JOIN weldoc_global_materials gm ON pm.global_material_id = gm.id
         WHERE pm.project_id = :pid AND pm.archived = 0
     """), {"pid": project_id}).fetchall()
+    pm_rows = spec_rows(pm_rows)
 
     # Global materials for dropdowns
     gm_rows = db.session.execute(db.text("""
@@ -254,6 +272,7 @@ def get_project_detail_page(project_id):
                thickness, thickness2, thickness3, surface, item_description, material_code, dien_no, archived
         FROM weldoc_global_materials WHERE archived = 0 ORDER BY category, item_description
     """)).fetchall()
+    gm_rows = spec_rows(gm_rows)
 
     # How many times each project material is actually built into a pipeline. The list
     # offers archiving only for a material nothing uses, so the count travels with it.
@@ -264,6 +283,7 @@ def get_project_detail_page(project_id):
         WHERE prm.project_id = :pid AND pm.archived = 0
         GROUP BY pm.project_material_id
     """), {"pid": project_id}).fetchall()
+    use_rows = spec_rows(use_rows)
     used_by_pm = {r.pm_id: r.used for r in use_rows}
 
     return jsonify({
@@ -319,6 +339,7 @@ def get_home_page():
         SELECT id, name, street, zip_code, location, remarks, archived
         FROM weldoc_clients WHERE archived = 0
     """)).fetchall()
+    c_rows = spec_rows(c_rows)
 
     pr_rows = db.session.execute(db.text("""
         SELECT id, client_id, ist_project_no, title, location, order_no,
@@ -326,12 +347,14 @@ def get_home_page():
                sharepoint_folder_id, sharepoint_folder_url
         FROM weldoc_projects WHERE archived = 0
     """)).fetchall()
+    pr_rows = spec_rows(pr_rows)
 
     pl_rows = db.session.execute(db.text("""
         SELECT id, project_id, no, plant, status, doc_iso, doc_builder,
                doc_final, welding_start, welding_end, welding_remarks, archived
         FROM weldoc_pipelines WHERE archived = 0
     """)).fetchall()
+    pl_rows = spec_rows(pl_rows)
 
     # Materials for WAZ checking on Home dashboard
     mat_rows = db.session.execute(db.text("""
@@ -342,6 +365,7 @@ def get_home_page():
         LEFT JOIN weldoc_project_materials prm ON pm.project_material_id = prm.id
         WHERE pm.archived = 0
     """)).fetchall()
+    mat_rows = spec_rows(mat_rows)
 
     weld_rows = db.session.execute(db.text("""
         SELECT id, pipeline_id, weld_no, between_a, between_b, type, [procedure],
@@ -349,16 +373,19 @@ def get_home_page():
                endoscopy_video_url, endoscopy_image_url, remarks, archived
         FROM weldoc_welds WHERE archived = 0
     """)).fetchall()
+    weld_rows = spec_rows(weld_rows)
 
     w_rows = db.session.execute(db.text("""
         SELECT id, name, no, signature_url, archived
         FROM weldoc_welders WHERE archived = 0
     """)).fetchall()
+    w_rows = spec_rows(w_rows)
 
     cert_rows = db.session.execute(db.text("""
         SELECT id, welder_id, cert_no, process, standard, valid_until, renewal_due, pdf_url, archived
         FROM weldoc_weldercertificate WHERE archived = 0
     """)).fetchall()
+    cert_rows = spec_rows(cert_rows)
 
     return jsonify({
         "clients": [_ser_client(r) for r in c_rows],
@@ -405,6 +432,7 @@ def get_materials_page():
         SELECT id, name, street, zip_code, location, remarks, archived
         FROM weldoc_clients WHERE archived = 0 ORDER BY name
     """)).fetchall()
+    c_rows = spec_rows(c_rows)
 
     pr_rows = db.session.execute(db.text("""
         SELECT p.id, p.client_id, p.ist_project_no, p.title, p.location, p.order_no,
@@ -414,6 +442,7 @@ def get_materials_page():
         WHERE p.archived = 0
         ORDER BY p.id DESC
     """)).fetchall()
+    pr_rows = spec_rows(pr_rows)
 
     pl_rows = db.session.execute(db.text("""
         SELECT pl.id, pl.project_id, pl.no, pl.plant, pl.status, pl.doc_iso, pl.doc_builder,
@@ -422,6 +451,7 @@ def get_materials_page():
         WHERE pl.archived = 0
         ORDER BY pl.id DESC
     """)).fetchall()
+    pl_rows = spec_rows(pl_rows)
 
     mat_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.pipeline_id, pm.position, pm.waz_no, pm.waz_package_url,
@@ -439,6 +469,7 @@ def get_materials_page():
         WHERE pm.archived = 0
         ORDER BY pm.position
     """)).fetchall()
+    mat_rows = spec_rows(mat_rows)
 
     # Every active global material, including the ones no pipeline or project uses yet -
     # those are the ones that can be deleted, so the page has to be able to list them.
@@ -473,6 +504,7 @@ def get_materials_page():
         WHERE gm.archived = 0
         ORDER BY gm.category, gm.item_description
     """)).fetchall()
+    gm_rows = spec_rows(gm_rows)
 
     # Which projects each global material belongs to, for the client / project filters
     gm_projects = {}
@@ -527,6 +559,7 @@ def get_archive_page():
         SELECT id, name, street, zip_code, location, remarks, archived
         FROM weldoc_clients ORDER BY name
     """)).fetchall()
+    c_rows = spec_rows(c_rows)
 
     pr_rows = db.session.execute(db.text("""
         SELECT id, client_id, ist_project_no, title, location, order_no,
@@ -534,12 +567,14 @@ def get_archive_page():
                sharepoint_folder_id, sharepoint_folder_url
         FROM weldoc_projects ORDER BY id DESC
     """)).fetchall()
+    pr_rows = spec_rows(pr_rows)
 
     pl_rows = db.session.execute(db.text("""
         SELECT id, project_id, no, plant, status, doc_iso, doc_builder,
                doc_final, welding_start, welding_end, welding_remarks, archived
         FROM weldoc_pipelines ORDER BY id DESC
     """)).fetchall()
+    pl_rows = spec_rows(pl_rows)
 
     pm_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.project_id, pm.global_material_id, pm.certificate,
@@ -552,6 +587,7 @@ def get_archive_page():
         LEFT JOIN weldoc_global_materials gm ON pm.global_material_id = gm.id
         ORDER BY pm.id DESC
     """)).fetchall()
+    pm_rows = spec_rows(pm_rows)
 
     mat_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.pipeline_id, pm.position, pm.waz_no, pm.start_of_plumbing,
@@ -567,6 +603,7 @@ def get_archive_page():
         WHERE pm.archived = 1
         ORDER BY pm.position
     """)).fetchall()
+    mat_rows = spec_rows(mat_rows)
 
     weld_rows = db.session.execute(db.text("""
         SELECT id, pipeline_id, weld_no, between_a, between_b, type, [procedure],
@@ -576,6 +613,7 @@ def get_archive_page():
         WHERE archived = 1
         ORDER BY id DESC
     """)).fetchall()
+    weld_rows = spec_rows(weld_rows)
 
     return jsonify({
         "clients": [_ser_client(r) for r in c_rows],
@@ -649,21 +687,11 @@ def get_material_usage_page():
     if desc:
         sql_conds.append("gm.item_description = :desc")
         params["desc"] = desc
-    if dn:
-        sql_conds.append("gm.dn1 = :dn")
-        params["dn"] = dn
     if dien:
         sql_conds.append("(gm.dien_no = :dien OR :dien = '')")
         params["dien"] = dien
-    if dia:
-        sql_conds.append("(gm.diameter = :dia OR :dia = '')")
-        params["dia"] = dia
-    if thk:
-        sql_conds.append("(gm.thickness = :thk OR :thk = '')")
-        params["thk"] = thk
-    if code:
-        sql_conds.append("gm.material_code = :code")
-        params["code"] = code
+    # DN, diameter, thickness and material code are compared further down, in their display
+    # form: the columns hold numbers, the link may carry "DN 25" or "2.0 mm".
 
     where_clause = " AND ".join(sql_conds)
 
@@ -690,6 +718,16 @@ def get_material_usage_page():
         WHERE {where_clause}
         ORDER BY pm.position
     """), params).fetchall()
+    rows = spec_rows(rows)
+
+    from app.spec_values import show_dn, show_diameter, show_thickness, show_material_code
+    spec_filters = [(f, show(v)) for f, show, v in (
+        ("dn1", show_dn, dn), ("diameter", show_diameter, dia),
+        ("thickness", show_thickness, thk), ("material_code", show_material_code, code),
+    ) if v]
+    if spec_filters:
+        rows = [r for r in rows
+                if all((getattr(r, f) or "").strip().lower() == want.strip().lower() for f, want in spec_filters)]
 
     clients_map = {}
     projects_map = {}
@@ -742,11 +780,12 @@ def get_material_usage_page():
             q = q.filter(GlobalMaterial.category == piece)
         if desc:
             q = q.filter(GlobalMaterial.item_description == desc)
-        if dn:
-            q = q.filter(GlobalMaterial.dn1 == dn)
-        if code:
-            q = q.filter(GlobalMaterial.material_code == code)
-        gm = q.first()
+        # DN and material code compared in display form (the model reads them that way)
+        want_dn = show_dn(dn) if dn else None
+        want_code = show_material_code(code) if code else None
+        gm = next((g for g in q.order_by(GlobalMaterial.id).all()
+                   if (not want_dn or (g.dn1 or "").lower() == want_dn.lower())
+                   and (not want_code or (g.material_code or "") == want_code)), None)
 
     payload = {
         "clients": list(clients_map.values()),

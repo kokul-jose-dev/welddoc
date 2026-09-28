@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify
 from app.database import db
+from app.spec_values import spec_rows, spec_row
 
 pipeline_detail_bp = Blueprint("pipeline_detail", __name__)
 
@@ -23,6 +24,7 @@ def get_pipeline_detail(pipeline_id):
         LEFT JOIN weldoc_clients c ON pr.client_id = c.id
         WHERE p.id = :pid
     """), {"pid": pipeline_id}).fetchone()
+    row = spec_row(row)
 
     if not row:
         return jsonify({"error": "not found"}), 404
@@ -52,6 +54,7 @@ def get_pipeline_detail(pipeline_id):
         WHERE pm.pipeline_id = :pid AND pm.archived = 0
         ORDER BY pm.position
     """), {"pid": pipeline_id}).fetchall()
+    mat_rows = spec_rows(mat_rows)
 
     # Connections + sibling pipelines in one query each
     mat_ids = [r.id for r in mat_rows]
@@ -64,6 +67,7 @@ def get_pipeline_detail(pipeline_id):
             FROM weldoc_pipeline_material_connections
             WHERE pipeline_material_id IN ({placeholders})
         """)).fetchall()
+        conn_rows = spec_rows(conn_rows)
         for cr in conn_rows:
             if cr.connected_id in valid_conn_ids:
                 connections.setdefault(cr.pipeline_material_id, []).append(cr.connected_id)
@@ -74,6 +78,7 @@ def get_pipeline_detail(pipeline_id):
         FROM weldoc_pipelines
         WHERE project_id = :proj_id AND archived = 0
     """), {"proj_id": row.project_id}).fetchall()
+    sib_rows = spec_rows(sib_rows)
 
     weld_rows = db.session.execute(db.text("""
         SELECT id, pipeline_id, weld_no, between_a, between_b, type, [procedure],
@@ -83,6 +88,7 @@ def get_pipeline_detail(pipeline_id):
         WHERE pipeline_id = :pid AND archived = 0
         ORDER BY LEN(between_a), between_a, LEN(between_b), between_b, id
     """), {"pid": pipeline_id}).fetchall()
+    weld_rows = spec_rows(weld_rows)
 
     pm_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.project_id, pm.global_material_id, pm.certificate, pm.heat_no,
@@ -95,6 +101,7 @@ def get_pipeline_detail(pipeline_id):
         LEFT JOIN weldoc_global_materials gm ON pm.global_material_id = gm.id
         WHERE pm.project_id = :proj_id AND pm.archived = 0
     """), {"proj_id": row.project_id}).fetchall()
+    pm_rows = spec_rows(pm_rows)
 
     gm_rows = db.session.execute(db.text("""
         SELECT id, category, item_description, dn1, dn2, dn3, dn4, dn5, dn6,
@@ -103,6 +110,7 @@ def get_pipeline_detail(pipeline_id):
         WHERE archived = 0
         ORDER BY category, item_description
     """)).fetchall()
+    gm_rows = spec_rows(gm_rows)
 
     w_rows = db.session.execute(db.text("""
         SELECT w.id, w.name, w.no, w.signature_url, w.archived,
@@ -113,6 +121,7 @@ def get_pipeline_detail(pipeline_id):
         WHERE w.archived = 0
         ORDER BY w.name
     """)).fetchall()
+    w_rows = spec_rows(w_rows)
 
     welder_map = {}
     for wr in w_rows:

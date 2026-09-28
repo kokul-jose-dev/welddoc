@@ -1,3 +1,4 @@
+import re
 from flask import Blueprint, request, jsonify
 from app.database import db
 from app.models.pipeline_material import PipelineMaterial, pipeline_material_connections
@@ -592,6 +593,31 @@ def reorder_pipeline_materials():
     if not items:
         return jsonify({"status": "ok", "skipped": "no materials supplied"}), 200
 
+    # Check the whole request before anything is changed. The positions end up in SQL and
+    # in the weld list, so they must be plain letters; and every material must belong to
+    # this pipeline - otherwise a bad or tampered request could relabel another pipeline.
+    try:
+        pipeline_id = int(pipeline_id)
+        for item in items:
+            item["id"] = int(item["id"])
+            item["position"] = str(item.get("position") or "").strip().upper()
+            if not re.fullmatch(r"[A-Z]{1,3}", item["position"]):
+                raise ValueError(f"invalid position {item['position']!r}")
+            if not isinstance(item.get("connections", []), list):
+                raise ValueError("connections must be a list")
+    except (TypeError, ValueError, KeyError) as e:
+        return jsonify({"error": "invalid_request", "message": f"Reorder refused: {e}."}), 400
+    if len({i["id"] for i in items}) != len(items) or len({i["position"] for i in items}) != len(items):
+        return jsonify({"error": "invalid_request",
+                        "message": "Reorder refused: a material or a position letter appears twice."}), 400
+    own_ids = {r.id for r in db.session.execute(db.text("""
+        SELECT id FROM weldoc_pipeline_materials WHERE pipeline_id = :pid AND archived = 0
+    """), {"pid": pipeline_id}).fetchall()}
+    foreign = sorted(i["id"] for i in items if i["id"] not in own_ids)
+    if foreign:
+        return jsonify({"error": "invalid_request",
+                        "message": f"Reorder refused: material(s) {foreign} are not active materials of this pipeline."}), 400
+
     # Once a welder or inspector is on a weld, the running order is fixed. Reordering
     # rewrites which materials every weld joins, so it is refused here as well as being
     # disabled in the UI - this endpoint can still be reached from a stale browser tab.
@@ -647,19 +673,17 @@ def reorder_pipeline_materials():
         else:
             stale_weld_ids.append(w.id)
 
-    # 1. Update all positions/flags in one batch using CASE
-    if items:
-        case_pos = " ".join(f"WHEN {int(i['id'])} THEN '{i['position']}'" for i in items)
-        case_sop = " ".join(f"WHEN {int(i['id'])} THEN {1 if i.get('startOfPlumbing') else 0}" for i in items)
-        case_eop = " ".join(f"WHEN {int(i['id'])} THEN {1 if i.get('endOfPlumbing') else 0}" for i in items)
-        id_list = ",".join(str(int(i["id"])) for i in items)
-        db.session.execute(db.text(f"""
-            UPDATE weldoc_pipeline_materials SET
-                position = CASE id {case_pos} END,
-                start_of_plumbing = CASE id {case_sop} END,
-                end_of_plumbing = CASE id {case_eop} END
-            WHERE id IN ({id_list})
-        """))
+    # 1. Update all positions/flags. The values travel as parameters, never as part of the
+    #    SQL text, so whatever a request contains can only ever be stored as a value.
+    db.session.execute(db.text("""
+        UPDATE weldoc_pipeline_materials
+        SET position = :pos, start_of_plumbing = :sop, end_of_plumbing = :eop
+        WHERE id = :id AND pipeline_id = :pid
+    """), [{
+        "id": i["id"], "pid": pipeline_id, "pos": i["position"],
+        "sop": 1 if i.get("startOfPlumbing") else 0,
+        "eop": 1 if i.get("endOfPlumbing") else 0,
+    } for i in items])
 
     # 2. Clear all connections for this pipeline's materials
     mat_ids = [item["id"] for item in items]
@@ -683,7 +707,7 @@ def reorder_pipeline_materials():
         SELECT pm.id FROM weldoc_pipeline_materials pm
         JOIN weldoc_project_materials prm ON pm.project_material_id = prm.id
         JOIN weldoc_global_materials gm ON prm.global_material_id = gm.id
-        WHERE pm.pipeline_id = :pid AND LOWER(RTRIM(LTRIM(ISNULL(gm.category, '')))) = 'welding wire'
+        WHERE pm.pipeline_id = :pid AND LOWER(RTRIM(LTRIM(COALESCE(gm.category, '')))) = 'welding wire'
     """), {"pid": pipeline_id}).fetchall()
     wire_id_set = {r.id for r in wire_rows}
 

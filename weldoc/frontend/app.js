@@ -30,6 +30,22 @@ function invalidateCache(keyPrefix) {
 
 /* ---- API helpers & Global Loading ---- */
 const API_BASE = '/api';
+/* The API needs a login. When the session has expired it answers 401 - send the user to the
+   login page instead of letting every call fail with an error. Wrapping fetch covers all
+   calls, including the direct uploads that do not go through apiGet / apiPost. */
+(function () {
+  const origFetch = window.fetch.bind(window);
+  let redirecting = false;
+  window.fetch = async function (input, init) {
+    const resp = await origFetch(input, init);
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (resp.status === 401 && url.startsWith(API_BASE) && !redirecting) {
+      redirecting = true;
+      window.location.href = '/';
+    }
+    return resp;
+  };
+})();
 
 let _progressCount = 0;
 function showGlobalProgress() {
@@ -763,7 +779,56 @@ function buildSelectOther(selectId, textId, options, value, noOther) {
   }
 }
 function toggleSelectOther(selectId, textId) { const sel = document.getElementById(selectId), txt = document.getElementById(textId); if (sel.value === '__other__') { txt.style.display = 'block'; txt.focus(); } else { txt.style.display = 'none'; } }
-function readSelectOther(selectId, textId) { const sel = document.getElementById(selectId); if (!sel) return ''; const txt = document.getElementById(textId); return sel.value === '__other__' ? (txt ? txt.value.trim() : '') : sel.value; }
+function readSelectOther(selectId, textId) { const sel = document.getElementById(selectId); if (!sel) return ''; const txt = document.getElementById(textId); return sel.value === '__other__' ? (txt ? specTypedToDisplay(specFieldKind(selectId), txt.value.trim()) : '') : sel.value; }
+
+/* ---- Specification numbers: DN, diameter, thickness, surface, material code ----
+   The database stores only the number; the server sends each value in one display form
+   ("DN 25", "33.7", "2.0 mm", "Ra 0.6 µm", "1.4404") and accepts it with or without the
+   unit (app/spec_values.py). The "type a new value" boxes of these fields therefore take
+   only the number, and what is typed is turned into the same display form the dropdown
+   options have, so a typed value and a picked one look and compare the same. */
+function specFieldKind(selectId) {
+  const id = String(selectId || '');
+  if (/^(input-mat-dimension\d*|mp-dimension\d*|pm-dn\d+)$/.test(id)) return 'dn';
+  if (/^(input-mat|mp|pm)-diameter\d*$/.test(id)) return 'dia';
+  if (/^(input-mat|mp|pm)-thickness\d*$/.test(id)) return 'thk';
+  if (/^(input-mat|mp|pm)-surface$/.test(id)) return 'ra';
+  if (/^(input-mat|mp|pm)-code$/.test(id)) return 'code';
+  return null;
+}
+/* "2,50 mm" -> "2.50"; null when it is not a plain number. Mirrors _clean in spec_values.py. */
+function specCleanNumber(raw) {
+  let s = String(raw == null ? '' : raw).trim().replace(/^(dn|ra)/i, '');
+  s = s.replace(/µm|μm|um|mm|ø|⌀/gi, '').replace(/\s+/g, '').replace(/,/g, '.');
+  return /^\d+(\.\d+)?$/.test(s) ? s : null;
+}
+/* At least one decimal and every further one that is there: "2" -> "2.0", "2.50" -> "2.5". */
+function specMin1(s) {
+  let [i, f = ''] = s.split('.');
+  i = i.replace(/^0+(?=\d)/, '');
+  f = f.replace(/0+$/, '');
+  return i + '.' + (f || '0');
+}
+function specTypedToDisplay(kind, raw) {
+  if (!kind || raw === '') return raw;
+  const s = specCleanNumber(raw);
+  if (s === null) return raw;                    /* not a number: the server explains why */
+  if (kind === 'dn') return /^\d+(\.0+)?$/.test(s) ? 'DN ' + parseInt(s, 10) : raw;
+  if (kind === 'dia') return specMin1(s);
+  if (kind === 'thk') return specMin1(s) + ' mm';
+  if (kind === 'ra') return 'Ra ' + specMin1(s) + ' µm';
+  if (kind === 'code') return Number(s).toFixed(4);
+  return raw;
+}
+/* The boxes accept the value with or without its unit ("DN 25", "2.0 mm", "Ra 0,6 µm" or
+   just the number) - the server keeps only the number. The hint shows both ways. */
+const SPEC_INPUT_HINT = { dn: 'e.g. DN 25 or 25', dia: 'e.g. 33.7 or 33.7 mm', thk: 'e.g. 2.0 mm or 2.0', ra: 'e.g. Ra 0.6 µm or 0.6', code: 'e.g. 1.4404' };
+document.addEventListener('focusin', e => {
+  const el = e.target;
+  if (!el.classList || !el.classList.contains('select-other-text')) return;
+  const kind = specFieldKind(el.id.replace(/-new$/, ''));
+  if (kind) el.placeholder = SPEC_INPUT_HINT[kind];
+});
 
 function updateDropdownCountBadge(selectId, optionsCount, hasSelectedValue, isAnyFieldSelected) {
   const sel = document.getElementById(selectId);
@@ -1034,7 +1099,7 @@ function mountModals() {
   <div class="modal-overlay" id="modal-project"><div class="modal modal-wide">
     <button class="modal-close" onclick="closeModal('modal-project')">&times;</button><h2 id="modal-project-title" data-i18n="new_project">New project</h2>
     <form id="project-form"><div class="form-grid">
-      <label class="field"><span class="lbl" data-i18n="ist_project_no">IST Project number <span class="req">*</span></span><input type="text" id="input-project-istno" placeholder="e.g. 926xxxx" data-i18n-placeholder="ist_project_no_placeholder" required></label>
+      <label class="field"><span class="lbl" data-i18n="ist_project_no">IST Project number</span><input type="text" id="input-project-istno" inputmode="numeric" placeholder="e.g. 926xxxx" data-i18n-placeholder="ist_project_no_placeholder"></label>
       <div class="field"><span class="lbl" data-i18n="client">Client <span class="req">*</span></span><select id="input-project-client" required></select><input type="text" id="input-project-client-readonly" disabled style="display:none"></div>
       <label class="field"><span class="lbl" data-i18n="project_title">Project title <span class="req">*</span></span><input type="text" id="input-project-title" required></label>
       <div class="field"><span class="lbl" data-i18n="location">Location</span><select id="input-project-location" onchange="toggleSelectOther('input-project-location','input-project-location-new')"></select><input type="text" id="input-project-location-new" class="select-other-text" style="display:none" placeholder="Type new location…" data-i18n-placeholder="type_new_location"></div>
@@ -3990,12 +4055,24 @@ function openArchiveModal(type, id) {
   document.getElementById('archive-confirm-btn').textContent = `${t('archive', 'Archive')} ${nounText}`;
   openModal('modal-archive'); document.getElementById('archive-cancel-btn').focus();
 }
+/* A save the server refused: say why, in the user's words from the server (see
+   app/db_errors.py and app/spec_values.py), instead of failing silently. */
+function alertSaveFailed(e) {
+  alert(t('could_not_save', 'Could not save:') + ' ' + ((e && e.message) || t('unknown_error', 'Unknown error')));
+}
 async function confirmArchive() {
   const btn = document.getElementById('archive-confirm-btn');
   setButtonLoading(btn, true, t('archiving', 'Archiving…'));
   const { type, id } = deleteContext;
   const map = { client: 'clients', project: 'projects', pipeline: 'pipelines', welder: 'people', weld: 'welds', material: 'materials' };
   const apiMap = { client: '/clients', project: '/projects', pipeline: '/pipelines', weld: '/welds', material: '/pipeline-materials' };
+  try {
+    if (apiMap[type]) { await apiPost(apiMap[type] + (type === 'material' ? '/' + id : ''), type === 'material' ? { archived: true } : { id, archived: true }); }
+  } catch (e) {
+    setButtonLoading(btn, false);
+    alertSaveFailed(e);
+    return;
+  }
   const rec = DB[map[type]].find(x => x.id === id); if (rec) rec.archived = true;
   if (type === 'client') {
     const clientProjIds = DB.projects.filter(p => p.clientId === id).map(p => p.id);
@@ -4005,9 +4082,6 @@ async function confirmArchive() {
   if (type === 'project') {
     DB.pipelines.filter(pl => pl.projectId === id).forEach(pl => pl.archived = true);
   }
-  try {
-    if (apiMap[type]) { await apiPost(apiMap[type] + (type === 'material' ? '/' + id : ''), type === 'material' ? { archived: true } : { id, archived: true }); }
-  } catch (e) { console.error('Archive API error:', e); }
 
   if (type === 'material' || type === 'weld') {
     const pipeId = rec ? rec.pipelineId : PAGE.pipelineId;
@@ -4041,12 +4115,16 @@ async function confirmWeldingUpdate() {
   setButtonLoading(btn, true, t('saving', 'Saving…'));
   const wStart = val('input-wd-start'); const wEnd = val('input-wd-end'); const wRem = val('input-wd-remarks');
   const pl = getPipeline(weldingUpdateId); if (!pl) { setButtonLoading(btn, false); return; }
-  pl.weldingStart = wStart; pl.weldingEnd = wEnd; pl.weldingRemarks = wRem; pl.status = 4;
-  saveDB();
   try {
     await apiPost('/pipelines', { id: weldingUpdateId, status: 4, weldingStart: wStart, weldingEnd: wEnd, weldingRemarks: wRem });
-  } catch (e) { console.error('Welding update API error:', e); }
-  finally { setButtonLoading(btn, false); }
+  } catch (e) {
+    setButtonLoading(btn, false);
+    alertSaveFailed(e);          /* the dialog stays open with what was entered */
+    return;
+  }
+  setButtonLoading(btn, false);
+  pl.weldingStart = wStart; pl.weldingEnd = wEnd; pl.weldingRemarks = wRem; pl.status = 4;
+  saveDB();
   closeModal('modal-welding'); rerenderPage();
 }
 
@@ -4258,17 +4336,17 @@ function viewArchivedClient(id) {
   container.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 async function restoreClient(id) {
+  try { await apiPost('/clients', { id, archived: false }); } catch (e) { alertSaveFailed(e); return; }
   const c = DB.clients.find(x => x.id === id); if (c) c.archived = false;
   const clientProjIds = DB.projects.filter(p => p.clientId === id).map(p => p.id);
   DB.projects.filter(p => p.clientId === id).forEach(p => p.archived = false);
   DB.pipelines.filter(pl => clientProjIds.includes(pl.projectId)).forEach(pl => pl.archived = false);
-  try { await apiPost('/clients', { id, archived: false }); } catch (e) { console.error('Restore API error:', e); }
   saveDB(); renderArchivePage();
 }
 async function restoreProject(id) {
+  try { await apiPost('/projects', { id, archived: false }); } catch (e) { alertSaveFailed(e); return; }
   const p = DB.projects.find(x => x.id === id); if (p) p.archived = false;
   DB.pipelines.filter(pl => pl.projectId === id).forEach(pl => pl.archived = false);
-  try { await apiPost('/projects', { id, archived: false }); } catch (e) { console.error('Restore API error:', e); }
   saveDB(); renderArchivePage();
 }
 let _restoringMaterialId = null;
@@ -4443,13 +4521,13 @@ async function restoreMaterial(id) {
   openRestoreMaterialModal(id);
 }
 async function restorePipeline(id) {
+  try { await apiPost('/pipelines', { id, archived: false }); } catch (e) { alertSaveFailed(e); return; }
   const p = DB.pipelines.find(x => x.id === id); if (p) p.archived = false;
-  try { await apiPost('/pipelines', { id, archived: false }); } catch (e) { console.error('Restore API error:', e); }
   saveDB(); renderArchivePage();
 }
 async function restoreWeld(id) {
+  try { await apiPost('/welds', { id, archived: false }); } catch (e) { alertSaveFailed(e); return; }
   const w = DB.welds.find(x => x.id === id); if (w) w.archived = false;
-  try { await apiPost('/welds', { id, archived: false }); } catch (e) { console.error('Restore API error:', e); }
   saveDB(); renderArchivePage();
 }
 
@@ -7458,6 +7536,7 @@ async function confirmGlobalEdit() {
     }
   } catch (e) {
     console.error('Edit global material API error:', e);
+    alertSaveFailed(e);          /* the list is reloaded below, so it shows what was really saved */
   } finally {
     if (submitBtn) setButtonLoading(submitBtn, false);
     closeModal('modal-apply-all');
@@ -7634,15 +7713,17 @@ function formatMaterialSpecsStr(mat) {
   if (!mat) return '';
   const parts = [];
   if (mat.category || mat.piece) parts.push(mat.category || mat.piece);
-  if (mat.dn1 || mat.dimension) parts.push('DN ' + (mat.dn1 || mat.dimension));
+  /* DN and thickness already come with their unit ("DN 25", "2.0 mm"), diameters get
+     "Ø … mm" from fmtDia - adding them again here printed "DN DN 25" and "mm mm". */
+  if (mat.dn1 || mat.dimension) parts.push(mat.dn1 || mat.dimension);
   for (let i = 2; i <= 6; i++) {
     const val = mat[`dn${i}`] || mat[`dimension${i}`];
-    if (val) parts.push(`DN ${i} ${val}`);
+    if (val) parts.push(val);
   }
   const diaStr = formatMaterialDiameter(mat);
-  if (diaStr) parts.push(diaStr + ' mm');
+  if (diaStr) parts.push(diaStr);
   const thkStr = formatMaterialThickness(mat);
-  if (thkStr) parts.push(thkStr + ' mm');
+  if (thkStr) parts.push(thkStr);
   if (mat.materialCode) parts.push(mat.materialCode);
   return parts.filter(Boolean).join(', ');
 }
