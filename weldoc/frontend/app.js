@@ -101,19 +101,79 @@ async function apiGet(path) {
 async function apiPost(path, data) {
   showGlobalProgress();
   try {
-    const r = await fetch(API_BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-    if (!r.ok) {
-      let body = null;
-      try { body = await r.json(); } catch (_) { /* not JSON */ }
-      const err = new Error((body && body.message) || r.statusText);
-      err.status = r.status;
-      err.body = body;
-      throw err;
+    /* A change that would delete welds with recorded work is answered with 409
+       "confirm_weld_deletion" and the list of those welds. The user decides in a dialog;
+       on Continue the same request is sent again with their ids. The server checks the list
+       again each time, so it may ask more than once if another weld got work meanwhile. */
+    for (let attempt = 0; ; attempt++) {
+      const r = await fetch(API_BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      if (!r.ok) {
+        let body = null;
+        try { body = await r.json(); } catch (_) { /* not JSON */ }
+        if (r.status === 409 && body && body.error === 'confirm_weld_deletion' && Array.isArray(body.welds) && attempt < 5) {
+          hideGlobalProgress();
+          const go = await confirmWeldDeletion(body.welds);
+          showGlobalProgress();
+          if (!go) {
+            const err = new Error(t('change_cancelled', 'The change was cancelled. Nothing was changed.'));
+            err.status = 409; err.body = body; err.cancelled = true;
+            throw err;
+          }
+          data = Object.assign({}, data, { confirmDeleteWelds: body.welds.map(w => w.id) });
+          continue;
+        }
+        const err = new Error((body && body.message) || r.statusText);
+        err.status = r.status;
+        err.body = body;
+        throw err;
+      }
+      return await r.json();
     }
-    return await r.json();
   } finally {
     hideGlobalProgress();
   }
+}
+
+/* The dialog: which welds will be deleted and what is recorded on them. Resolves true on
+   Continue, false on Cancel / Escape / click outside. */
+function confirmWeldDeletion(welds) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay open';
+    overlay.style.zIndex = '1000';           /* above the form that is still open underneath */
+    const line = w => {
+      const parts = [];
+      if (w.welder) parts.push(`${t('wd_welder', 'welder')} ${escapeHtml(w.welder)}`);
+      if (w.inspector) parts.push(`${t('wd_inspector', 'inspector')} ${escapeHtml(w.inspector)}`);
+      if (w.date) parts.push(`${t('wd_date', 'date')} ${escapeHtml(formatDate(w.date))}`);
+      if (w.visual) parts.push(`${t('wd_visual', 'visual')} ${escapeHtml(w.visual)}`);
+      if (w.endoscopy) parts.push(`${t('wd_endoscopy', 'endoscopy')} ${escapeHtml(w.endoscopy)}`);
+      if (w.remarks) parts.push(t('wd_remarks', 'remarks'));
+      if (w.photo) parts.push(t('wd_photo', 'photo'));
+      if (w.video) parts.push(t('wd_video', 'video'));
+      return `<li style="margin-bottom:6px;"><strong>${t('wd_weld', 'Weld')} ${escapeHtml(String(w.weldNo == null ? '' : w.weldNo))}</strong> `
+        + `(${t('wd_between', 'between')} ${escapeHtml(w.betweenA || '?')} ${t('wd_and', 'and')} ${escapeHtml(w.betweenB || '?')}) – ${parts.join(', ')}</li>`;
+    };
+    overlay.innerHTML = `<div class="modal" style="max-width:560px;">
+      <h2>${t('wd_title', 'Welds will be deleted')}</h2>
+      <p style="margin:0 0 10px;">${t('wd_intro', 'This change will delete the following weld(s):')}</p>
+      <ul style="margin:0 0 12px 18px;padding:0;font-size:0.9rem;">${welds.map(line).join('')}</ul>
+      <p style="margin:0;color:var(--danger);font-weight:600;">${t('wd_warning', 'Everything recorded on them will be lost.')}</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" data-act="cancel">${t('cancel', 'Cancel')}</button>
+        <button type="button" class="btn btn-danger" data-act="continue">${t('wd_continue', 'Continue')}</button>
+      </div></div>`;
+    const onKey = e => { if (e.key === 'Escape') done(false); };
+    const done = ok => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(ok); };
+    overlay.addEventListener('click', e => {
+      const act = e.target.closest('[data-act]');
+      if (act) done(act.dataset.act === 'continue');
+      else if (e.target === overlay) done(false);
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-act="cancel"]').focus();
+  });
 }
 
 async function apiDelete(path) {
@@ -666,7 +726,100 @@ function setPipelineStatus(id, status) {
 }
 function markMaterialDone(id) { const pl = getPipeline(id); if (pl && pl.status === 0) { setPipelineStatus(id, 1); rerenderPage(); } }
 function markWeldlistDone(id) { const pl = getPipeline(id); if (pl && pl.status === 1) { setPipelineStatus(id, 2); rerenderPage(); } }
-function downloadBuilderDoc(id) { const pl = getPipeline(id); if (!pl) return; if (pl.status === 2) setPipelineStatus(id, 3); window.open(API_BASE + '/pipelines/' + id + '/builder-doc', '_blank', 'noopener'); rerenderPage(); }
+async function downloadBuilderDoc(id) {
+  const pl = getPipeline(id); if (!pl) return;
+  if (pl.status === 2) setPipelineStatus(id, 3);
+  rerenderPage();
+  showGlobalProgress();
+  try {
+    const resp = await fetch(API_BASE + '/pipelines/' + id + '/builder-doc');
+    if (!resp.ok) {
+      const errData = await resp.json().catch(() => ({}));
+      throw new Error(errData.message || errData.error || resp.statusText || 'Download failed');
+    }
+    const blob = await resp.blob();
+    const filename = downloadNameFrom(resp, `${pl.no}_welder.xlsx`);
+    saveBlobAs(blob, filename);
+    const fresh = await apiGet('/pipelines/' + id).catch(() => null);
+    if (fresh) pl.docBuilder = fresh.docBuilder;
+    rerenderPage();
+    handleSharePointUploadResult(id, 'builder', resp.headers.get('X-SharePoint-Upload'), blob, filename);
+  } catch (ex) {
+    console.error('Welder document error:', ex);
+    alert('Download failed: ' + ex.message);
+  } finally {
+    hideGlobalProgress();
+  }
+}
+
+/* ---- Documents that could not be saved to SharePoint ----
+   The welder document and the final export are uploaded to SharePoint when they are
+   downloaded. SharePoint refuses to replace a file that someone has open in Excel; the
+   download still works, but the SharePoint copy (and the link to it) stays the old version.
+   The user is told, and "Try again" sends exactly the downloaded file - kept in the page's
+   memory, nothing is generated or downloaded again. */
+function downloadNameFrom(resp, fallback) {
+  const cd = resp.headers.get('Content-Disposition');
+  return (cd && cd.includes('filename=')) ? cd.split('filename=')[1].replace(/["']/g, '').trim() : fallback;
+}
+function saveBlobAs(blob, filename) {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+}
+function handleSharePointUploadResult(plId, doc, status, blob, filename) {
+  if (status !== 'locked' && status !== 'failed') return;      /* ok / none: nothing to say */
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay open';
+  overlay.style.zIndex = '1000';
+  const docName = doc === 'final' ? t('sp_doc_final', 'final document') : t('sp_doc_builder', 'welder document');
+  const reason = status => status === 'locked'
+    ? t('sp_locked', 'The file on SharePoint is open in Excel and could not be replaced.')
+    : t('sp_failed', 'SharePoint did not accept the file.');
+  overlay.innerHTML = `<div class="modal" style="max-width:520px;">
+    <h2>${t('sp_title', 'Not saved to SharePoint')}</h2>
+    <p style="margin:0 0 8px;"><strong>${escapeHtml(filename)}</strong> (${docName})</p>
+    <p style="margin:0 0 8px;" data-part="reason">${reason(status)}</p>
+    <p style="margin:0 0 8px;">${t('sp_download_ok', 'Your download worked, but the SharePoint copy is still the previous version.')}</p>
+    <p style="margin:0;" data-part="hint">${t('sp_close_then_retry', 'Close the file in Excel, then click "Try again".')}</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" data-act="later">${t('sp_later', 'Later')}</button>
+      <button type="button" class="btn btn-primary" data-act="retry">${t('sp_try_again', 'Try again')}</button>
+    </div></div>`;
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  overlay.addEventListener('click', async e => {
+    const act = e.target.closest('[data-act]');
+    if (!act) { if (e.target === overlay) close(); return; }
+    if (act.dataset.act === 'later') { close(); return; }
+    const btn = act;
+    setButtonLoading(btn, true, t('sp_uploading', 'Uploading…'));
+    try {
+      const fd = new FormData();
+      fd.append('file', blob, filename);
+      const r = await fetch(`${API_BASE}/pipelines/${plId}/sharepoint-upload/${doc}`, { method: 'POST', body: fd });
+      const res = await r.json().catch(() => ({}));
+      if (r.ok && res.status === 'ok') {
+        const pl = getPipeline(plId);
+        if (pl) { if (doc === 'final') pl.docFinal = res.url; else pl.docBuilder = res.url; }
+        close();
+        rerenderPage();
+        return;
+      }
+      overlay.querySelector('[data-part="reason"]').textContent = res.status === 'locked'
+        ? t('sp_still_locked', 'The file is still open in Excel. Close it everywhere and try again.')
+        : (res.message || t('sp_failed', 'SharePoint did not accept the file.'));
+    } catch (ex) {
+      overlay.querySelector('[data-part="reason"]').textContent = t('sp_failed', 'SharePoint did not accept the file.') + ' ' + ex.message;
+    } finally {
+      setButtonLoading(btn, false);
+    }
+  });
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
+}
 const _exportingFinalPipelines = new Set();
 let _exportingPipelineId = null;
 
@@ -687,6 +840,7 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true)
   _exportingFinalPipelines.add(id);
   renderWorkflowBar(pl);
   showGlobalProgress();
+  let spRetry = null;
   try {
     const params = new URLSearchParams({
       include_welder_sign: includeWelder ? 'true' : 'false',
@@ -701,19 +855,9 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true)
       throw new Error(errData.error || resp.statusText || 'Export failed');
     }
     const blob = await resp.blob();
-    const cd = resp.headers.get('Content-Disposition');
-    let filename = `${pl.no}_final.xlsx`;
-    if (cd && cd.includes('filename=')) {
-      filename = cd.split('filename=')[1].replace(/["']/g, '').trim();
-    }
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+    const filename = downloadNameFrom(resp, `${pl.no}_final.xlsx`);
+    saveBlobAs(blob, filename);
+    const spStatus = resp.headers.get('X-SharePoint-Upload');
 
     // Refresh pipeline state from server
     const fresh = await apiGet('/pipelines/' + id);
@@ -721,6 +865,7 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true)
       pl.status = fresh.status;
       pl.docFinal = fresh.docFinal;
     }
+    spRetry = () => handleSharePointUploadResult(id, 'final', spStatus, blob, filename);
   } catch (ex) {
     console.error('Export final document error:', ex);
     alert('Export failed: ' + ex.message);
@@ -728,6 +873,7 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true)
     _exportingFinalPipelines.delete(id);
     hideGlobalProgress();
     rerenderPage();
+    if (spRetry) spRetry();       /* SharePoint refused the file: tell the user, offer Try again */
   }
 }
 
@@ -1927,6 +2073,7 @@ async function doSavePipelineMaterial(params) {
     if (materialReturnToWeld) { materialReturnToWeld = false; if (document.getElementById('modal-weld').classList.contains('open')) buildWeldMaterialChecklist(getChecked('input-weld-materials'), editingWeldId !== null); }
     rerenderPage();
   } catch (e) {
+    if (e && e.cancelled) return;          /* the user chose Cancel - the form stays open */
     console.error('Save material API error:', e);
     alert('Error saving material: ' + (e.message || e));
   } finally {
@@ -4070,7 +4217,7 @@ async function confirmArchive() {
     if (apiMap[type]) { await apiPost(apiMap[type] + (type === 'material' ? '/' + id : ''), type === 'material' ? { archived: true } : { id, archived: true }); }
   } catch (e) {
     setButtonLoading(btn, false);
-    alertSaveFailed(e);
+    if (!(e && e.cancelled)) alertSaveFailed(e);
     return;
   }
   const rec = DB[map[type]].find(x => x.id === id); if (rec) rec.archived = true;

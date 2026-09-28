@@ -146,44 +146,48 @@ def _signature_placer(include_welder_sign, include_inspector_sign):
     return place
 
 
+# Where each document goes in SharePoint, and which pipeline column holds its link.
+SP_DOCS = {
+    "builder": {"subfolder": "02 Schweissnahtliste", "suffix": "_welder.xlsx", "field": "doc_builder"},
+    "final":   {"subfolder": "Final",                "suffix": "_final.xlsx",  "field": "doc_final"},
+}
+
+
+def _upload_doc(pl, pr, doc, file_bytes):
+    """Upload a weld list document to SharePoint straight away and store its link.
+
+    Returns "ok", "locked" (open in Excel - SharePoint would not replace it), "failed" or
+    "none" (the project has no SharePoint folder). On anything but "ok" the stored link is
+    left as it was, so it keeps pointing at the previous version.
+    """
+    if not (pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id):
+        return "none"
+    from app.sharepoint import upload_to_pipeline_subfolder_ex
+    spec = SP_DOCS[doc]
+    url, status = upload_to_pipeline_subfolder_ex(
+        pr.sharepoint_drive_id, pr.sharepoint_folder_id,
+        pl.no, spec["subfolder"], f"{pl.no}{spec['suffix']}", file_bytes, XLSX_MIME)
+    if status == "ok" and url:
+        setattr(pl, spec["field"], url)
+    return status
+
+
+def _xlsx_response(file_bytes, filename, sp_status):
+    resp = send_file(io.BytesIO(file_bytes), mimetype=XLSX_MIME, as_attachment=True, download_name=filename)
+    # Read by the page: "locked" / "failed" -> tell the user the SharePoint copy is still old
+    resp.headers["X-SharePoint-Upload"] = sp_status
+    return resp
+
+
 @builder_doc_bp.route("/<int:pipeline_id>/builder-doc", methods=["GET"])
 def generate_builder_doc(pipeline_id):
     """Welder document (stage 3): the weld inspection list, without signatures."""
     pl, pr, file_bytes = build_weld_list_workbook(pipeline_id)
-
-    # Save to SharePoint: {pipeline_no}/{filename}
-    if pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id:
-        import threading
-        from flask import current_app
-        app = current_app._get_current_object()
-        drive_id = pr.sharepoint_drive_id
-        folder_id = pr.sharepoint_folder_id
-        pipe_no = pl.no
-        pl_id = pl.id
-        content = file_bytes
-
-        def _bg_upload():
-            with app.app_context():
-                from app.sharepoint import upload_to_pipeline_subfolder
-                import logging
-                try:
-                    url = upload_to_pipeline_subfolder(
-                        drive_id, folder_id,
-                        pipe_no, "02 Schweissnahtliste",
-                        f"{pipe_no}_welder.xlsx", content,
-                        XLSX_MIME
-                    )
-                    if url:
-                        pipeline = Pipeline.query.get(pl_id)
-                        pipeline.doc_builder = url
-                        db.session.commit()
-                except Exception as e:
-                    logging.getLogger(__name__).error(f"Failed to upload builder doc to SharePoint: {e}")
-
-        threading.Thread(target=_bg_upload, daemon=True).start()
-
-    filename = f"{pl.no}_welder.xlsx"
-    return send_file(io.BytesIO(file_bytes), mimetype=XLSX_MIME, as_attachment=True, download_name=filename)
+    # Uploaded straight away (it used to run in the background after the download), so the
+    # page can be told when SharePoint refused it.
+    sp_status = _upload_doc(pl, pr, "builder", file_bytes)
+    db.session.commit()
+    return _xlsx_response(file_bytes, f"{pl.no}_welder.xlsx", sp_status)
 
 
 @builder_doc_bp.route("/<int:pipeline_id>/export-final-excel", methods=["GET"])
@@ -202,21 +206,35 @@ def export_final_excel(pipeline_id):
         include_welder_sign=include_welder_sign,
         include_inspector_sign=include_inspector_sign,
     )
-
-    filename = f"{pl.no}_final.xlsx"
-    if pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id:
-        from app.sharepoint import upload_to_pipeline_subfolder
-        url = upload_to_pipeline_subfolder(
-            pr.sharepoint_drive_id, pr.sharepoint_folder_id,
-            pl.no, "Final", filename, file_bytes, XLSX_MIME
-        )
-        if url:
-            pl.doc_final = url
-
+    sp_status = _upload_doc(pl, pr, "final", file_bytes)
     pl.status = max(pl.status or 0, 5)
     db.session.commit()
+    return _xlsx_response(file_bytes, f"{pl.no}_final.xlsx", sp_status)
 
-    return send_file(io.BytesIO(file_bytes), mimetype=XLSX_MIME, as_attachment=True, download_name=filename)
+
+@builder_doc_bp.route("/<int:pipeline_id>/sharepoint-upload/<doc>", methods=["POST"])
+def retry_sharepoint_upload(pipeline_id, doc):
+    """"Try again" after SharePoint refused a document: the page sends back exactly the file
+    it downloaded, and it is only uploaded - nothing is generated again."""
+    from flask import request
+    if doc not in SP_DOCS:
+        return jsonify({"error": "invalid_request", "message": "Unknown document."}), 400
+    f = request.files.get("file")
+    content = f.read() if f else b""
+    # An .xlsx file is a zip archive: it starts with "PK". Anything else is refused.
+    if not content.startswith(b"PK") or len(content) > 50 * 1024 * 1024:
+        return jsonify({"error": "invalid_request", "message": "This is not an Excel file."}), 400
+    pl = Pipeline.query.get_or_404(pipeline_id)
+    pr = Project.query.get(pl.project_id) if pl.project_id else None
+    status = _upload_doc(pl, pr, doc, content)
+    db.session.commit()
+    if status == "ok":
+        return jsonify({"status": "ok", "url": getattr(pl, SP_DOCS[doc]["field"])}), 200
+    if status == "locked":
+        return jsonify({"status": "locked", "message": "The file is still open in Excel."}), 423
+    if status == "none":
+        return jsonify({"status": "none", "message": "This project has no SharePoint folder."}), 400
+    return jsonify({"status": "failed", "message": "SharePoint did not accept the file. Please try again later."}), 502
 
 
 def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_inspector_sign=False):

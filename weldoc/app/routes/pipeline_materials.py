@@ -82,6 +82,18 @@ def create_pipeline_material():
     pipeline_id = data["pipelineId"]
     project_material_id = data["projectMaterialId"]
 
+    # A new material connected to two parts that are welded to each other is "inserted
+    # between" them, which deletes their weld. Welds with recorded work need confirming first.
+    new_pm = ProjectMaterial.query.get(project_material_id)
+    new_is_wire = bool(new_pm and new_pm.global_material and
+                       (new_pm.global_material.category or "").strip().lower() == "welding wire")
+    if "connections" in data and not new_is_wire:
+        ask = _confirm_weld_deletion(_welds_deleted_by_connection_change(
+            pipeline_id, None, [], data["connections"],
+            start_of_plumbing=bool(data.get("startOfPlumbing"))), data)
+        if ask:
+            return ask
+
     # Determine position (next sequential letter, preventing duplicates)
     existing_mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
@@ -184,6 +196,21 @@ def edit_pipeline_material(pm_id):
     """Edit a pipeline material (position, connections, start/end)."""
     m = PipelineMaterial.query.get_or_404(pm_id)
     data = request.get_json()
+
+    # Welds this edit would delete (archiving the material, removing a connection, the
+    # "inserted between" rule). Worked out before anything is changed; welds with recorded
+    # work need the user's confirmation first.
+    new_pos = data.get("position") or m.position
+    at_risk = []
+    if data.get("archived") and not m.archived:
+        at_risk += _welds_on_material(m.pipeline_id, new_pos)
+    if "connections" in data and not _is_wire(m):
+        at_risk += _welds_deleted_by_connection_change(
+            m.pipeline_id, new_pos, [c for c in m.connections], data["connections"],
+            own_id=m.id, start_of_plumbing=bool(data.get("startOfPlumbing", m.start_of_plumbing)))
+    ask = _confirm_weld_deletion(at_risk, data)
+    if ask:
+        return ask
 
     # The specs may already have been rewritten by the global/project material calls that run
     # before this one, so the client sends the global material id it pointed at beforehand.
@@ -465,6 +492,10 @@ def get_waz_package(pm_id):
 def delete_pipeline_material(pm_id):
     """Archive a pipeline material with connection bridging, weld cleanup, and WAZ SharePoint sync."""
     m = PipelineMaterial.query.get_or_404(pm_id)
+    ask = _confirm_weld_deletion(_welds_on_material(m.pipeline_id, m.position),
+                                 request.get_json(silent=True) or {})
+    if ask:
+        return ask
     _archive_pipeline_material(m)
     return jsonify({"ok": True}), 200
 
@@ -1360,6 +1391,131 @@ def _copy_waz_to_pipeline_folder(m):
     return _build_and_save_waz_package(m)
 
 
+# --- Welds that an action would delete ------------------------------------------------------
+# Archiving a material, removing a connection and the "inserted between" rule all delete
+# welds as a side effect. A weld with recorded work (welder, inspector, date, results,
+# remarks, photo, video) must never disappear without the user seeing it: the action is
+# first answered with 409 "confirm_weld_deletion" and the list of those welds, and only runs
+# once the request comes back with their ids in "confirmDeleteWelds". The list is worked out
+# again on every request, so a weld that got work in the meantime is asked about again.
+
+def _weld_work(w):
+    """What is recorded on a weld, for the confirmation dialog. Empty dict = nothing."""
+    from app.models.welder import Welder
+
+    def person(pid, legacy):
+        if pid:
+            p = Welder.query.get(pid)
+            if p:
+                return p.no or p.name or str(pid)
+        return (legacy or "").strip()
+
+    work = {}
+    welder = person(w.welder_id, w.welder)
+    inspector = person(w.inspector_id, w.inspector)
+    if welder:
+        work["welder"] = welder
+    if inspector:
+        work["inspector"] = inspector
+    if w.date:
+        work["date"] = w.date
+    for key in ("visual", "endoscopy"):
+        v = (getattr(w, key) or "").strip()
+        if v and v.lower() not in ("n/a", "na", "n.a."):
+            work[key] = v
+    if (w.remarks or "").strip():
+        work["remarks"] = True
+    if (w.endoscopy_image_url or "").strip():
+        work["photo"] = True
+    if (w.endoscopy_video_url or "").strip():
+        work["video"] = True
+    return work
+
+
+def _welds_on_joint(pipeline_id, pos_a, pos_b):
+    if not pos_a or not pos_b:
+        return []
+    return Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
+        db.or_(
+            db.and_(Weld.between_a == pos_a, Weld.between_b == pos_b),
+            db.and_(Weld.between_a == pos_b, Weld.between_b == pos_a),
+        )
+    ).all()
+
+
+def _welds_on_material(pipeline_id, pos):
+    if not pos:
+        return []
+    return Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
+        db.or_(Weld.between_a == pos, Weld.between_b == pos)
+    ).all()
+
+
+def _is_wire(pm):
+    pmat = pm.project_material if pm else None
+    gm = pmat.global_material if pmat else None
+    return bool(gm and (gm.category or "").strip().lower() == "welding wire")
+
+
+def _welds_deleted_by_connection_change(pipeline_id, own_pos, current_conns, conn_positions,
+                                        own_id=None, start_of_plumbing=False):
+    """Welds that _update_connections would delete - worked out without changing anything.
+
+    current_conns: the material's connections now ([] for a new material). Mirrors
+    _update_connections: welds on removed connections, and - when the connections change or
+    the material is the start - the weld between the two connected parts that are joined to
+    each other (_split_linked_pair, the "inserted between" rule).
+    """
+    target = []
+    for val in conn_positions or []:
+        c = _find_mat_by_id_or_pos(pipeline_id, val)
+        if not c or (own_id and c.id == own_id) or c in target or _is_wire(c):
+            continue
+        target.append(c)
+
+    welds = []
+    for rem in current_conns:
+        if rem not in target:
+            welds += _welds_on_joint(pipeline_id, own_pos, rem.position)
+
+    changed = {c.id for c in current_conns} != {c.id for c in target}
+    if changed or start_of_plumbing:
+        conns = [c for c in target if not c.archived and c.id != own_id]
+        pairs = [(a, b) for i, a in enumerate(conns) for b in conns[i + 1:] if b in a.connections]
+        if len(pairs) == 1:
+            a, b = pairs[0]
+            welds += _welds_on_joint(pipeline_id, a.position, b.position)
+    return welds
+
+
+def _confirm_weld_deletion(welds, data):
+    """None when the action may go ahead, otherwise the 409 response asking to confirm."""
+    seen, at_risk = set(), []
+    for w in welds:
+        if w.id in seen:
+            continue
+        seen.add(w.id)
+        work = _weld_work(w)
+        if work:
+            at_risk.append((w, work))
+    if not at_risk:
+        return None
+    try:
+        confirmed = {int(i) for i in (data or {}).get("confirmDeleteWelds") or []}
+    except (TypeError, ValueError):
+        confirmed = set()
+    if {w.id for w, _ in at_risk} <= confirmed:
+        return None
+    return jsonify({
+        "error": "confirm_weld_deletion",
+        "message": "This change would delete weld(s) that already have recorded work.",
+        "welds": [{
+            "id": w.id, "weldNo": w.weld_no, "betweenA": w.between_a, "betweenB": w.between_b,
+            **work,
+        } for w, work in sorted(at_risk, key=lambda x: (_weld_no_int(x[0].weld_no) or 0, x[0].id))],
+    }), 409
+
+
 def _find_mat_by_id_or_pos(pipeline_id, val):
     if val is None:
         return None
@@ -1521,6 +1677,7 @@ def _sync_and_renumber_welds(pipeline_id):
     welds = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).order_by(Weld.id).all()
     valid_welds = []
     seen_pairs = set()
+    by_pair = {}
 
     for w in welds:
         if not w.between_a or not w.between_b:
@@ -1530,11 +1687,20 @@ def _sync_and_renumber_welds(pipeline_id):
             db.session.delete(w)
             continue
         pair = tuple(sorted([w.between_a, w.between_b], key=_letter_to_pos))
-        if pair in seen_pairs:
-            db.session.delete(w)
-            continue
+        by_pair.setdefault(pair, []).append(w)
+
+    # Two or more welds on the same joint: keep the one with the most recorded details
+    # (welder, inspector, date, results, remarks, photo, video) and delete the others. With
+    # the same amount of detail the oldest one is kept.
+    for pair, group in by_pair.items():
+        keep = group[0]
+        if len(group) > 1:
+            keep = max(group, key=lambda w: (len(_weld_work(w)), -w.id))
+            for w in group:
+                if w is not keep:
+                    db.session.delete(w)
         seen_pairs.add(pair)
-        valid_welds.append(w)
+        valid_welds.append(keep)
 
     # 2. Ensure every active connection pair has a weld
     for m in mats:

@@ -586,6 +586,31 @@ def upload_to_pipeline_waz_folder(drive_id, folder_id, pipeline_no, file_name, f
 
 def upload_to_pipeline_subfolder(drive_id, folder_id, pipeline_no, subfolder, file_name, file_content, content_type):
     """Upload a file to project_folder/Rohrleitungen/{pipeline_no}/{subfolder}/{file_name}."""
+    return upload_to_pipeline_subfolder_ex(drive_id, folder_id, pipeline_no, subfolder, file_name,
+                                           file_content, content_type)[0]
+
+
+def _is_locked_error(e):
+    """SharePoint refuses to replace a file that is open in Excel: 423 Locked (Graph
+    'resourceLocked'), sometimes reported as 409 with the same code."""
+    if not isinstance(e, urllib.error.HTTPError):
+        return False
+    if e.code == 423:
+        return True
+    try:
+        body = e.read().decode("utf-8", "ignore").lower()
+    except Exception:
+        body = ""
+    return e.code == 409 and ("locked" in body or "resourcelocked" in body)
+
+
+def upload_to_pipeline_subfolder_ex(drive_id, folder_id, pipeline_no, subfolder, file_name, file_content, content_type):
+    """Like upload_to_pipeline_subfolder, but says why it did not work.
+
+    Returns (web_url, status) with status "ok", "locked" (the file is open, e.g. in Excel,
+    and SharePoint would not replace it) or "failed" (any other error).
+    """
+    safe_pipeline, safe_file = pipeline_no, file_name
     try:
         safe_pipeline = _sanitize_name(pipeline_no)
         safe_sub = _sanitize_name(subfolder)
@@ -605,10 +630,13 @@ def upload_to_pipeline_subfolder(drive_id, folder_id, pipeline_no, subfolder, fi
             web_url = result.get("webUrl", "")
 
         current_app.logger.info(f"SharePoint: Uploaded '{safe_file}' to Rohrleitungen/{safe_pipeline}/{safe_sub}/")
-        return web_url
+        return web_url, "ok"
     except Exception as e:
-        current_app.logger.error(f"SharePoint: Failed to upload to Rohrleitungen/{safe_pipeline}/{subfolder}: {e}")
-        return None
+        locked = _is_locked_error(e)
+        current_app.logger.error(
+            f"SharePoint: {'File is locked (open in Excel?)' if locked else 'Failed'} - "
+            f"upload to Rohrleitungen/{safe_pipeline}/{subfolder}/{safe_file}: {e}")
+        return None, ("locked" if locked else "failed")
 
 
 def _download_sharepoint_file_content(url):
