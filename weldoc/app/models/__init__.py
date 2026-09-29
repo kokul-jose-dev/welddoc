@@ -8,3 +8,4 @@ from app.models.weld import Weld
 from app.models.person import User
 from app.models.welder import Welder, Certificate
 from app.models.wps_process import WpsProcess, seed_wps_processes
+from app.models.dropdown_hidden import DropdownHidden

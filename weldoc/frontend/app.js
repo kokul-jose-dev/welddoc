@@ -907,9 +907,20 @@ function buildSelectSimple(selectId, options, value) {
 function buildSelectOther(selectId, textId, options, value, noOther) {
   const sel = document.getElementById(selectId), txt = document.getElementById(textId);
   if (!sel) return;
-  const opts = options.slice();
+  /* Values hidden with the x next to a material dropdown are not offered while there is
+     something else to choose. Still offered (marked "hidden"): the value this field already
+     has, a value a material of the current project uses (so the project can reuse its own
+     materials), and - when every value left is hidden - the hidden ones, because the form has
+     narrowed the choice down to existing materials that carry them. */
+  const ddType = dropdownTypeOf(selectId);
+  let opts = options.slice();
+  if (ddType) {
+    const visible = opts.filter(o => o === value || !isHiddenDropdownValue(ddType, o) || projectUsesDropdownValue(ddType, o));
+    if (visible.some(o => o && o !== value)) opts = visible;
+  }
+  const hiddenMark = o => (ddType && isHiddenDropdownValue(ddType, o)) ? ` (${t('dd_hidden_mark', 'hidden')})` : '';
   const inList = value && value !== '__other__' && opts.includes(value);
-  sel.innerHTML = '<option value="">Select…</option>' + opts.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('') + (noOther ? '' : '<option value="__other__">+ Other (type it)…</option>');
+  sel.innerHTML = '<option value="">Select…</option>' + opts.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}${hiddenMark(o)}</option>`).join('') + (noOther ? '' : '<option value="__other__">+ Other (type it)…</option>');
   if (value === '__other__') {
     sel.value = '__other__';
     if (txt) txt.style.display = 'block';
@@ -923,6 +934,132 @@ function buildSelectOther(selectId, textId, options, value, noOther) {
     sel.value = value || '';
     if (txt) { txt.style.display = 'none'; txt.value = ''; }
   }
+  if (ddType) ensureDropdownHideButton(sel, ddType);
+}
+/* ---- Hiding mistyped values in the material dropdowns (the x next to a dropdown) ----
+   The x appears next to DN, diameter, thickness, surface, material code and DIN EN
+   dropdowns once a value is selected. It hides that value for everyone: it is no longer
+   offered in these dropdowns (materials that already use it keep it). Stored in
+   weldoc_dropdown_hidden, see app/routes/dropdown_values.py. Typing the value in again with
+   "+ Other" shows it again; the Materials page lists hidden values with "Show again". */
+let DD_HIDDEN = {};
+const DD_TYPE_LABELS = { dn: 'DN', diameter: 'Diameter', thickness: 'Thickness', surface: 'Surface', material_code: 'Material code', dien_no: 'DIN EN No.' };
+function dropdownTypeOf(selectId) {
+  const id = String(selectId || '');
+  if (/^(input-mat-dimension\d*|mp-dimension\d*|pm-dn\d+)$/.test(id)) return 'dn';
+  if (/^(input-mat|mp|pm)-diameter\d*$/.test(id)) return 'diameter';
+  if (/^(input-mat|mp|pm)-thickness\d*$/.test(id)) return 'thickness';
+  if (/^(input-mat|mp|pm)-surface$/.test(id)) return 'surface';
+  if (/^(input-mat|mp|pm)-code$/.test(id)) return 'material_code';
+  if (/^(input-mat|mp|pm)-dien$/.test(id)) return 'dien_no';
+  return null;
+}
+function isHiddenDropdownValue(type, value) {
+  const v = String(value || '').trim().toLowerCase();
+  return !!v && (DD_HIDDEN[type] || []).some(h => String(h).trim().toLowerCase() === v);
+}
+/* Does a material of the project on this page use the value? Only the pipeline and project
+   pages hold one project's materials in DB.projectMaterials. */
+const DD_PM_FIELDS = {
+  dn: ['dn1', 'dn2', 'dn3', 'dn4', 'dn5', 'dn6'], diameter: ['diameter', 'diameter2', 'diameter3'],
+  thickness: ['thickness', 'thickness2', 'thickness3'], surface: ['surface'],
+  material_code: ['materialCode'], dien_no: ['dienNo']
+};
+function projectUsesDropdownValue(type, value) {
+  if (PAGE.name !== 'pipeline-detail' && PAGE.name !== 'project-detail') return false;
+  const v = String(value || '').trim().toLowerCase();
+  if (!v) return false;
+  return (DB.projectMaterials || []).some(pm => !pm.archived &&
+    (DD_PM_FIELDS[type] || []).some(f => String(pm[f] || '').trim().toLowerCase() === v));
+}
+async function loadHiddenDropdownValues() {
+  try {
+    const r = await fetch(API_BASE + '/dropdown-hidden');
+    if (r.ok) DD_HIDDEN = await r.json();
+  } catch (e) { /* the dropdowns simply show everything */ }
+}
+loadHiddenDropdownValues();
+/* The x shares the "select-wrap" box the orange count badges use (updateDropdownCountBadge):
+   one wrapper per dropdown. The badge shows only while nothing is selected, the x only once
+   a value is, so they never overlap. */
+function _dropdownWrap(sel) {
+  let wrap = sel.parentElement;
+  if (!wrap || !wrap.classList.contains('select-wrap')) {
+    wrap = document.createElement('div');
+    wrap.className = 'select-wrap';
+    sel.parentNode.insertBefore(wrap, sel);
+    wrap.appendChild(sel);
+  }
+  return wrap;
+}
+function updateDropdownHideButton(sel) {
+  const wrap = sel && sel.closest('.select-wrap');
+  const btn = wrap && wrap.querySelector('.dd-hide-btn');
+  if (!btn) return;
+  /* No x for a value that is already hidden - it is marked "(hidden)" in the list instead,
+     and can be shown again on the Materials page. */
+  const type = dropdownTypeOf(sel.id);
+  btn.classList.toggle('show', !!sel.value && sel.value !== '__other__' && !isHiddenDropdownValue(type, sel.value));
+}
+function ensureDropdownHideButton(sel, type) {
+  const wrap = _dropdownWrap(sel);
+  if (!wrap.querySelector('.dd-hide-btn')) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'dd-hide-btn';
+    btn.innerHTML = '&times;';
+    btn.title = t('dd_hide_title', 'Remove this value from the list');
+    wrap.appendChild(btn);
+    btn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); hideDropdownValue(sel, type); });
+  }
+  if (!sel.dataset.ddHide) {
+    sel.dataset.ddHide = '1';
+    sel.addEventListener('change', () => updateDropdownHideButton(sel));
+  }
+  updateDropdownHideButton(sel);
+}
+async function hideDropdownValue(sel, type) {
+  const value = sel.value;
+  if (!value || value === '__other__' || isHiddenDropdownValue(type, value)) return;
+  const label = t('dd_type_' + type, DD_TYPE_LABELS[type] || type);
+  const q = t('dd_hide_q', 'Remove "{value}" from the {list} list?').replace('{value}', value).replace('{list}', label)
+    + '\n\n' + t('dd_hide_note', 'It will no longer be offered in the dropdowns, for everyone. Materials that already use it keep it. It can be shown again on the Materials page.');
+  if (!confirm(q)) return;
+  try {
+    DD_HIDDEN = await apiPost('/dropdown-hidden', { type, value });
+  } catch (e) { alertSaveFailed(e); return; }
+  const opt = [...sel.options].find(o => o.value === value);
+  if (opt) opt.remove();
+  sel.value = '';
+  sel.dispatchEvent(new Event('change', { bubbles: true }));   /* the form's own cascade reacts as to a cleared field */
+  updateDropdownHideButton(sel);
+}
+/* Materials page: the hidden values, each with "Show again" */
+async function openHiddenDropdownValues() {
+  await loadHiddenDropdownValues();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay open';
+  overlay.style.zIndex = '1000';
+  const render = () => {
+    const groups = Object.keys(DD_TYPE_LABELS).filter(tp => (DD_HIDDEN[tp] || []).length);
+    const list = groups.length ? groups.map(tp => `<div style="margin-bottom:12px;"><div style="font-weight:700;margin-bottom:4px;">${escapeHtml(t('dd_type_' + tp, DD_TYPE_LABELS[tp]))}</div>`
+      + (DD_HIDDEN[tp] || []).map(v => `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--border);"><span class="mono">${escapeHtml(v)}</span>`
+        + `<button type="button" class="btn-link" data-type="${escapeHtml(tp)}" data-value="${escapeHtml(v)}">${t('dd_show_again', 'Show again')}</button></div>`).join('') + '</div>').join('')
+      : `<p class="muted">${t('dd_none_hidden', 'No values are hidden.')}</p>`;
+    overlay.innerHTML = `<div class="modal" style="max-width:480px;"><h2>${t('dd_hidden_title', 'Hidden dropdown values')}</h2>${list}
+      <div class="modal-actions"><button type="button" class="btn btn-ghost" data-act="close">${t('close', 'Close')}</button></div></div>`;
+  };
+  render();
+  overlay.addEventListener('click', async e => {
+    if (e.target === overlay || e.target.closest('[data-act="close"]')) { overlay.remove(); return; }
+    const b = e.target.closest('[data-type]');
+    if (!b) return;
+    try {
+      const r = await fetch(API_BASE + '/dropdown-hidden', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: b.dataset.type, value: b.dataset.value }) });
+      if (r.ok) { DD_HIDDEN = await r.json(); render(); }
+    } catch (ex) { alertSaveFailed(ex); }
+  });
+  document.body.appendChild(overlay);
 }
 function toggleSelectOther(selectId, textId) { const sel = document.getElementById(selectId), txt = document.getElementById(textId); if (sel.value === '__other__') { txt.style.display = 'block'; txt.focus(); } else { txt.style.display = 'none'; } }
 function readSelectOther(selectId, textId) { const sel = document.getElementById(selectId); if (!sel) return ''; const txt = document.getElementById(textId); return sel.value === '__other__' ? (txt ? specTypedToDisplay(specFieldKind(selectId), txt.value.trim()) : '') : sel.value; }

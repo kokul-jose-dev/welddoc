@@ -782,3 +782,8 @@ body.page-project-detail .col-filter-btn {
 }
 
 
+
+/* x next to a material dropdown - hides the selected value from the list (app.js ensureDropdownHideButton) */
+.dd-hide-btn{position:absolute;right:26px;top:50%;transform:translateY(-50%);z-index:3;display:none;border:none;background:transparent;color:var(--text-muted);font-size:16px;line-height:1;padding:2px 6px;border-radius:4px;cursor:pointer;}
+.dd-hide-btn.show{display:block;}
+.dd-hide-btn:hover{color:var(--danger);background:var(--danger-soft);}

@@ -114,7 +114,10 @@ def create_app():
         if "127.0.0.1" in request.host:
             return redirect(request.url.replace("127.0.0.1", "localhost"))
         if app.debug and 'user' not in session:
-            session['user'] = {'email': 'jeny@istinox.ch', 'name': 'Jeny M Jerry', 'role': 'office'}
+            # Local development only: logged in automatically as this user. Set DEV_USER_EMAIL /
+            # DEV_USER_NAME in .env so "who did it" fields show the real person.
+            session['user'] = {'email': os.getenv('DEV_USER_EMAIL', 'jeny@istinox.ch').strip().lower(),
+                               'name': os.getenv('DEV_USER_NAME', 'Jeny M Jerry').strip(), 'role': 'office'}
         path = request.path
         # Allow public paths and static assets (css/js/images)
         if path in PUBLIC_PATHS:

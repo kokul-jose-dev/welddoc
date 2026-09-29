@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from app.database import db
 from app.models.global_material import GlobalMaterial
+from app.routes.dropdown_values import unhide_entered_values
 from app.material_utils import (
     normalize_gm_data,
     find_matching_global_material,
@@ -53,6 +54,7 @@ def create_or_find_global_material():
         dien_no=norm["dien_no"],
         surface=norm["surface"],
     )
+    unhide_entered_values(norm)          # a hidden value typed in again is shown again
     db.session.add(m)
     db.session.commit()
     return jsonify(_serialize(m)), 201
@@ -91,6 +93,7 @@ def edit_global_material(gm_id):
         db.session.commit()
         return jsonify(_serialize(existing_other)), 200
 
+    unhide_entered_values(norm, m)       # only values that changed in this edit
     m.category = norm["category"]
     m.dn1 = norm["dn1"]
     m.dn2 = norm["dn2"]
@@ -199,6 +202,7 @@ def update_global_material_spec():
             material_code=norm["material_code"],
             dien_no=norm["dien_no"],
         )
+        unhide_entered_values(norm)
         db.session.add(gm)
         db.session.commit()
         return jsonify(_serialize(gm)), 201
@@ -209,6 +213,7 @@ def update_global_material_spec():
             db.session.commit()
             return jsonify(_serialize(existing_other)), 200
 
+        unhide_entered_values(norm, gm)
         gm.category = norm["category"]
         gm.item_description = norm["item_description"]
         gm.dn1 = norm["dn1"]
