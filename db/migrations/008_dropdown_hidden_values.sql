@@ -22,10 +22,15 @@ SET NOCOUNT ON;
 
 -- A table the app created by itself at startup (db.create_all) has plain varchar columns and
 -- generated names. While it is still empty it is simply replaced by the definition below.
-IF OBJECT_ID('weldoc_dropdown_hidden', 'U') IS NOT NULL
-   AND NOT EXISTS (SELECT 1 FROM weldoc_dropdown_hidden)
-   AND OBJECT_ID('DF_weldoc_dropdown_hidden_at', 'D') IS NULL
-    DROP TABLE weldoc_dropdown_hidden;
+-- (Nested, and the emptiness check run as its own statement: SQL Server does not guarantee
+-- that "exists AND is empty" skips reading a table that does not exist.)
+IF OBJECT_ID('weldoc_dropdown_hidden', 'U') IS NOT NULL AND OBJECT_ID('DF_weldoc_dropdown_hidden_at', 'D') IS NULL
+BEGIN
+    DECLARE @rows INT;
+    EXEC sp_executesql N'SELECT @n = COUNT(*) FROM weldoc_dropdown_hidden', N'@n INT OUTPUT', @n = @rows OUTPUT;
+    IF @rows = 0
+        EXEC (N'DROP TABLE weldoc_dropdown_hidden');
+END
 
 IF OBJECT_ID('weldoc_dropdown_hidden', 'U') IS NULL
 BEGIN
