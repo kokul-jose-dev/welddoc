@@ -493,6 +493,15 @@ function compareByPipelineNo(a, b) {
 }
 function pipelines() { return DB.pipelines.filter(p => !p.archived).sort(compareByPipelineNo); }
 function materials() { return DB.materials.filter(m => !m.archived); }
+/* Archived after welding: materials and welds that stay in the lists, struck through, with who,
+   when and why. Only shown - never part of the pipeline (not in DB.materials / DB.welds). */
+function takePipelineExtras(data) {
+  if (!data) return;
+  DB.struckMaterials = normalizeMaterials(data.struckMaterials || []);
+  DB.struckWelds = normalizeWelds(data.struckWelds || []);
+  DB.pipelineLocked = Boolean(data.locked);
+}
+function struckMaterial(id) { return (DB.struckMaterials || []).find(m => m.id === id); }
 function welds() { return DB.welds.filter(w => !w.archived); }
 function nextId(key) { return DB.counters[key]++; }
 
@@ -1607,6 +1616,7 @@ function mountModals() {
   <div class="modal-overlay" id="modal-archive"><div class="modal modal-small">
     <button class="modal-close" onclick="closeModal('modal-archive')">&times;</button><h2 id="modal-archive-title" data-i18n="archive_title">Archive?</h2>
     <p id="archive-confirm-text"></p>
+    <div class="field" id="archive-reason-field" style="display:none;"><span class="lbl"><span data-i18n="archive_reason">Reason</span> <span class="req">*</span></span><textarea id="archive-reason" rows="3" maxlength="1000"></textarea><div class="modal-err" id="archive-reason-err"></div></div>
     <div class="modal-actions"><button class="btn btn-ghost" id="archive-cancel-btn" onclick="closeModal('modal-archive')" data-i18n="cancel">Cancel</button><button class="btn btn-primary" id="archive-confirm-btn" onclick="confirmArchive()" data-i18n="archive">Archive</button></div>
   </div></div>
 
@@ -1909,6 +1919,19 @@ function attachFormHandlers() {
     const uniqueConns = [...new Set(conns)];
     const err = document.getElementById('material-err');
     err.classList.remove('show');
+    if (pipelineNumberingFrozen(PAGE.pipelineId)) {
+      const had = new Set(editingMaterialId !== null ? ((getMaterial(editingMaterialId) || {}).connections || []) : []);
+      for (let i = 0; i < uniqueConns.length; i++) {
+        for (let j = i + 1; j < uniqueConns.length; j++) {
+          const a = getMaterial(uniqueConns[i]), b = getMaterial(uniqueConns[j]);
+          if (a && b && (had.has(a.id) ? !had.has(b.id) : true) && (a.connections || []).includes(b.id)) {
+            err.textContent = t('conn_splice_locked', '{a} and {b} are welded to each other. A welder or inspector is assigned in this pipeline, so that weld cannot be removed by inserting a material between them. Archive the part you are replacing first, then connect the new material to its neighbours.')
+              .replace('{a}', posLetter(a.position)).replace('{b}', posLetter(b.position));
+            err.classList.add('show'); return;
+          }
+        }
+      }
+    }
     /* check for duplicate start */
     const existingStart = pipelineMaterials(PAGE.pipelineId).find(m => m.startOfPlumbing && m.id !== editingMaterialId);
     if (start && existingStart) {
@@ -2237,6 +2260,7 @@ async function doSavePipelineMaterial(params) {
     const freshPipeData = await apiGet('/pipeline-detail/' + PAGE.pipelineId);
     DB.materials = normalizeMaterials(freshPipeData.materials || []);
     DB.welds = normalizeWelds(freshPipeData.welds || []);
+    takePipelineExtras(freshPipeData);
     if (freshPipeData.projectMaterials && Array.isArray(freshPipeData.projectMaterials)) DB.projectMaterials = freshPipeData.projectMaterials;
     rebuildRelationships();
     saveDB();
@@ -3924,17 +3948,21 @@ function _removeMatCurrentWazDoc() {
   _renderMatWazDoc();
 }
 function connectableMaterials() { return pipelineMaterials(PAGE.pipelineId).filter(m => m.id !== editingMaterialId && (m.piece || '').toLowerCase() !== 'welding wire'); }
-function connRowHtml(selectedId) {
+function connRowHtml(selectedId, fixed) {
   const opts = connectableMaterials().map(m => `<option value="${m.id}" ${m.id === selectedId ? 'selected' : ''}>${posLetter(m.position)} · ${escapeHtml(m.piece)} · ${escapeHtml(m.itemDescription)}</option>`).join('');
+  /* After welding an existing connection is part of the record: shown, but fixed. */
+  if (fixed) return `<div class="conn-row conn-fixed" title="${escapeHtml(t('conn_fixed_hint', 'A welder or inspector is assigned in this pipeline: existing connections cannot be changed. Archive the material to take it out.'))}"><select disabled>${opts}</select><span class="conn-lock">🔒</span></div>`;
   return `<div class="conn-row"><select><option value="">${t('select_material', 'Select material…')}</option>${opts}</select><button type="button" class="conn-remove" onclick="this.parentElement.remove(); updateConnHint();">✕</button></div>`;
 }
-function addConnRow(selectedId) { document.getElementById('conn-rows').insertAdjacentHTML('beforeend', connRowHtml(selectedId || 0)); updateConnHint(); }
+function addConnRow(selectedId, fixed) { document.getElementById('conn-rows').insertAdjacentHTML('beforeend', connRowHtml(selectedId || 0, fixed)); updateConnHint(); }
 function renderConnRows(preset) {
   const container = document.getElementById('conn-rows'); container.innerHTML = '';
   const allMats = connectableMaterials();
   const validIds = new Set(allMats.map(m => m.id));
   const list = (preset || []).filter(cid => validIds.has(cid));
-  list.forEach(cid => addConnRow(cid));
+  const editing = editingMaterialId !== null ? getMaterial(editingMaterialId) : null;
+  const fixed = new Set(editing && pipelineNumberingFrozen(editing.pipelineId) ? (editing.connections || []) : []);
+  list.forEach(cid => addConnRow(cid, fixed.has(cid)));
   updateConnHint();
 }
 function updateConnHint() {
@@ -4451,7 +4479,31 @@ function openArchiveModal(type, id) {
   document.getElementById('modal-archive-title').textContent = `${t('archive', 'Archive')} ${nounText}?`;
   document.getElementById('archive-confirm-text').textContent = `${t('archive_confirm_text', 'Archive "{label}"? It will be hidden from the lists.').replace('{label}', label)}${warn}`;
   document.getElementById('archive-confirm-btn').textContent = `${t('archive', 'Archive')} ${nounText}`;
-  openModal('modal-archive'); document.getElementById('archive-cancel-btn').focus();
+  /* After welding a material is struck through, not hidden - with a reason. */
+  const strike = (type === 'material' && pipelineNumberingFrozen(getMaterial(id).pipelineId))
+    || (type === 'weld' && pipelineNumberingFrozen(getWeld(id).pipelineId));
+  showArchiveReason(strike, strike ? (type === 'weld' ? archiveWeldStrikeText(getWeld(id).weldNo) : archiveStrikeText(id)) : '');
+  openModal('modal-archive');
+  if (strike) document.getElementById('archive-reason').focus(); else document.getElementById('archive-cancel-btn').focus();
+}
+function archiveStrikeText(matId, weldNos) {
+  const m = getMaterial(matId);
+  const nos = weldNos || materialWelds(matId).map(w => w.weldNo).sort((a, b) => Number(a) - Number(b));
+  const letter = m ? posLetter(m.position) : '';
+  return t('archive_strike_text', 'A welder or inspector is assigned in this pipeline, so {mat} and its welds {welds} are not deleted: they stay in the lists, struck through, with your name, the date and the reason. Afterwards connect its neighbours to each other, or add a new material between them - new welds get new numbers.')
+    .replace('{mat}', letter).replace('{welds}', nos.length ? nos.join(', ') : '—');
+}
+function archiveWeldStrikeText(weldNo) {
+  return t('archive_weld_strike_text', 'A welder or inspector is assigned in this pipeline, so weld {no} is not deleted: it stays in the weld list, struck through, with your name, the date and the reason. Its two materials stay connected, so the joint gets a new weld with a new number.')
+    .replace('{no}', weldNo);
+}
+function showArchiveReason(on, text) {
+  const field = document.getElementById('archive-reason-field');
+  if (!field) return;
+  field.style.display = on ? '' : 'none';
+  document.getElementById('archive-reason').value = '';
+  document.getElementById('archive-reason-err').classList.remove('show');
+  if (on && text) document.getElementById('archive-confirm-text').textContent = text;
 }
 /* A save the server refused: say why, in the user's words from the server (see
    app/db_errors.py and app/spec_values.py), instead of failing silently. */
@@ -4464,10 +4516,26 @@ async function confirmArchive() {
   const { type, id } = deleteContext;
   const map = { client: 'clients', project: 'projects', pipeline: 'pipelines', welder: 'people', weld: 'welds', material: 'materials' };
   const apiMap = { client: '/clients', project: '/projects', pipeline: '/pipelines', weld: '/welds', material: '/pipeline-materials' };
+  const reasonField = document.getElementById('archive-reason-field');
+  const needsReason = reasonField && reasonField.style.display !== 'none';
+  const reason = needsReason ? document.getElementById('archive-reason').value.trim() : '';
+  if (needsReason && !reason) {
+    const rErr = document.getElementById('archive-reason-err');
+    rErr.textContent = t('archive_reason_required', 'Please enter the reason.'); rErr.classList.add('show');
+    setButtonLoading(btn, false); return;
+  }
   try {
-    if (apiMap[type]) { await apiPost(apiMap[type] + (type === 'material' ? '/' + id : ''), type === 'material' ? { archived: true } : { id, archived: true }); }
+    const body = type === 'material' ? { archived: true } : { id, archived: true };
+    if (reason) body.archiveReason = reason;
+    if (apiMap[type]) { await apiPost(apiMap[type] + (type === 'material' ? '/' + id : ''), body); }
   } catch (e) {
     setButtonLoading(btn, false);
+    if (e && e.body && e.body.error === 'archive_reason_required') {
+      /* the pipeline got a welder since the page was loaded: ask for the reason now */
+      showArchiveReason(true, type === 'weld' ? archiveWeldStrikeText((e.body.weldNos || [''])[0]) : archiveStrikeText(id, e.body.weldNos || []));
+      document.getElementById('archive-reason').focus();
+      return;
+    }
     if (!(e && e.cancelled)) alertSaveFailed(e);
     return;
   }
@@ -4488,6 +4556,7 @@ async function confirmArchive() {
         const data = await apiGet('/pipeline-detail/' + pipeId);
         DB.materials = normalizeMaterials(data.materials || []);
         DB.welds = normalizeWelds(data.welds || []);
+        takePipelineExtras(data);
         if (data.projectMaterials && Array.isArray(data.projectMaterials)) DB.projectMaterials = data.projectMaterials;
         rebuildRelationships();
       } catch (err) {
@@ -4608,6 +4677,7 @@ async function initArchivePage() {
     DB.pipelines = data.pipelines || [];
     DB.materials = normalizeMaterials(data.materials || []);
     DB.welds = normalizeWelds(data.welds || []);
+    takePipelineExtras(data);
     if (data.projectMaterials && Array.isArray(data.projectMaterials)) DB.projectMaterials = data.projectMaterials;
     rebuildRelationships();
   } catch (e) { console.error('API error:', e); }
@@ -5182,6 +5252,7 @@ async function initPipelineDetailPage() {
     DB.pipelines = data.pipelines || [];
     DB.materials = normalizeMaterials(data.materials || []);
     DB.welds = normalizeWelds(data.welds || []);
+    takePipelineExtras(data);
     DB.projectMaterials = data.projectMaterials || [];
     DB.globalMaterials = data.globalMaterials || [];
     if (data.welders && data.welders.length) {
@@ -5381,13 +5452,42 @@ function jumpToMaterialRow(matId) {
    change which materials each weld joins, so dragging is switched off. The server refuses
    the reorder too - this is the visible half of that rule. */
 function pipelineNumberingFrozen(pipelineId) {
-  return pipelineWelds(pipelineId).some(w => w.welderId || w.inspectorId);
+  return (DB.pipelineLocked && PAGE.pipelineId === pipelineId) || pipelineWelds(pipelineId).some(w => w.welderId || w.inspectorId);
+}
+/* List order along the pipe (sortOrder from the server), then by letter. */
+function byListOrder(a, b) {
+  const sa = a.sortOrder == null ? 1e9 : a.sortOrder, sb = b.sortOrder == null ? 1e9 : b.sortOrder;
+  return (sa - sb) || (a.position - b.position);
+}
+/* "Archived 30.09.2026 ⓘ" - a click shows who archived it, when and why. */
+function struckBadge(r) {
+  const when = r.archivedAt ? formatDate(String(r.archivedAt).slice(0, 10)) : '';
+  return `<button type="button" class="struck-badge" data-at="${escapeHtml(r.archivedAt || '')}" data-by="${escapeHtml(r.archivedBy || '')}" data-reason="${escapeHtml(r.archiveReason || '')}" onclick="showArchiveInfo(this, event)">${t('archived_on', 'Archived')} ${escapeHtml(when)} ⓘ</button>`;
+}
+function showArchiveInfo(btn, ev) {
+  if (ev) ev.stopPropagation();
+  let pop = document.getElementById('archive-info-pop');
+  if (!pop) {
+    pop = document.createElement('div'); pop.id = 'archive-info-pop'; pop.className = 'archive-info-pop';
+    document.body.appendChild(pop);
+    document.addEventListener('click', e => { if (!pop.contains(e.target)) pop.classList.remove('open'); });
+  }
+  const at = btn.dataset.at ? new Date(btn.dataset.at.endsWith('Z') || btn.dataset.at.includes('+') ? btn.dataset.at : btn.dataset.at + 'Z') : null;
+  const when = at && !isNaN(at) ? `${formatDate(at.toISOString().slice(0, 10))}, ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}` : '—';
+  pop.innerHTML = `<div><span class="muted">${t('archived_on', 'Archived')}:</span> ${escapeHtml(when)}</div>`
+    + `<div><span class="muted">${t('archived_by', 'By')}:</span> ${escapeHtml(btn.dataset.by || '—')}</div>`
+    + `<div><span class="muted">${t('archive_reason', 'Reason')}:</span> ${escapeHtml(btn.dataset.reason || '—')}</div>`;
+  const r = btn.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 6) + 'px';
+  pop.style.left = Math.max(8, Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - 300)) + 'px';
+  pop.classList.add('open');
 }
 function renderMaterialsList() {
   const tbody = document.getElementById('materials-tbody'); const allRows = pipelineMaterials(PAGE.pipelineId);
   const isWire = m => (m.piece || m.category || '').toLowerCase() === 'welding wire';
-  const rows = allRows.filter(m => !isWire(m));
+  const rows = allRows.filter(m => !isWire(m)).sort(byListOrder);
   const wireRows = allRows.filter(m => isWire(m));
+  const struckRows = (DB.struckMaterials || []).filter(m => m.pipelineId === PAGE.pipelineId);
   /* find the max number of DN, Diameter, Thickness fields used by any material */
   let maxDn = 1, maxDia = 1, maxThk = 1;
   rows.forEach(m => {
@@ -5404,7 +5504,10 @@ function renderMaterialsList() {
       : '';
   }
   const rowIndex = new Map(rows.map((m, i) => [m.id, i]));
-  tbody.innerHTML = rows.length ? rows.map(m => {
+  const listed = [...rows, ...struckRows.filter(m => !isWire(m))].sort(byListOrder);
+  const struckIds = new Set(struckRows.map(m => m.id));
+  tbody.innerHTML = listed.length ? listed.map(m => {
+    if (struckIds.has(m.id)) return struckMaterialRow(m, maxDn, maxDia, maxThk);
     const flags = [m.startOfPlumbing ? 'start' : '', m.endOfPlumbing ? 'end' : ''].filter(Boolean).join(' · ');
     const hasErr = materialConnError(m, rows);
     const dnWarn = materialDnMismatch(m);
@@ -5456,9 +5559,20 @@ function renderMaterialsList() {
     thead.innerHTML = `<th>${t('th_pos', 'Pos.')}</th><th>${t('th_category', 'Category')}</th><th>${t('th_item_description', 'Item description')}</th>${dnHeader}${diaHeader}${thkHeader}<th>${t('th_din_en_no', 'DIN EN No.')}</th><th>${t('th_surface', 'Surface')}</th><th>${t('th_material', 'Material')}</th><th>${t('th_certificate', 'Certificate')}</th><th>${t('th_heat_no', 'Heat No.')}</th><th>${t('th_waz_no', 'WAZ No.')}</th><th>${t('th_welds', 'Welds')}</th><th></th>`;
   }
   // Welding Wire table
+  wireRows.push(...struckRows.filter(m => isWire(m)));
   const wireSection = document.getElementById('welding-wire-section');
   if (wireSection) {
-    wireSection.innerHTML = wireRows.length ? `<h3 style="margin-top:24px;">${t('th_welding_wire', 'Welding Wire')}</h3><div class="table-card"><table class="table-wide"><thead><tr><th>${t('th_pos', 'Pos.')}</th><th>${t('th_item_description', 'Item description')}</th><th>${t('th_material', 'Material')}</th><th>${t('th_diameter', 'Diameter')}</th><th>${t('th_surface', 'Surface')}</th><th>${t('th_certificate', 'Certificate')}</th><th>${t('th_heat_no', 'Heat No.')}</th><th>${t('th_waz_no', 'WAZ No.')}</th><th></th></tr></thead><tbody>${wireRows.map(m => `<tr>
+    wireSection.innerHTML = wireRows.length ? `<h3 style="margin-top:24px;">${t('th_welding_wire', 'Welding Wire')}</h3><div class="table-card"><table class="table-wide"><thead><tr><th>${t('th_pos', 'Pos.')}</th><th>${t('th_item_description', 'Item description')}</th><th>${t('th_material', 'Material')}</th><th>${t('th_diameter', 'Diameter')}</th><th>${t('th_surface', 'Surface')}</th><th>${t('th_certificate', 'Certificate')}</th><th>${t('th_heat_no', 'Heat No.')}</th><th>${t('th_waz_no', 'WAZ No.')}</th><th></th></tr></thead><tbody>${wireRows.map(m => struckIds.has(m.id) ? `<tr class="row-struck">
+      <td class="col-mono">${posLetter(m.position)}</td>
+      <td>${escapeHtml(m.itemDescription)}</td>
+      <td class="col-mono">${escapeHtml(m.materialCode)}</td>
+      <td class="col-mono">${m.diameter ? fmtDia(m.diameter) : '—'}</td>
+      <td class="col-mono">${escapeHtml(m.surface) || '—'}</td>
+      <td>${escapeHtml(m.certificate)}</td>
+      <td class="col-mono">${escapeHtml(m.heatNo)}</td>
+      <td>—</td>
+      <td class="col-actions">${struckBadge(m)}</td>
+    </tr>` : `<tr>
       <td class="col-mono">${posLetter(m.position)}</td>
       <td>${escapeHtml(m.itemDescription)}</td>
       <td class="col-mono">${escapeHtml(m.materialCode)}</td>
@@ -5470,6 +5584,28 @@ function renderMaterialsList() {
       <td class="col-actions"><button class="btn-link" onclick="openMaterialModal(${m.id})">${t('edit', 'Edit')}</button>${archiveBtn('material', m.id)}</td>
     </tr>`).join('')}</tbody></table></div>` : '';
   }
+}
+/* A material archived after welding: its row stays in its place, struck through. */
+function struckMaterialRow(m, maxDn, maxDia, maxThk) {
+  const cell = v => v ? escapeHtml(v) : '<span class="muted">—</span>';
+  let extraDn = '', extraDia = '', extraThk = '';
+  for (let i = 2; i <= maxDn; i++) extraDn += `<td class="col-mono">${cell(m[`dimension${i}`])}</td>`;
+  for (let i = 2; i <= maxDia; i++) extraDia += `<td class="col-mono">${m[`diameter${i}`] ? fmtDia(m[`diameter${i}`]) : '<span class="muted">—</span>'}</td>`;
+  for (let i = 2; i <= maxThk; i++) extraThk += `<td class="col-mono">${cell(m[`thickness${i}`])}</td>`;
+  return `<tr class="row-struck" data-mat-id="${m.id}">
+      <td class="col-mono">${posLetter(m.position)}</td>
+      <td>${cell(m.piece || m.category)}</td>
+      <td>${cell(m.itemDescription)}</td>
+      <td class="col-mono">${cell(m.dimension)}</td>${extraDn}
+      <td class="col-mono">${m.diameter ? fmtDia(m.diameter) : '<span class="muted">—</span>'}</td>${extraDia}
+      <td class="col-mono">${cell(m.thickness)}</td>${extraThk}
+      <td class="col-mono">${cell(m.dienNo)}</td>
+      <td class="col-mono">${cell(m.surface)}</td>
+      <td class="col-mono">${cell(m.materialCode)}</td><td>${cell(m.certificate)}</td>
+      <td class="col-mono">${cell(m.heatNo)}</td>
+      <td>—</td><td>—</td>
+      <td class="col-actions">${struckBadge(m)}</td>
+    </tr>`;
 }
 /* ---- Drag & Drop for material reordering ---- */
 let _dragMatId = null;
@@ -5629,12 +5765,40 @@ function resultTag(v) {
   return `<span class="na-tag">${escapeHtml(v || 'n/a')}</span>`;
 }
 function betweenCell(materialIds, useDesc) {
-  const parts = materialIds.map(mid => { const m = getMaterial(mid); if (!m) return '<span class="muted">?</span>'; const label = useDesc ? m.itemDescription : m.piece; return `<a class="cell-link" title="${escapeHtml(m.itemDescription)}" href="material-detail.html?id=${m.id}">${escapeHtml(label)} (${posLetter(m.position)})</a>`; });
+  const parts = materialIds.map(mid => { const m = getMaterial(mid) || struckMaterial(mid); if (!m) return '<span class="muted">?</span>'; const label = useDesc ? m.itemDescription : m.piece; return `<a class="cell-link" title="${escapeHtml(m.itemDescription)}" href="material-detail.html?id=${m.id}">${escapeHtml(label)} (${posLetter(m.position)})</a>`; });
   return `<div class="between-cell">${parts.join('<span class="between-arrow">→</span>')}</div>`;
 }
 function renderWeldList() {
-  const tbody = document.getElementById('weldlist-tbody'); const pl = getPipeline(PAGE.pipelineId); const rows = pipelineWelds(PAGE.pipelineId);
+  const tbody = document.getElementById('weldlist-tbody'); const pl = getPipeline(PAGE.pipelineId);
+  const struckWelds = (DB.struckWelds || []).filter(w => w.pipelineId === PAGE.pipelineId);
+  /* Along the pipe: by where the weld's two materials sit in the material list. Before
+     welding that is the letter order; after it, letters no longer follow the pipe. */
+  const listIdx = new Map([...pipelineMaterials(PAGE.pipelineId), ...(DB.struckMaterials || []).filter(m => m.pipelineId === PAGE.pipelineId)]
+    .sort(byListOrder).map((m, i) => [m.id, i]));
+  const weldKey = x => {
+    const idx = (x.materialIds || []).map(id => listIdx.get(id)).filter(i => i !== undefined).sort((p, q) => p - q);
+    return idx.length === 2 ? idx : [_letterToNum(x.betweenA) + 1e6, _letterToNum(x.betweenB) + 1e6];
+  };
+  const rows = [...pipelineWelds(PAGE.pipelineId), ...struckWelds].sort((a, b) => {
+    const ka = weldKey(a), kb = weldKey(b);
+    return (ka[0] - kb[0]) || (ka[1] - kb[1]) || (Number(a.weldNo) - Number(b.weldNo));
+  });
   tbody.innerHTML = rows.length ? rows.map(w => {
+    if (w.struck) return `<tr class="row-struck">
+      <td class="col-select"></td>
+      <td><span class="pipe-no">${escapeHtml(w.weldNo)}</span></td>
+      <td>${betweenCell(w.materialIds)}</td>
+      <td><span class="type-tag">${escapeHtml(w.type) || '—'}</span></td>
+      <td class="col-mono">${escapeHtml(w.procedure) || '—'}</td>
+      <td>${escapeHtml(w.weldingWire) || '—'}</td>
+      <td>${escapeHtml(struckPersonLabel(w.welderId, w.welder))}</td>
+      <td>${escapeHtml(struckPersonLabel(w.inspectorId, w.inspector))}</td>
+      <td class="col-mono">${w.date ? formatDate(w.date) : '—'}</td>
+      <td>${resultTag(w.visual)}</td>
+      <td>${resultTag(w.endoscopy)}</td>
+      <td>—</td><td>—</td><td>—</td>
+      <td class="col-actions">${struckBadge(w)}</td>
+    </tr>`;
     const photo = w.endoscopyVideoUrl ? `<a class="img-btn" href="${escapeHtml(w.endoscopyVideoUrl)}" target="_blank">${t('view', 'View')}</a>` : '<span class="img-btn empty">—</span>';
     const endo = w.endoscopyImageUrl ? `<a class="img-btn" href="${escapeHtml(w.endoscopyImageUrl)}" target="_blank">${t('view', 'View')}</a>` : '<span class="img-btn empty">—</span>';
     const rem = w.remarks ? `<button class="remarks-btn" onclick="showRemarks(${w.id})">${t('view', 'View')}</button>` : '<span class="remarks-btn none">—</span>';
@@ -5658,6 +5822,10 @@ function renderWeldList() {
   const live = new Set(pipelineWelds(PAGE.pipelineId).map(w => w.id));
   [...selectedWeldIds].forEach(id => { if (!live.has(id)) selectedWeldIds.delete(id); });
   updateWeldBulkBar();
+}
+function struckPersonLabel(id, legacy) {
+  const p = id ? getPerson(id) : null;
+  return p ? (p.no ? `${p.name} (${p.no})` : p.name) : (legacy || '—');
 }
 /* ---- bulk weld selection + editing ---------------------------------------
    Most welds in a pipeline share the same type, wire, welder and results, so
@@ -6451,6 +6619,7 @@ async function initMaterialDetailPage() {
     DB.pipelines = data.pipelines || [];
     DB.materials = normalizeMaterials(data.materials || []);
     DB.welds = normalizeWelds(data.welds || []);
+    takePipelineExtras(data);
     DB.projectMaterials = data.projectMaterials || [];
     rebuildRelationships();
   } catch (e) { console.error('API error:', e); }
@@ -7054,6 +7223,7 @@ async function initHomePage() {
     DB.pipelines = data.pipelines || [];
     DB.materials = normalizeMaterials(data.materials || []);
     DB.welds = normalizeWelds(data.welds || []);
+    takePipelineExtras(data);
     DB.people = data.people || [];
     DB.certificates = data.certificates || [];
     rebuildRelationships();

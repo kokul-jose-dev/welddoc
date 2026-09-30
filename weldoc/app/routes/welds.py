@@ -27,6 +27,28 @@ def create_or_update_weld():
     data = request.get_json()
     if "id" in data and data["id"]:
         w = Weld.query.get_or_404(data["id"])
+        if w.struck:
+            # Archived after welding, together with its material: part of the record.
+            return jsonify({
+                "error": "struck_cannot_restore",
+                "message": "This weld was archived after welding and is part of the record. "
+                           "It cannot be edited or restored.",
+            }), 409
+        # After a welder or inspector is on a weld of the pipeline, archiving a weld strikes it
+        # through (with a reason) instead of hiding it; its joint gets a new weld, new number.
+        if data.get("archived") and not w.archived:
+            from app.routes.pipeline_materials import _numbering_frozen, _strike_weld
+            if _numbering_frozen(w.pipeline_id):
+                reason = (data.get("archiveReason") or "").strip()
+                if not reason:
+                    return jsonify({
+                        "error": "archive_reason_required",
+                        "message": "A welder or inspector is assigned in this pipeline: the weld is "
+                                   "struck through, not deleted. Please enter the reason.",
+                        "weldNos": [w.weld_no],
+                    }), 409
+                _strike_weld(w, reason)
+                return jsonify(_serialize(w)), 200
         # Restoring an archived weld: find its materials in the pipeline as it is now
         if w.archived and data.get("archived") is False:
             ask = _prepare_restore(w, data)
@@ -281,6 +303,12 @@ def _set_materials(w, data):
             PipelineMaterial.archived == False).all()}  # noqa: E712
         if a == b or len(mats) != 2:
             raise SpecValueError("A weld joins two different active materials of its own pipeline.")
+        from app.routes.pipeline_materials import _numbering_frozen
+        if (w.id and w.material_a_id and w.material_b_id and {a, b} != {w.material_a_id, w.material_b_id}
+                and _numbering_frozen(w.pipeline_id)):
+            # After welding the joints are part of the record (see pipeline_materials).
+            raise SpecValueError("A welder or inspector is assigned in this pipeline: the materials "
+                                 "a weld joins cannot be changed any more.")
         w.material_a_id, w.material_b_id = a, b
         w.between_a, w.between_b = mats[a].position, mats[b].position
         return
@@ -363,6 +391,12 @@ def _update(w, data):
     w.endoscopy_image_url = data.get("endoscopyImageUrl", w.endoscopy_image_url)
     w.remarks = data.get("remarks", w.remarks)
     if "archived" in data:
+        if data["archived"] and not w.archived:
+            from app.routes.pipeline_materials import _log_archive
+            _log_archive(w, (data.get("archiveReason") or "").strip() or None)
+        elif not data["archived"] and w.archived:
+            from app.routes.pipeline_materials import _clear_archive_log
+            _clear_archive_log(w)
         w.archived = data["archived"]
 
 
@@ -391,6 +425,10 @@ def _serialize(w):
         "endoscopyImageUrl": w.endoscopy_image_url,
         "remarks": w.remarks,
         "archived": w.archived,
+        "struck": bool(w.struck),
+        "archivedAt": w.archived_at.isoformat() if w.archived_at else None,
+        "archivedBy": w.archived_by or "",
+        "archiveReason": w.archive_reason or "",
     }
 
 

@@ -33,3 +33,9 @@ class Weld(db.Model):
     endoscopy_image_url = db.Column(db.String(500))
     remarks = db.Column(db.Text)
     archived = db.Column(db.Boolean, default=False)
+    # Archiving after welding (migration 011): who, when, why - and "struck": the row stays in
+    # the lists, struck through, instead of being hidden. A struck row is always archived.
+    archived_at = db.Column(db.DateTime, nullable=True)
+    archived_by = db.Column(db.Unicode(255), nullable=True)
+    archive_reason = db.Column(db.Unicode(1000), nullable=True)
+    struck = db.Column(db.Boolean, nullable=False, default=False)

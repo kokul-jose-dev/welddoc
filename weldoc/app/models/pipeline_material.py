@@ -23,6 +23,14 @@ class PipelineMaterial(db.Model):
     start_of_plumbing = db.Column(db.Boolean, default=False)
     end_of_plumbing = db.Column(db.Boolean, default=False)
     archived = db.Column(db.Boolean, default=False)
+    # Archiving after welding (migration 011): who, when, why - and "struck": the row stays in
+    # the lists, struck through, instead of being hidden. A struck row is always archived.
+    archived_at = db.Column(db.DateTime, nullable=True)
+    archived_by = db.Column(db.Unicode(255), nullable=True)
+    archive_reason = db.Column(db.Unicode(1000), nullable=True)
+    struck = db.Column(db.Boolean, nullable=False, default=False)
+    # Place in the material list, which follows the pipe. NULL = by letter.
+    sort_order = db.Column(db.Integer, nullable=True)
 
     project_material = db.relationship("ProjectMaterial", lazy="joined")
     connections = db.relationship(

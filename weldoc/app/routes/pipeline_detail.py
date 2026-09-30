@@ -33,7 +33,7 @@ def get_pipeline_detail(pipeline_id):
     # change data: once a welder or inspector is assigned, the weld number is what is
     # written on the pipe and in the issued documents. Every path that actually changes
     # materials or connections still calls _sync_and_renumber_welds itself.
-    from app.routes.pipeline_materials import _sync_pipeline_waz_nos
+    from app.routes.pipeline_materials import _sync_pipeline_waz_nos, _numbering_frozen
     try:
         _sync_pipeline_waz_nos(pipeline_id)
     except Exception:
@@ -43,6 +43,7 @@ def get_pipeline_detail(pipeline_id):
     mat_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.pipeline_id, pm.project_material_id, pm.position,
                pm.waz_no, pm.waz_package_url, pm.start_of_plumbing, pm.end_of_plumbing, pm.archived,
+               pm.sort_order, pm.struck, pm.archived_at, pm.archived_by, pm.archive_reason,
                prm.certificate, prm.heat_no, prm.waz_pdf_url, prm.global_material_id,
                gm.category, gm.item_description, gm.dn1, gm.dn2, gm.dn3,
                gm.dn4, gm.dn5, gm.dn6, gm.diameter, gm.diameter2, gm.diameter3,
@@ -51,10 +52,15 @@ def get_pipeline_detail(pipeline_id):
         FROM weldoc_pipeline_materials pm
         LEFT JOIN weldoc_project_materials prm ON pm.project_material_id = prm.id
         LEFT JOIN weldoc_global_materials gm ON prm.global_material_id = gm.id
-        WHERE pm.pipeline_id = :pid AND pm.archived = 0
-        ORDER BY pm.position
+        WHERE pm.pipeline_id = :pid AND (pm.archived = 0 OR pm.struck = 1)
+        ORDER BY CASE WHEN pm.sort_order IS NULL THEN 1 ELSE 0 END, pm.sort_order,
+                 LEN(pm.position), pm.position
     """), {"pid": pipeline_id}).fetchall()
     mat_rows = spec_rows(mat_rows)
+    # Archived after welding: struck through, shown in the lists but not part of the pipeline
+    # any more - sent separately so nothing treats them as active materials.
+    struck_mat_rows = [r for r in mat_rows if r.struck]
+    mat_rows = [r for r in mat_rows if not r.struck]
 
     # Connections + sibling pipelines in one query each
     mat_ids = [r.id for r in mat_rows]
@@ -83,12 +89,15 @@ def get_pipeline_detail(pipeline_id):
     weld_rows = db.session.execute(db.text("""
         SELECT id, pipeline_id, weld_no, between_a, between_b, material_a_id, material_b_id, type, [procedure],
                welding_wire, welder, inspector, welder_id, inspector_id, date,
-               visual, endoscopy, endoscopy_video_url, endoscopy_image_url, remarks, archived
+               visual, endoscopy, endoscopy_video_url, endoscopy_image_url, remarks, archived,
+               struck, archived_at, archived_by, archive_reason
         FROM weldoc_welds
-        WHERE pipeline_id = :pid AND archived = 0
+        WHERE pipeline_id = :pid AND (archived = 0 OR struck = 1)
         ORDER BY LEN(between_a), between_a, LEN(between_b), between_b, id
     """), {"pid": pipeline_id}).fetchall()
     weld_rows = spec_rows(weld_rows)
+    struck_weld_rows = [w for w in weld_rows if w.struck]
+    weld_rows = [w for w in weld_rows if not w.struck]
 
     pm_rows = db.session.execute(db.text("""
         SELECT pm.id, pm.project_id, pm.global_material_id, pm.certificate, pm.heat_no,
@@ -155,8 +164,16 @@ def get_pipeline_detail(pipeline_id):
         w["procs"] = " / ".join(sorted(w.pop("procs_set")))
         welders.append(w)
 
+    def _archive_info(r):
+        return {
+            "struck": bool(r.struck),
+            "archivedAt": r.archived_at.isoformat() if hasattr(r.archived_at, "isoformat") else (r.archived_at or None),
+            "archivedBy": r.archived_by or "",
+            "archiveReason": r.archive_reason or "",
+        }
+
     materials = []
-    for r in mat_rows:
+    for r in mat_rows + struck_mat_rows:
         materials.append({
             "id": r.id, "pipelineId": r.pipeline_id,
             "projectMaterialId": r.project_material_id,
@@ -175,10 +192,14 @@ def get_pipeline_detail(pipeline_id):
             "thickness": r.thickness, "thickness2": r.thickness2, "thickness3": r.thickness3,
             "surface": r.surface, "materialCode": r.material_code,
             "dienNo": r.dien_no,
+            "sortOrder": r.sort_order,
+            **_archive_info(r),
         })
+    struck_materials = materials[len(mat_rows):]
+    materials = materials[:len(mat_rows)]
 
     welds = []
-    for w in weld_rows:
+    for w in weld_rows + struck_weld_rows:
         welds.append({
             "id": w.id, "pipelineId": w.pipeline_id,
             "weldNo": w.weld_no, "betweenA": w.between_a, "betweenB": w.between_b,
@@ -192,7 +213,10 @@ def get_pipeline_detail(pipeline_id):
             "endoscopyVideoUrl": w.endoscopy_video_url,
             "endoscopyImageUrl": w.endoscopy_image_url, "remarks": w.remarks,
             "archived": w.archived,
+            **_archive_info(w),
         })
+    struck_welds = welds[len(weld_rows):]
+    welds = welds[:len(weld_rows)]
 
     project_materials = []
     for pm in pm_rows:
@@ -247,6 +271,11 @@ def get_pipeline_detail(pipeline_id):
         } for s in sib_rows],
         "materials": materials,
         "welds": welds,
+        # Once a welder or inspector is on a weld (also a struck one): letters, weld numbers
+        # and connections are fixed, and archiving strikes through (see pipeline_materials).
+        "locked": _numbering_frozen(pipeline_id),
+        "struckMaterials": struck_materials,
+        "struckWelds": struck_welds,
         "projectMaterials": project_materials,
         "globalMaterials": global_materials,
         "welders": welders,

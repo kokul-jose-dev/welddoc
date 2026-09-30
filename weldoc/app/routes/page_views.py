@@ -603,7 +603,7 @@ def get_archive_page():
         FROM weldoc_pipeline_materials pm
         LEFT JOIN weldoc_project_materials proj ON pm.project_material_id = proj.id
         LEFT JOIN weldoc_global_materials gm ON proj.global_material_id = gm.id
-        WHERE pm.archived = 1
+        WHERE pm.archived = 1 AND pm.struck = 0   -- struck-through: shown in the pipeline, not restorable
         ORDER BY pm.position
     """)).fetchall()
     mat_rows = spec_rows(mat_rows)
@@ -612,9 +612,13 @@ def get_archive_page():
         SELECT id, pipeline_id, weld_no, between_a, between_b, material_a_id, material_b_id, type, [procedure],
                welding_wire, welder, inspector, welder_id, inspector_id, date,
                endoscopy_video_url, endoscopy_image_url, remarks, archived
-        FROM weldoc_welds
-        WHERE archived = 1
-        ORDER BY id DESC
+        FROM weldoc_welds w
+        WHERE w.archived = 1 AND w.struck = 0      -- struck-through: shown in the pipeline, not restorable
+          -- archived together with its material: it comes back when the material is restored
+          AND NOT EXISTS (SELECT 1 FROM weldoc_pipeline_materials pm
+                          WHERE pm.id IN (w.material_a_id, w.material_b_id) AND pm.archived = 1
+                            AND pm.archived_at = w.archived_at)
+        ORDER BY w.id DESC
     """)).fetchall()
     weld_rows = spec_rows(weld_rows)
 

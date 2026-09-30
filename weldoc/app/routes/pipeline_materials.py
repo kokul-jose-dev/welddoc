@@ -1,4 +1,6 @@
+import itertools
 import re
+from datetime import datetime
 from flask import Blueprint, request, jsonify
 from app.database import db
 from app.models.pipeline_material import PipelineMaterial, pipeline_material_connections
@@ -87,7 +89,12 @@ def create_pipeline_material():
     new_pm = ProjectMaterial.query.get(project_material_id)
     new_is_wire = bool(new_pm and new_pm.global_material and
                        (new_pm.global_material.category or "").strip().lower() == "welding wire")
-    if "connections" in data and not new_is_wire:
+    locked = _numbering_frozen(pipeline_id)
+    if locked and "connections" in data and not new_is_wire:
+        refused = _locked_connection_refusal(pipeline_id, None, [], data["connections"])
+        if refused:
+            return refused
+    if "connections" in data and not new_is_wire and not locked:
         ask = _confirm_weld_deletion(_welds_deleted_by_connection_change(
             pipeline_id, None, [], data["connections"],
             start_of_plumbing=bool(data.get("startOfPlumbing"))), data)
@@ -98,10 +105,14 @@ def create_pipeline_material():
     existing_mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
     ).all()
-    existing_positions = {m.position for m in existing_mats if m.position}
+    existing_positions = {m.position for m in _lettered_materials(pipeline_id) if m.position}
     req_pos = (data.get("position") or "").strip().upper()
-    if req_pos and req_pos not in existing_positions:
+    if req_pos and req_pos not in existing_positions and not locked:
         position = req_pos
+    elif locked:
+        # Letters are fixed once someone has welded: the new material takes the next letter
+        # after every letter in use - struck-through materials keep theirs.
+        position = _next_free_letter(pipeline_id)
     else:
         position = _pos_letter(len(existing_mats) + 1)
 
@@ -149,6 +160,8 @@ def create_pipeline_material():
         if not is_wire:
             _update_connections(m, data["connections"], pipeline_id)
             db.session.commit()
+            if locked:
+                _place_in_gap(m, pipeline_id)
     elif not is_wire:
         # Auto-connect to previous non-wire material (chain: A→B→C→D)
         all_prev = PipelineMaterial.query.filter_by(
@@ -167,7 +180,7 @@ def create_pipeline_material():
             weld_count = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).count()
             new_weld = Weld(
                 pipeline_id=pipeline_id,
-                weld_no=str(weld_count + 1),
+                weld_no="0" if locked else str(weld_count + 1),   # "0": numbered below
                 material_a_id=prev.id,
                 material_b_id=m.id,
                 between_a=prev.position,
@@ -175,6 +188,12 @@ def create_pipeline_material():
             )
             db.session.add(new_weld)
             db.session.commit()
+            if locked:
+                _sync_and_renumber_welds(pipeline_id)
+    if not locked:
+        _sync_sort_order(pipeline_id)
+    elif m.sort_order is None:
+        _place_in_gap(m, pipeline_id)
 
     # Copy existing WAZ PDF to pipeline folder in background
     import threading
@@ -199,14 +218,34 @@ def edit_pipeline_material(pm_id):
     m = PipelineMaterial.query.get_or_404(pm_id)
     data = request.get_json()
 
+    # Once a welder or inspector is on a weld of this pipeline, its letters and connections
+    # are part of the record: the letter stays, a connection can be added but not removed,
+    # and archiving strikes the material and its welds through instead of deleting them.
+    locked = _numbering_frozen(m.pipeline_id)
+    if m.struck and data.get("archived") is False:
+        return _struck_refusal()
+    if locked:
+        data.pop("position", None)
+        if data.get("archived") and m.archived:
+            data.pop("archived")
+        if data.get("archived") and not m.archived:
+            reason = clean_str(data.get("archiveReason"))
+            if not reason:
+                return _reason_required(m)
+            _strike_pipeline_material(m, reason)
+            return jsonify(_serialize(m)), 200
+        if "connections" in data and not _is_wire(m) and not m.archived:
+            refused = _locked_connection_refusal(
+                m.pipeline_id, m, [c for c in m.connections if not c.archived], data["connections"])
+            if refused:
+                return refused
+
     # Welds this edit would delete (archiving the material, removing a connection, the
     # "inserted between" rule). Worked out before anything is changed; welds with recorded
     # work need the user's confirmation first.
     new_pos = data.get("position") or m.position
-    at_risk = []
-    if data.get("archived") and not m.archived:
-        at_risk += _welds_on_material(m.pipeline_id, m.id, new_pos)
-    if "connections" in data and not _is_wire(m):
+    at_risk = []        # archiving deletes nothing (its welds are archived with it) - no question
+    if "connections" in data and not _is_wire(m) and not locked:
         at_risk += _welds_deleted_by_connection_change(
             m.pipeline_id, new_pos, [c for c in m.connections], data["connections"],
             own_id=m.id, start_of_plumbing=bool(data.get("startOfPlumbing", m.start_of_plumbing)))
@@ -251,17 +290,27 @@ def edit_pipeline_material(pm_id):
     if "archived" in data:
         m.archived = data["archived"]
         if data["archived"]:
-            _archive_pipeline_material(m)
+            _archive_pipeline_material(m, clean_str(data.get("archiveReason")))
+        elif not locked:
+            # Before welding: back to its old place, with its connections and welds
+            _restore_in_place(m)
         else:
+            _clear_archive_log(m)
             db.session.commit()
             # Its letter was released on archive and it comes back with no connections,
             # so it goes to the end of the run until someone reconnects it.
             if not m.position:
-                active = PipelineMaterial.query.filter_by(
-                    pipeline_id=m.pipeline_id, archived=False
-                ).count()
-                m.position = _pos_letter(max(active, 1))
+                if locked:
+                    m.position = _next_free_letter(m.pipeline_id)
+                else:
+                    active = PipelineMaterial.query.filter_by(
+                        pipeline_id=m.pipeline_id, archived=False
+                    ).count()
+                    m.position = _pos_letter(max(active, 1))
+                m.sort_order = None
                 db.session.commit()
+                if locked:
+                    _place_in_gap(m, m.pipeline_id)
             _renumber_positions(m.pipeline_id)
             _sync_pipeline_waz_nos(m.pipeline_id)
 
@@ -497,11 +546,16 @@ def get_waz_package(pm_id):
 def delete_pipeline_material(pm_id):
     """Archive a pipeline material with connection bridging, weld cleanup, and WAZ SharePoint sync."""
     m = PipelineMaterial.query.get_or_404(pm_id)
-    ask = _confirm_weld_deletion(_welds_on_material(m.pipeline_id, m.id, m.position),
-                                 request.get_json(silent=True) or {})
-    if ask:
-        return ask
-    _archive_pipeline_material(m)
+    data = request.get_json(silent=True) or {}
+    if m.archived:
+        return jsonify({"ok": True}), 200
+    if _numbering_frozen(m.pipeline_id):
+        reason = clean_str(data.get("archiveReason"))
+        if not reason:
+            return _reason_required(m)
+        _strike_pipeline_material(m, reason)
+        return jsonify({"ok": True}), 200
+    _archive_pipeline_material(m, clean_str(data.get("archiveReason")))
     return jsonify({"ok": True}), 200
 
 
@@ -514,6 +568,8 @@ def restore_pipeline_material(pm_id):
 
     m = PipelineMaterial.query.get_or_404(pm_id)
     pipeline = Pipeline.query.get_or_404(m.pipeline_id)
+    if m.struck:
+        return _struck_refusal()
     pm = m.project_material
     if not pm:
         return jsonify({"error": "No project material found"}), 400
@@ -595,13 +651,16 @@ def restore_pipeline_material(pm_id):
         if url:
             pm.waz_pdf_url = url
 
-    m.archived = False
-
-    # Assign next position letter
-    existing_count = PipelineMaterial.query.filter_by(
-        pipeline_id=m.pipeline_id, archived=False
-    ).count()
-    m.position = _pos_letter(existing_count + 1)
+    # Assign its position letter
+    locked = _numbering_frozen(m.pipeline_id)
+    if locked:
+        m.archived = False
+        _clear_archive_log(m)
+        m.position = _next_free_letter(m.pipeline_id)
+        m.sort_order = None
+    else:
+        db.session.flush()
+        _restore_in_place(m)      # back to its old place, with its connections and welds
 
     # Assign next sequential WAZ number
     m.waz_no = _assign_waz_no(m.pipeline_id, m.project_material_id)
@@ -610,6 +669,8 @@ def restore_pipeline_material(pm_id):
     if file_content or (pm and pm.waz_pdf_url):
         _build_and_save_waz_package(m, file_content=file_content)
 
+    if locked:
+        _place_in_gap(m, m.pipeline_id)
     _renumber_positions(m.pipeline_id)
     _sync_pipeline_waz_nos(m.pipeline_id)
 
@@ -823,18 +884,24 @@ def reorder_pipeline_materials():
         """), weld_inserts)
 
     db.session.commit()
+    _sync_sort_order(pipeline_id)
     _sync_pipeline_waz_nos(pipeline_id)
     return jsonify({"status": "ok"}), 200
 
 
-def _archive_pipeline_material(m):
+def _archive_pipeline_material(m, reason=None):
     """Perform archive actions for a pipeline material:
     1. Bridge connections if exactly 2 active neighbors.
-    2. Clear connections and delete direct welds.
-    3. Renumber positions.
+    2. Clear connections; its welds are archived WITH it (same archived_at), not deleted.
+    3. Renumber positions. Its place (sort_order) is kept, so a restore puts it back there.
     4. Delete WAZ file from SharePoint if unique to this material, clear waz_no, and resequence remaining active WAZ numbers.
+
+    For a pipeline nobody has welded on yet. Once someone has, see _strike_pipeline_material.
+    Undone by _restore_in_place.
     """
+    now = datetime.utcnow()
     m.archived = True
+    _log_archive(m, reason, at=now)
     active_conns = [c for c in m.connections if not c.archived]
     if len(active_conns) == 2:
         cA, cB = active_conns[0], active_conns[1]
@@ -849,11 +916,15 @@ def _archive_pipeline_material(m):
     pipeline_id = m.pipeline_id
     _ensure_weld_ids(pipeline_id)
     for w in _welds_on_material(pipeline_id, m.id, pos):
-        db.session.delete(w)
+        # Archived together with the material - the same archived_at links them - so a
+        # restore brings them back with everything recorded on them.
+        w.archived = True
+        _log_archive(w, None, at=now)
 
     # Release the position letter. An archived material that keeps its letter collides with
     # whichever active material is relabelled onto it, and that duplicate then corrupts the
-    # next renumber - welds get rewired to the wrong materials.
+    # next renumber - welds get rewired to the wrong materials. Its PLACE is kept in
+    # sort_order, which is what a restore uses.
     m.position = None
 
     db.session.commit()
@@ -1411,6 +1482,259 @@ def _copy_waz_to_pipeline_folder(m):
 # once the request comes back with their ids in "confirmDeleteWelds". The list is worked out
 # again on every request, so a weld that got work in the meantime is asked about again.
 
+# --- Archiving after welding (migration 011) -------------------------------------------------
+# Once a welder or inspector is on a weld of a pipeline (_numbering_frozen), its letters, weld
+# numbers and connections are part of the record. Archiving a material then "strikes" it: the
+# material and its welds stay in the lists, struck through, with who, when and why - nothing
+# is deleted, no letter changes, and no weld is created in their place. The gap is closed by
+# the user: connect the two neighbours, or add a new material between them (new weld numbers).
+
+def _actor():
+    from flask import session
+    user = session.get("user") or {}
+    return (user.get("name") or user.get("email") or "")[:255]
+
+
+def _log_archive(row, reason=None, at=None):
+    row.archived_at = at or datetime.utcnow()
+    row.archived_by = _actor()
+    row.archive_reason = (reason or None) and reason[:1000]
+
+
+def _clear_archive_log(row):
+    row.archived_at = None
+    row.archived_by = None
+    row.archive_reason = None
+    row.struck = False
+
+
+def _reason_required(m):
+    welds = sorted(_welds_on_material(m.pipeline_id, m.id, m.position),
+                   key=lambda w: (_weld_no_int(w.weld_no) or 0, w.id))
+    return jsonify({
+        "error": "archive_reason_required",
+        "message": "A welder or inspector is assigned in this pipeline: the material and its "
+                   "welds are struck through, not deleted. Please enter the reason.",
+        "position": m.position,
+        "weldNos": [w.weld_no for w in welds],
+    }), 409
+
+
+def _struck_refusal():
+    return jsonify({
+        "error": "struck_cannot_restore",
+        "message": "This was archived after welding and is part of the record. It cannot be "
+                   "restored - add a new material instead.",
+    }), 409
+
+
+def _strike_pipeline_material(m, reason):
+    """Archive a material of a pipeline that has been welded on: it and its welds are struck
+    through and stay in the lists. Its letter and its welds' numbers are kept (never reused),
+    no weld is deleted and none is created between its neighbours."""
+    pipeline_id = m.pipeline_id
+    _ensure_weld_ids(pipeline_id)
+    for w in _welds_on_material(pipeline_id, m.id, m.position):
+        w.archived = True
+        _log_archive(w, reason)
+        w.struck = True
+    m.archived = True
+    _log_archive(m, reason)
+    m.struck = True
+    db.session.commit()
+
+    # Its connections go - the struck welds are the history of what it was joined to. Both
+    # directions, see _archive_pipeline_material.
+    db.session.execute(db.text("""
+        DELETE FROM weldoc_pipeline_material_connections
+        WHERE pipeline_material_id = :mid OR connected_id = :mid
+    """), {"mid": m.id})
+    db.session.commit()
+    db.session.expire_all()
+
+    if m.waz_no:
+        old_waz = m.waz_no.strip().upper()
+        old_pkg_url = m.waz_package_url
+        m.waz_no = None
+        m.waz_package_url = None
+        db.session.commit()
+        other_active = PipelineMaterial.query.filter_by(
+            pipeline_id=pipeline_id, archived=False
+        ).filter(PipelineMaterial.waz_no == old_waz).count()
+        if other_active == 0:
+            # Its number is simply freed. The others are NOT renumbered: that would change
+            # their cover pages and file names and force every package to be rebuilt. A new
+            # material gets a new number (_assign_waz_no).
+            _delete_pipeline_waz_file_for_material(m, old_waz, old_pkg_url)
+
+
+def _strike_weld(w, reason):
+    """Archive one weld of a pipeline that has been welded on: struck through, number kept
+    (never reused). Its two materials stay connected - connections are fixed after welding -
+    so the joint gets a new weld with the next free number."""
+    w.archived = True
+    _log_archive(w, reason)
+    w.struck = True
+    db.session.commit()
+    _sync_and_renumber_welds(w.pipeline_id)
+
+
+def _restore_in_place(m):
+    """Restore a material archived before welding to the place it had: the same letter (the
+    others shift back), its connections and the welds archived with it, and the bridge weld
+    between its two neighbours removed again. Welds are renumbered along the pipe. A material
+    archived before this existed (no place kept, welds deleted back then) goes to the end.
+
+    Must run while m still carries its archive log (archived_at identifies its welds)."""
+    pipeline_id = m.pipeline_id
+    archived_at = m.archived_at
+    welds = []
+    if archived_at is not None:
+        welds = Weld.query.filter(
+            Weld.pipeline_id == pipeline_id, Weld.archived == True, Weld.struck == False,  # noqa: E712
+            db.or_(Weld.material_a_id == m.id, Weld.material_b_id == m.id),
+            Weld.archived_at == archived_at,
+        ).all()
+
+    active = PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
+        PipelineMaterial.id != m.id).all()
+    active.sort(key=lambda r: (_letter_to_pos(r.position) if r.position else 10 ** 9, r.id))
+    idx = len(active)
+    if m.sort_order is not None:
+        idx = max(0, min(m.sort_order - 1, len(active)))
+    order = active[:idx] + [m] + active[idx:]
+
+    _ensure_weld_ids(pipeline_id)
+    m.archived = False
+    _clear_archive_log(m)
+    for i, r in enumerate(order, 1):
+        r.position = _pos_letter(i)
+        r.sort_order = i
+    db.session.commit()
+
+    # Its connections and welds, to the materials that are still there
+    neighbours = []
+    for w in welds:
+        other_id = w.material_b_id if w.material_a_id == m.id else w.material_a_id
+        other = PipelineMaterial.query.get(other_id)
+        if not other or other.archived or other.pipeline_id != pipeline_id:
+            continue            # that side is gone: the weld stays archived
+        if other not in m.connections:
+            m.connections.append(other)
+        if m not in other.connections:
+            other.connections.append(m)
+        w.archived = False
+        _clear_archive_log(w)
+        neighbours.append(other)
+    db.session.commit()
+
+    # The bridge made on archive: its two neighbours joined to each other. The material sits
+    # between them again, so that link and its weld go - unless something was recorded on it.
+    if len(neighbours) == 2:
+        a, b = neighbours
+        if b in a.connections:
+            bridge = _welds_on_joint(pipeline_id, a.id, a.position, b.id, b.position)
+            if not any(_weld_work(w) for w in bridge):
+                a.connections.remove(b)
+                if a in b.connections:
+                    b.connections.remove(a)
+                for w in bridge:
+                    db.session.delete(w)
+                db.session.commit()
+
+    _refresh_weld_labels(pipeline_id)
+    db.session.commit()
+    _sync_and_renumber_welds(pipeline_id)
+
+
+def _lettered_materials(pipeline_id):
+    """The materials that hold a letter: the active ones and the struck-through ones."""
+    return PipelineMaterial.query.filter(
+        PipelineMaterial.pipeline_id == pipeline_id,
+        db.or_(PipelineMaterial.archived == False, PipelineMaterial.struck == True),  # noqa: E712
+    ).all()
+
+
+def _next_free_letter(pipeline_id):
+    used = [_letter_to_pos(r.position) for r in _lettered_materials(pipeline_id) if r.position]
+    return _pos_letter(max(used, default=0) + 1)
+
+
+def _list_order(pipeline_id):
+    """Active and struck materials in list order: sort_order, then letter."""
+    rows = _lettered_materials(pipeline_id)
+    big = 10 ** 9
+    rows.sort(key=lambda r: (r.sort_order if r.sort_order is not None else big,
+                             _letter_to_pos(r.position) if r.position else big, r.id))
+    return rows
+
+
+def _sync_sort_order(pipeline_id):
+    """Before anyone has welded, the list simply follows the letters."""
+    if _numbering_frozen(pipeline_id):
+        return
+    mats = PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, archived=False).all()
+    mats.sort(key=lambda r: (_letter_to_pos(r.position) if r.position else 10 ** 9, r.id))
+    for i, r in enumerate(mats, 1):
+        if r.sort_order != i:
+            r.sort_order = i
+    db.session.commit()
+
+
+def _place_in_gap(m, pipeline_id):
+    """After welding: put m in the list where it sits in the pipe. Joined to two or more
+    parts, it goes right after the first of them - past any struck-through materials there,
+    so a replacement reads directly below the one it replaces. Otherwise at the end."""
+    rows = [r for r in _list_order(pipeline_id) if r.id != m.id]
+    conns = [c for c in m.connections if not c.archived and c.id != m.id]
+    idx = len(rows)
+    if len(conns) >= 2:
+        ids = [r.id for r in rows]
+        at = [ids.index(c.id) for c in conns if c.id in ids]
+        if at:
+            idx = min(at) + 1
+            while idx < len(rows) and rows[idx].struck:
+                idx += 1
+    rows.insert(idx, m)
+    for i, r in enumerate(rows, 1):
+        if r.sort_order != i:
+            r.sort_order = i
+    db.session.commit()
+
+
+def _locked_connection_refusal(pipeline_id, m, current_conns, conn_positions):
+    """After welding a connection can be added, never removed - and a material can no longer
+    be spliced between two parts welded to each other (that removes their weld)."""
+    target = []
+    for val in conn_positions or []:
+        c = _find_mat_by_id_or_pos(pipeline_id, val)
+        if not c or (m and c.id == m.id) or c in target or _is_wire(c):
+            continue
+        target.append(c)
+    removed = [c for c in current_conns if c not in target and not _is_wire(c)]
+    if removed:
+        return jsonify({
+            "error": "connections_locked",
+            "message": "A welder or inspector is assigned in this pipeline, so existing "
+                       "connections cannot be removed ("
+                       + ", ".join(f"{m.position if m else ''}-{c.position}" for c in removed)
+                       + "). To take a material out, archive it.",
+        }), 409
+    added = [c for c in target if c not in current_conns]
+    joined = [(a, b) for i, a in enumerate(target) for b in target[i + 1:]
+              if (a in added or b in added) and b in a.connections]
+    if joined:
+        a, b = joined[0]
+        return jsonify({
+            "error": "connections_locked",
+            "message": f"{a.position} and {b.position} are welded to each other. A welder or "
+                       "inspector is assigned in this pipeline, so that weld cannot be removed "
+                       "by inserting a material between them. Archive the part you are "
+                       "replacing first, then connect the new material to its neighbours.",
+        }), 409
+    return None
+
+
 def _weld_work(w):
     """What is recorded on a weld, for the confirmation dialog. Empty dict = nothing."""
     from app.models.welder import Welder
@@ -1636,7 +1960,10 @@ def _reposition_by_connections(m, pipeline_id):
     between_a / between_b is remapped, because welds reference position letters, not ids.
 
     Deliberately standalone: the existing _renumber_positions / reorder paths are untouched.
+    Never after welding: letters are fixed then (see _place_in_gap).
     """
+    if _numbering_frozen(pipeline_id):
+        return
     _ensure_weld_ids(pipeline_id)
     mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
@@ -1725,7 +2052,7 @@ def _update_connections(m, conn_positions, pipeline_id):
     # keeps the slot it already has - the end of the list for a new material, where it was for
     # an edited one. Repositioning those dragged them up next to the part they hang off and
     # pushed the rest of the pipeline down.
-    if conns_changed or m.start_of_plumbing:
+    if (conns_changed or m.start_of_plumbing) and not _numbering_frozen(pipeline_id):
         spliced = _split_linked_pair(m, pipeline_id)
         if spliced or m.start_of_plumbing:
             _reposition_by_connections(m, pipeline_id)
@@ -1815,7 +2142,9 @@ def _sync_and_renumber_welds(pipeline_id):
         # and in the issued documents, so it never changes. Welds that already have one
         # keep it; only welds without a number get one, taking the lowest free number
         # first (a deleted weld releases its number) and then continuing past the highest.
-        taken = set()
+        # The numbers of struck-through welds stay taken: they are in the record.
+        taken = {n for n in (_weld_no_int(r.weld_no) for r in Weld.query.filter_by(
+            pipeline_id=pipeline_id, struck=True).all()) if n}
         needs_number = []
         for w in valid_welds:
             n = _weld_no_int(w.weld_no)
@@ -1824,7 +2153,7 @@ def _sync_and_renumber_welds(pipeline_id):
             else:
                 taken.add(n)
         if needs_number:
-            free = (i for i in range(1, len(valid_welds) + len(needs_number) + 2) if i not in taken)
+            free = (i for i in itertools.count(1) if i not in taken)
             for w in needs_number:
                 w.weld_no = str(next(free))
     else:
@@ -1832,6 +2161,7 @@ def _sync_and_renumber_welds(pipeline_id):
             w.weld_no = str(idx)
 
     db.session.commit()
+    _sync_sort_order(pipeline_id)       # before welding the list follows the (new) letters
 
 
 def _weld_no_int(value):
@@ -1856,7 +2186,8 @@ def _numbering_frozen(pipeline_id):
     """
     return db.session.query(Weld.id).filter(
         Weld.pipeline_id == pipeline_id,
-        Weld.archived == False,  # noqa: E712
+        # a struck-through weld still counts: it was welded, and striking it never unlocks
+        db.or_(Weld.archived == False, Weld.struck == True),  # noqa: E712
         db.or_(Weld.welder_id.isnot(None), Weld.inspector_id.isnot(None)),
     ).first() is not None
 
@@ -1869,6 +2200,10 @@ def _renumber_positions(pipeline_id):
     second material overwrites the first, and every weld pointing at that letter is rewired
     to the wrong material. Resolving each weld end to a material id first cannot collide.
     """
+    if _numbering_frozen(pipeline_id):
+        # After welding the letters are part of the record: nothing is relabelled.
+        _sync_and_renumber_welds(pipeline_id)
+        return
     _ensure_weld_ids(pipeline_id)
     mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
@@ -1908,6 +2243,7 @@ def _renumber_positions(pipeline_id):
         db.session.commit()
 
     _sync_and_renumber_welds(pipeline_id)
+    _sync_sort_order(pipeline_id)
 
 
 def _serialize(m):
@@ -1919,6 +2255,8 @@ def _serialize(m):
         "projectMaterialId": m.project_material_id,
         "globalMaterialId": gm.id if gm else None,
         "position": m.position,
+        "sortOrder": m.sort_order,
+        "struck": bool(m.struck),
         "wazNo": m.waz_no,
         "startOfPlumbing": m.start_of_plumbing,
         "endOfPlumbing": m.end_of_plumbing,
