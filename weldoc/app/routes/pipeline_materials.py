@@ -7,6 +7,7 @@ from app.models.pipeline_material import PipelineMaterial, pipeline_material_con
 from app.models.project_material import ProjectMaterial
 from app.models.weld import Weld
 from app.material_utils import clean_str, find_matching_project_material
+from app.spec_values import canon_certificate
 
 pipeline_materials_bp = Blueprint("pipeline_materials", __name__)
 
@@ -323,7 +324,7 @@ def edit_pipeline_material(pm_id):
     pm_changed = False
 
     if new_cert or new_heat:
-        cert = clean_str(new_cert or pm.certificate)
+        cert = canon_certificate(new_cert or pm.certificate)
         heat = clean_str(new_heat or pm.heat_no)
         cur_cert = clean_str(pm.certificate)
         cur_heat = clean_str(pm.heat_no)
@@ -586,7 +587,7 @@ def restore_pipeline_material(pm_id):
         content_type = file.content_type or "application/pdf"
 
     heat_no = clean_str(request.form.get("heatNo", "") or pm.heat_no)
-    certificate = clean_str(request.form.get("certificate", "") or pm.certificate)
+    certificate = canon_certificate(request.form.get("certificate", "") or pm.certificate)
     existing_pdf_url = request.form.get("existingPdfUrl", "").strip()
 
     cur_heat = clean_str(pm.heat_no)

@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify, current_app
 from app.database import db
+from app.spec_values import canon_certificate
 from app.models.project_material import ProjectMaterial
 from app.models.global_material import GlobalMaterial
 from app.models.project import Project
@@ -121,7 +122,7 @@ def _regenerate_waz_in_background(pm_id):
 @project_materials_bp.route("", methods=["POST"])
 def create_or_update_project_material():
     data = request.get_json() or {}
-    cert = clean_str(data.get("certificate"))
+    cert = canon_certificate(data.get("certificate"))
     heat = clean_str(data.get("heatNo"))
     waz_pdf_url = data.get("wazPdfUrl")
 

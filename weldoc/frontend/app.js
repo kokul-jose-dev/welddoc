@@ -930,7 +930,11 @@ function buildSelectOther(selectId, textId, options, value, noOther) {
     if (txt) txt.style.display = 'block';
   } else if (value && !inList && !noOther) {
     sel.value = '__other__';
-    if (txt) { txt.style.display = 'block'; txt.value = value; }
+    if (txt && isDienField(selectId)) {
+      ensureDienNorm(txt);
+      const [n, rest] = splitDien(value);
+      document.getElementById(textId + '-norm').value = n; txt.style.display = 'block'; txt.value = rest;
+    } else if (txt) { txt.style.display = 'block'; txt.value = value; }
   } else if (value && !inList && noOther) {
     sel.value = '';
     if (txt) { txt.style.display = 'none'; txt.value = ''; }
@@ -938,6 +942,7 @@ function buildSelectOther(selectId, textId, options, value, noOther) {
     sel.value = value || '';
     if (txt) { txt.style.display = 'none'; txt.value = ''; }
   }
+  if (txt && isDienField(selectId)) { const n = document.getElementById(textId + '-norm'); if (n && !txt.value) n.value = ''; syncDienNorm(txt); }
   if (ddType) ensureDropdownHideButton(sel, ddType);
 }
 /* ---- Hiding mistyped values in the material dropdowns (the x next to a dropdown) ----
@@ -1080,8 +1085,59 @@ async function openHiddenDropdownValues() {
   });
   document.body.appendChild(overlay);
 }
-function toggleSelectOther(selectId, textId) { const sel = document.getElementById(selectId), txt = document.getElementById(textId); if (sel.value === '__other__') { txt.style.display = 'block'; txt.focus(); } else { txt.style.display = 'none'; } }
-function readSelectOther(selectId, textId) { const sel = document.getElementById(selectId); if (!sel) return ''; const txt = document.getElementById(textId); return sel.value === '__other__' ? (txt ? specTypedToDisplay(specFieldKind(selectId), txt.value.trim()) : '') : sel.value; }
+function toggleSelectOther(selectId, textId) { const sel = document.getElementById(selectId), txt = document.getElementById(textId); if (isDienField(selectId)) ensureDienNorm(txt); if (sel.value === '__other__') { txt.style.display = 'block'; txt.focus(); } else { txt.style.display = 'none'; } if (isDienField(selectId)) syncDienNorm(txt); }
+function readSelectOther(selectId, textId) {
+  const sel = document.getElementById(selectId); if (!sel) return ''; const txt = document.getElementById(textId);
+  if (sel.value !== '__other__') return sel.value;
+  if (!txt) return '';
+  if (isDienField(selectId)) { const n = document.getElementById(textId + '-norm'); return joinDien(n ? n.value : '', txt.value); }
+  return specTypedToDisplay(specFieldKind(selectId), txt.value.trim());
+}
+
+/* ---- DIN EN number: "NORM number", e.g. "DIN 11865", "EN 10253-3" ----
+   An existing value is simply picked from the dropdown. A new one is typed with "+ Other":
+   the norm is chosen on the left (DIN, EN, ISO, SN) and only the number is typed. Picking
+   the norm AND typing it ("DIN 11865") still gives it once. The server writes it the same
+   way (canon_dien in app/spec_values.py). */
+const DIEN_NORMS = ['DIN', 'EN', 'ISO', 'SN'];
+function isDienField(selectId) { return /^(input-mat|mp|pm)-dien$/.test(String(selectId || '')); }
+function splitDien(v) {
+  const s = String(v || '').replace(/\s+/g, ' ').trim();
+  const m = s.match(/^(DIN|EN|ISO|SN)(?=[\s\d])\s*(.*)$/i);
+  return m ? [m[1].toUpperCase(), m[2].trim()] : ['', s];
+}
+function joinDien(norm, typed) {
+  const [typedNorm, rest] = splitDien(typed);
+  if (typedNorm) {
+    const [again, rest2] = splitDien(rest);
+    return `${typedNorm} ${again === typedNorm ? rest2 : rest}`.trim();
+  }
+  return rest ? (norm ? `${norm} ${rest}` : rest) : '';
+}
+/* The norm dropdown left of the "type it" box; shown and hidden together with the box. */
+function ensureDienNorm(txt) {
+  if (!txt || document.getElementById(txt.id + '-norm')) return;
+  const wrap = document.createElement('div'); wrap.className = 'dien-other-row';
+  const sel = document.createElement('select'); sel.id = txt.id + '-norm'; sel.className = 'dien-norm';
+  sel.innerHTML = `<option value="">${escapeHtml(t('select_norm', 'Norm…'))}</option>` + DIEN_NORMS.map(n => `<option value="${n}">${n}</option>`).join('');
+  txt.parentNode.insertBefore(wrap, txt); wrap.appendChild(sel); wrap.appendChild(txt);
+  txt.placeholder = t('dien_number_ph', 'Number, e.g. 11865');
+  new MutationObserver(() => syncDienNorm(txt)).observe(txt, { attributes: true, attributeFilter: ['style'] });
+  syncDienNorm(txt);
+  sel.addEventListener('change', () => txt.dispatchEvent(new Event('input', { bubbles: true })));
+}
+function syncDienNorm(txt) {
+  const wrap = txt && txt.parentElement;
+  if (wrap && wrap.classList.contains('dien-other-row')) wrap.style.display = txt.style.display === 'none' ? 'none' : 'flex';
+}
+/* A new DIN EN number typed without a norm - the form asks for one before saving. */
+function dienNormMissing(selectId, textId) {
+  const sel = document.getElementById(selectId), txt = document.getElementById(textId);
+  if (!sel || sel.value !== '__other__' || !txt || !txt.value.trim()) return false;
+  const n = document.getElementById(textId + '-norm');
+  return !splitDien(txt.value)[0] && !(n && n.value);
+}
+function dienNormMessage() { return t('dien_norm_required', 'Select a norm (DIN, EN, ISO or SN) for the DIN EN number.'); }
 
 /* ---- Specification numbers: DN, diameter, thickness, surface, material code ----
    The database stores only the number; the server sends each value in one display form
@@ -1969,6 +2025,7 @@ function attachFormHandlers() {
       else extraThks.push('');
     }
     const dienNo = readSelectOther('input-mat-dien', 'input-mat-dien-new');
+    if (dienNormMissing('input-mat-dien', 'input-mat-dien-new')) { err.textContent = dienNormMessage(); err.classList.add('show'); return; }
     const matCode = readSelectOther('input-mat-code', 'input-mat-code-new');
     const diameter = hasDiameter(piece) ? readSelectOther('input-mat-diameter', 'input-mat-diameter-new') : '';
     const thickness = hasThickness(piece) ? readSelectOther('input-mat-thickness', 'input-mat-thickness-new') : '';
@@ -8012,6 +8069,7 @@ function saveMaterialProps(e) {
     if (sel && txt) m[`dimension${i}`] = readSelectOther(`mp-dimension${i}`, `mp-dimension${i}-new`);
   }
   for (let i = dnCount + 1; i <= 6; i++) m[`dimension${i}`] = '';
+  if (dienNormMissing('mp-dien', 'mp-dien-new')) { alert(dienNormMessage()); return; }
   m.dienNo = readSelectOther('mp-dien', 'mp-dien-new');
   m.materialCode = readSelectOther('mp-code', 'mp-code-new');
   const diaCount = requiredDiameterCount(m.piece);
@@ -9332,6 +9390,7 @@ async function saveProjectMaterial(e) {
   /* An existing material has no supply data, whatever a cascade may have left in the
      hidden fields — blank it at the source so nothing stale is written. */
   const pmIsExist = isExistingMaterial(category);
+  if (!pmIsExist && dienNormMissing('pm-dien', 'pm-dien-new')) { err.textContent = dienNormMessage(); err.classList.add('show'); return; }
   const dienNo = pmIsExist ? '' : readSelectOther('pm-dien', 'pm-dien-new');
   const materialCode = pmIsExist ? '' : readSelectOther('pm-code', 'pm-code-new');
   const diaCount = requiredDiameterCount(category);

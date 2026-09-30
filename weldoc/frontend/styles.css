@@ -800,3 +800,8 @@ tr.row-struck a{pointer-events:none;color:inherit;}
 .archive-info-pop.open{display:block;}
 .conn-row.conn-fixed select{opacity:.75;cursor:not-allowed;}
 .conn-row .conn-lock{padding:0 8px;font-size:0.85rem;}
+
+/* DIN EN number, "+ Other": the norm (DIN / EN / ISO / SN) left of the number */
+.dien-other-row{display:flex;gap:6px;margin-top:6px;}
+.dien-other-row .dien-norm{flex:0 0 96px;width:96px;}
+.dien-other-row .select-other-text{flex:1 1 auto;margin-top:0;min-width:0;}

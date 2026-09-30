@@ -4,7 +4,7 @@ from app.database import db
 from app.models.global_material import GlobalMaterial
 from app.models.project_material import ProjectMaterial
 from app.models.pipeline_material import PipelineMaterial
-from app.spec_values import (
+from app.spec_values import (canon_certificate, canon_dien,
     canon_dn, canon_diameter, canon_thickness, canon_surface, canon_material_code,
 )
 
@@ -37,7 +37,7 @@ def normalize_gm_data(data):
     cat = clean_str(data.get("category") or data.get("piece"))
     desc = clean_str(data.get("itemDescription") or data.get("item_description") or cat)
     code = canon_material_code(data.get("materialCode") or data.get("material_code"))
-    dien = clean_str(data.get("dienNo") or data.get("dien_no"))
+    dien = canon_dien(clean_str(data.get("dienNo") or data.get("dien_no")))
     dia = clean_dim(data.get("diameter") or data.get("diameter1"))
     dia2 = clean_dim(data.get("diameter2"))
     dia3 = clean_dim(data.get("diameter3"))
@@ -114,7 +114,7 @@ def find_matching_project_material(project_id, global_material_id, certificate, 
     Search for an existing active ProjectMaterial for (project_id, global_material_id, cert, heat)
     case-insensitively and treating NULL as ''.
     """
-    clean_cert = clean_str(certificate).lower()
+    cert = canon_certificate(certificate)
     clean_heat = clean_str(heat_no).lower()
 
     try:
@@ -134,7 +134,8 @@ def find_matching_project_material(project_id, global_material_id, certificate, 
         ProjectMaterial.project_id == p_id,
         ProjectMaterial.global_material_id == g_id,
         ProjectMaterial.archived == False,
-        func.lower(func.rtrim(func.ltrim(func.coalesce(ProjectMaterial.certificate, "")))) == clean_cert,
+        # a number column: compared as a number, never through text functions
+        (ProjectMaterial.certificate == cert) if cert else ProjectMaterial.certificate.is_(None),
         func.lower(func.rtrim(func.ltrim(func.coalesce(ProjectMaterial.heat_no, "")))) == clean_heat,
     )
     if exclude_id is not None and str(exclude_id).isdigit():
@@ -223,7 +224,7 @@ def check_heat_number_diff(heat_no, form_data, project_id=None, exclude_pm_id=No
         return {"hasDuplicateHeat": False, "diffs": [], "existingMaterial": None}
 
     norm = normalize_gm_data(form_data)
-    form_cert = clean_str(form_data.get("certificate"))
+    form_cert = canon_certificate(form_data.get("certificate"))
 
     pid_int = None
     if project_id is not None and str(project_id).isdigit():

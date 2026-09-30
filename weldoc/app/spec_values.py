@@ -168,6 +168,57 @@ def canon_material_code(value):
     return "" if s is None else show_material_code(s)
 
 
+# --- certificate (e.g. 3.1) and DIN EN number (e.g. DIN 11865) -------------------------------
+# The certificate is a number with exactly one decimal (EN 10204 types 2.1, 2.2, 3.1, ...): the
+# database stores it as DECIMAL(3,1) (migration 012), shown and compared as "3.1"; "3,1" is
+# accepted. The DIN EN number stays text, written "NORM number": the norm (DIN, EN, ISO, SN) in
+# capitals, one space, then the number as typed ("DIN 11864-2", "EN 10253-3").
+
+DIEN_NORMS = ("DIN", "EN", "ISO", "SN")
+_DIEN_RE = re.compile(r"(?i)^\s*(DIN|EN|ISO|SN)(?=[\s\d])\s*(.*)$")
+
+
+def store_certificate(value):
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        value = format(value, "f")
+    s = str(value).strip().replace(",", ".")
+    if s == "":
+        return None
+    if not re.fullmatch(r"\d{1,2}\.\d", s):
+        raise SpecValueError(f"Certificate: '{value}' is not valid. Enter a number with one decimal, e.g. 3.1.")
+    return s
+
+
+def show_certificate(value):
+    if value is None or (isinstance(value, str) and value.strip() == ""):
+        return value if value is None else ""
+    try:
+        return f"{Decimal(str(value).strip().replace(',', '.')):.1f}"
+    except (InvalidOperation, ValueError):
+        return str(value).strip()           # an old value that is not a number: show it, do not break
+
+
+def canon_certificate(value):
+    s = store_certificate(value)
+    return "" if s is None else s
+
+
+def canon_dien(value):
+    """"din 11865" / "DIN11865" / "DIN DIN 11865" -> "DIN 11865". Anything without a known
+    norm in front is only trimmed (the form asks for the norm when a new one is typed)."""
+    s = re.sub(r"\s+", " ", str(value or "")).strip()
+    m = _DIEN_RE.match(s)
+    if not m:
+        return s
+    norm, rest = m.group(1).upper(), m.group(2).strip()
+    again = _DIEN_RE.match(rest)
+    if again and again.group(1).upper() == norm:     # the norm picked AND typed: only once
+        rest = again.group(2).strip()
+    return f"{norm} {rest}".strip()
+
+
 # --- column types -------------------------------------------------------------------------
 
 class _SpecColumn(TypeDecorator):
@@ -211,6 +262,12 @@ class MaterialCodeColumn(_SpecColumn):
     cache_ok = True
     _store = staticmethod(store_material_code)
     _show = staticmethod(show_material_code)
+
+
+class CertificateColumn(_SpecColumn):
+    cache_ok = True
+    _store = staticmethod(store_certificate)
+    _show = staticmethod(show_certificate)
 
 
 # --- whole numbers and dates (welds, pipelines, certificates, projects) ---------------------
@@ -333,6 +390,7 @@ SHOW_BY_COLUMN = {
     "thickness": show_thickness, "thickness2": show_thickness, "thickness3": show_thickness,
     "surface": show_surface,
     "material_code": show_material_code,
+    "certificate": show_certificate,
     # whole numbers and dates
     "weld_no": show_whole, "procedure": show_whole, "ist_project_no": show_whole,
     "date": show_date, "welding_start": show_date, "welding_end": show_date,
