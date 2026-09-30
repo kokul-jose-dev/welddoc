@@ -1542,7 +1542,7 @@ function mountModals() {
       </div></div>
       <div class="field wide"><span class="lbl" data-i18n="connections">Connections (other materials this joins to)</span>
         <div id="conn-rows"></div>
-        <button type="button" class="inline-add-toggle" onclick="addConnRow()" data-i18n="add_connection">+ Add connection</button>
+        <button type="button" class="inline-add-toggle" id="add-conn-btn" onclick="addConnRow()" data-i18n="add_connection">+ Add connection</button>
         <div class="field-hint" id="conn-hint"></div>
       </div>
       <div class="modal-err" id="material-err"></div>
@@ -3961,8 +3961,12 @@ function renderConnRows(preset) {
   const validIds = new Set(allMats.map(m => m.id));
   const list = (preset || []).filter(cid => validIds.has(cid));
   const editing = editingMaterialId !== null ? getMaterial(editingMaterialId) : null;
-  const fixed = new Set(editing && pipelineNumberingFrozen(editing.pipelineId) ? (editing.connections || []) : []);
+  const locked = Boolean(editing && pipelineNumberingFrozen(editing.pipelineId));
+  const fixed = new Set(locked ? (editing.connections || []) : []);
   list.forEach(cid => addConnRow(cid, fixed.has(cid)));
+  /* After welding an existing material's connections are fixed - nothing can be added either */
+  const addBtn = document.getElementById('add-conn-btn');
+  if (addBtn) addBtn.style.display = locked ? 'none' : '';
   updateConnHint();
 }
 function updateConnHint() {

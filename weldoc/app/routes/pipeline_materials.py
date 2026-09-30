@@ -1629,18 +1629,16 @@ def _restore_in_place(m):
     db.session.commit()
 
     # The bridge made on archive: its two neighbours joined to each other. The material sits
-    # between them again, so that link and its weld go - unless something was recorded on it.
+    # between them again, so that link and its weld go (like any removed connection).
     if len(neighbours) == 2:
         a, b = neighbours
         if b in a.connections:
-            bridge = _welds_on_joint(pipeline_id, a.id, a.position, b.id, b.position)
-            if not any(_weld_work(w) for w in bridge):
-                a.connections.remove(b)
-                if a in b.connections:
-                    b.connections.remove(a)
-                for w in bridge:
-                    db.session.delete(w)
-                db.session.commit()
+            a.connections.remove(b)
+            if a in b.connections:
+                b.connections.remove(a)
+            for w in _welds_on_joint(pipeline_id, a.id, a.position, b.id, b.position):
+                db.session.delete(w)
+            db.session.commit()
 
     _refresh_weld_labels(pipeline_id)
     db.session.commit()
@@ -1703,8 +1701,9 @@ def _place_in_gap(m, pipeline_id):
 
 
 def _locked_connection_refusal(pipeline_id, m, current_conns, conn_positions):
-    """After welding a connection can be added, never removed - and a material can no longer
-    be spliced between two parts welded to each other (that removes their weld)."""
+    """After welding the connections of an existing material (m) are fixed: nothing added,
+    nothing removed. A NEW material (m is None) may be connected - but not spliced between two
+    parts welded to each other (that removes their weld)."""
     target = []
     for val in conn_positions or []:
         c = _find_mat_by_id_or_pos(pipeline_id, val)
@@ -1721,6 +1720,13 @@ def _locked_connection_refusal(pipeline_id, m, current_conns, conn_positions):
                        + "). To take a material out, archive it.",
         }), 409
     added = [c for c in target if c not in current_conns]
+    if m is not None and added:
+        return jsonify({
+            "error": "connections_locked",
+            "message": "A welder or inspector is assigned in this pipeline, so the connections "
+                       "of an existing material cannot be changed. Add a new material to connect "
+                       "parts.",
+        }), 409
     joined = [(a, b) for i, a in enumerate(target) for b in target[i + 1:]
               if (a in added or b in added) and b in a.connections]
     if joined:
@@ -1868,10 +1874,9 @@ def _welds_deleted_by_connection_change(pipeline_id, own_pos, current_conns, con
             continue
         target.append(c)
 
+    # A removed connection's weld is deleted without a question (decided 2026-09-30); only
+    # splicing a material between two welded parts asks first.
     welds = []
-    for rem in current_conns:
-        if rem not in target:
-            welds += _welds_on_joint(pipeline_id, own_id, own_pos, rem.id, rem.position)
 
     changed = {c.id for c in current_conns} != {c.id for c in target}
     if changed or start_of_plumbing:
