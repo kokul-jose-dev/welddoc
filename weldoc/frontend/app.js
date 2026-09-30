@@ -907,17 +907,12 @@ function buildSelectSimple(selectId, options, value) {
 function buildSelectOther(selectId, textId, options, value, noOther) {
   const sel = document.getElementById(selectId), txt = document.getElementById(textId);
   if (!sel) return;
-  /* Values hidden with the x next to a material dropdown are not offered while there is
-     something else to choose. Still offered (marked "hidden"): the value this field already
-     has, a value a material of the current project uses (so the project can reuse its own
-     materials), and - when every value left is hidden - the hidden ones, because the form has
-     narrowed the choice down to existing materials that carry them. */
+  /* Values hidden with the x next to a material dropdown are not offered. Still offered
+     (marked "hidden"): the value this field already has, and - in the pipeline material form
+     only - a value of the EXISTING project material being picked (see ddVisible). */
   const ddType = dropdownTypeOf(selectId);
   let opts = options.slice();
-  if (ddType) {
-    const visible = opts.filter(o => o === value || !isHiddenDropdownValue(ddType, o) || projectUsesDropdownValue(ddType, o));
-    if (visible.some(o => o && o !== value)) opts = visible;
-  }
+  if (ddType) opts = ddVisible(selectId, opts, value);
   const hiddenMark = o => (ddType && isHiddenDropdownValue(ddType, o)) ? ` (${t('dd_hidden_mark', 'hidden')})` : '';
   const inList = value && value !== '__other__' && opts.includes(value);
   sel.innerHTML = '<option value="">Select…</option>' + opts.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}${hiddenMark(o)}</option>`).join('') + (noOther ? '' : '<option value="__other__">+ Other (type it)…</option>');
@@ -958,19 +953,34 @@ function isHiddenDropdownValue(type, value) {
   const v = String(value || '').trim().toLowerCase();
   return !!v && (DD_HIDDEN[type] || []).some(h => String(h).trim().toLowerCase() === v);
 }
-/* Does a material of the project on this page use the value? Only the pipeline and project
-   pages hold one project's materials in DB.projectMaterials. */
+/* The project-material fields that hold each dropdown type. */
 const DD_PM_FIELDS = {
   dn: ['dn1', 'dn2', 'dn3', 'dn4', 'dn5', 'dn6'], diameter: ['diameter', 'diameter2', 'diameter3'],
   thickness: ['thickness', 'thickness2', 'thickness3'], surface: ['surface'],
   material_code: ['materialCode'], dien_no: ['dienNo']
 };
-function projectUsesDropdownValue(type, value) {
-  if (PAGE.name !== 'pipeline-detail' && PAGE.name !== 'project-detail') return false;
-  const v = String(value || '').trim().toLowerCase();
-  if (!v) return false;
-  return (DB.projectMaterials || []).some(pm => !pm.archived &&
-    (DD_PM_FIELDS[type] || []).some(f => String(pm[f] || '').trim().toLowerCase() === v));
+/* Hidden values the pipeline material form may still offer: those of the existing project
+   materials matching the selected project heat. Set by _refreshPipelineMatCombinations; empty
+   for a new material (no heat, or a heat that is not in the project). Other forms, like the
+   project material form, never offer hidden values. */
+let _ddAllowedHidden = {};
+function _setDdAllowedHidden(mats) {
+  _ddAllowedHidden = {};
+  for (const [type, fields] of Object.entries(DD_PM_FIELDS)) {
+    _ddAllowedHidden[type] = new Set(mats.flatMap(m => fields.map(f => String(m[f] || '').trim().toLowerCase())).filter(Boolean));
+  }
+}
+/* The options without hidden values, except the field's own value and the allowance above. */
+function ddVisible(selectId, list, keep) {
+  const type = dropdownTypeOf(selectId);
+  if (!type) return list;
+  const allowed = String(selectId).startsWith('input-mat-') ? (_ddAllowedHidden[type] || new Set()) : new Set();
+  return list.filter(o => (keep && o === keep) || !isHiddenDropdownValue(type, o) || allowed.has(String(o).trim().toLowerCase()));
+}
+/* The one value to pre-select when only one is left - never a hidden one. */
+function ddSingle(selectId, list) {
+  const v = ddVisible(selectId, list, null);
+  return v.length === 1 ? v[0] : '';
 }
 async function loadHiddenDropdownValues() {
   try {
@@ -1866,7 +1876,8 @@ function attachFormHandlers() {
       const selMats = data.materialIds.map(id => getMaterial(id)).filter(Boolean);
       const bA = selMats[0] ? posLetter(selMats[0].position) : '';
       const bB = selMats[1] ? posLetter(selMats[1].position) : '';
-      const apiData = { pipelineId: data.pipelineId, weldNo: data.weldNo, betweenA: bA, betweenB: bB, type: data.type, procedure: data.procedure, welderId: welderIdVal, inspectorId: inspectorIdVal, welder: welderName, inspector: inspectorName, date: data.date, visual: data.visual, endoscopy: data.endoscopy, remarks: data.remarks };
+      const apiData = { pipelineId: data.pipelineId, weldNo: data.weldNo, betweenA: bA, betweenB: bB,
+        materialAId: selMats[0] ? selMats[0].id : null, materialBId: selMats[1] ? selMats[1].id : null, type: data.type, procedure: data.procedure, welderId: welderIdVal, inspectorId: inspectorIdVal, welder: welderName, inspector: inspectorName, date: data.date, visual: data.visual, endoscopy: data.endoscopy, remarks: data.remarks };
       if (existingWeld && existingWeld.weldingWire) apiData.weldingWire = existingWeld.weldingWire;
       if (editingWeldId !== null) apiData.id = editingWeldId;
       const savedWeld = await apiPost('/welds', apiData);
@@ -1992,7 +2003,8 @@ function attachFormHandlers() {
     if (!_bypassMatHeatConflict) {
       const dnsObj = { dn1: dimension };
       for (let i = 2; i <= 6; i++) if (data[`dimension${i}`]) dnsObj[`dn${i}`] = data[`dimension${i}`];
-      const specsObj = { category: piece, itemDescription: itemDesc || piece, dn1: dimension, materialCode: data.materialCode, dienNo: data.dienNo, diameter, thickness, surface: data.surface, certificate, ...dnsObj };
+      const specsObj = { category: piece, itemDescription: itemDesc || piece, dn1: dimension, materialCode: data.materialCode, dienNo: data.dienNo, diameter, thickness, surface: data.surface, certificate, ...dnsObj,
+        diameter2: data.diameter2, diameter3: data.diameter3, thickness2: data.thickness2, thickness3: data.thickness3 };
 
       // Step 1: Check if an exact match on ALL fields exists (with same heatNo or both no heatNo)
       const dupMatch = findDuplicateProjectMaterial(currentProjectId, heatNo, specsObj, isEditingMat && existingMat ? existingMat.projectMaterialId : null);
@@ -2005,12 +2017,34 @@ function attachFormHandlers() {
         return;
       }
 
-      // Step 2: If no heat number, check if exactly 1 material matches all MANDATORY fields
+      // Step 2: No heat number - exactly 1 project or global material with the same REQUIRED
+      // fields but other fields different -> ask. None or several -> added as new below.
       if (!heatNo) {
-        const mandatoryMatches = findMandatoryMatchingProjectMaterials(currentProjectId, specsObj, isEditingMat && existingMat ? existingMat.projectMaterialId : null);
-        if (mandatoryMatches.length === 1) {
-          const matched = mandatoryMatches[0];
-          const diffs = getMaterialDiffs(matched.projectMaterial, matched.globalMaterial, specsObj);
+        const reqMatches = findRequiredFieldMatches(currentProjectId, specsObj,
+          isEditingMat && existingMat ? existingMat.projectMaterialId : null,
+          isEditingMat && existingMat ? existingMat.globalMaterialId : null);
+        const matched = reqMatches.length === 1 ? reqMatches[0] : null;
+        const diffs = matched ? requiredMatchDiffs(matched, specsObj) : [];
+        if (matched && diffs.length && matched.kind === 'global') {
+          promptHeatConflictModal({
+            mode: 'update_or_add_new',
+            title: t('similar_global_material_title', 'Similar Global Material Exists'),
+            desc: t('similar_global_material_desc', 'A global material with the same required specifications already exists, but some other specifications differ.<br><br><strong>Update</strong> — the global material is changed to these values, in <strong>every project that uses it</strong>.<br><strong>Add as New Material</strong> — a separate material is created with these values.'),
+            diffs,
+            updateBtnText: t('update', 'Update'),
+            addBtnText: t('add_as_new', 'Add as New Material'),
+            existingMaterial: { globalMaterialId: matched.globalMaterial.id, projectMaterialId: null },
+            onAddAsNew: async () => {
+              await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: editingMaterialId, forceNew: true });
+            },
+            onUpdateExisting: async () => {
+              try { await updateGlobalMaterialTo(matched.globalMaterial.id, specsObj); } catch (ex) { alertSaveFailed(ex); return; }
+              await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: editingMaterialId, forceNew: false });
+            }
+          });
+          return;
+        }
+        if (matched && diffs.length) {
           promptHeatConflictModal({
             mode: 'update_or_add_new',
             title: t('similar_material_exists_title', 'Similar Material Exists'),
@@ -2930,6 +2964,12 @@ function matCatalogFiltered() {
   if (desc && desc !== '__other__') items = items.filter(i => i.description === desc);
   return items;
 }
+/* Spec fields (DIN EN, material code, diameter, thickness, surface and the extra ports) that
+   the form filled in by itself because only one value was left. When another spec field
+   changes, these are worked out again; values the user chose stay. Reset on opening the form. */
+let _matAutoFilled = new Set();
+const _MAT_SPEC_KEY = /^(dien|code|diameter\d*|thickness\d*|surface)$/;
+
 function _refreshPipelineMatCombinations(triggerField = null) {
   const projMats = DB.projectMaterials || [];
   const globalMats = DB.globalMaterials || [];
@@ -3025,7 +3065,22 @@ function _refreshPipelineMatCombinations(triggerField = null) {
       const idx = triggerField.replace('diameter', '');
       curExtraThks[idx] = '';
     }
+    /* A spec field changed: the values that were only filled in because of the old choice
+       are worked out again from the new one. */
+    if (triggerField && _MAT_SPEC_KEY.test(triggerField)) {
+      for (const k of _matAutoFilled) {
+        if (k === triggerField) continue;
+        if (k === 'dien') curDien = '';
+        else if (k === 'code') curCode = '';
+        else if (k === 'diameter') curDia = '';
+        else if (k === 'thickness') curThk = '';
+        else if (k === 'surface') curSurf = '';
+        else if (k.startsWith('diameter')) curExtraDias[k.replace('diameter', '')] = '';
+        else if (k.startsWith('thickness')) curExtraThks[k.replace('thickness', '')] = '';
+      }
+    }
   }
+  if (triggerField) _matAutoFilled.delete(triggerField);   /* the user chose this one */
 
   /* Adopt the previous material's DN(s) as an ACTIVE FILTER (not just a display value),
      but only when the chosen category really has materials with that DN. Doing this here,
@@ -3157,6 +3212,56 @@ function _refreshPipelineMatCombinations(triggerField = null) {
     pool = candidates.length ? candidates : (gmFiltered.length ? gmFiltered : src.filter(i => !curPiece || i.piece.toLowerCase() === curPiece.toLowerCase()));
   }
 
+  /* Hidden dropdown values are only offered when an existing project material is being
+     picked (a project heat is selected), and only those that material really has. */
+  /* No heat chosen yet: the project materials WITHOUT a heat number that have this category,
+     description and DN(s) are existing materials being picked too. Their hidden values are
+     offered, and a value only they have is selected (see _projNoHeatPick). */
+  const projNoHeat = (!isHeatSelected && curPiece && !curHeat)
+    ? projMats.filter(pm => !(pm.heatNo || '').trim() && matchesCatDn(pm) && descMatches(pm))
+    : [];
+  if (isHeatSelected) {
+    const picked = baseHeatCandidates.filter(pm => matchesCatDn(pm) && descMatches(pm));
+    _setDdAllowedHidden(picked.length ? picked : baseHeatCandidates);
+  } else {
+    _setDdAllowedHidden(projNoHeat);
+  }
+
+  /* The five spec fields narrow EACH OTHER: picking a material code leaves only the DIN EN
+     numbers, diameters, thicknesses and surfaces that exist together with that code. A field
+     is never narrowed by its own value (so it can still be switched), and a combination that
+     matches nothing falls back to the unnarrowed list rather than leaving an empty dropdown. */
+  const _specOf = {
+    dien: m => m.dienNo || m.dien,
+    code: m => m.materialCode || m.code,
+    diameter: m => m.diameter,
+    thickness: m => m.thickness,
+    surface: m => m.surface,
+  };
+  const _specSel = { dien: curDien, code: curCode, diameter: curDia, thickness: curThk, surface: curSurf };
+  function bySpecStrict(list, except) {
+    return list.filter(m => Object.keys(_specSel).every(k => {
+      const sel = _specSel[k];
+      if (k === except || !sel || sel === '__other__') return true;
+      const v = _specOf[k](m);
+      return !v || v === sel;
+    }));
+  }
+  function bySpec(list, except) {
+    const out = bySpecStrict(list, except);
+    return out.length ? out : list;
+  }
+
+  /* The one value the matching no-heat project materials have for this field, narrowed by the
+     other spec fields chosen - WITHOUT the fallback of bySpec, so a combination they do not have
+     never pre-selects their value. Empty when there is none or more than one. */
+  function _projNoHeatPick(fieldKey, getter) {
+    if (!projNoHeat.length) return '';
+    const narrowed = bySpecStrict(projNoHeat, fieldKey);
+    const vals = [...new Set(narrowed.map(getter).filter(Boolean))];
+    return vals.length === 1 ? vals[0] : '';
+  }
+
   function makeOpts(pmVals, gmVals) {
     if (isHeatSelected) {
       return [...new Set(pmVals.filter(Boolean))];
@@ -3213,55 +3318,63 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   const dnScopeGms = catOnlyGms.filter(descMatches);
   const pmDns = dnScopePms.map(m => _dnOf(m, 1));
   const gmDns = dnScopeGms.map(g => _dnOf(g, 1));
-  const availDns = isHeatSelected ? [...new Set(pmDns.filter(Boolean))] : makeOpts(pmDns, gmDns);
+  const availDns = ddVisible('input-mat-dimension', isHeatSelected ? [...new Set(pmDns.filter(Boolean))] : makeOpts(pmDns, gmDns), curDn);
   const availDnsCount = [...new Set(pmDns.filter(Boolean))].length;
 
   // 6. DIN EN
-  const dienSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : (gmFiltered.length ? gmFiltered : pool);
-  const pmDiens = dienSource.map(m => m.dienNo || m.dien);
-  const gmDiens = gmFiltered.map(g => g.dienNo || g.dien);
-  const availDiens = makeOpts(pmDiens, gmDiens);
+  const dienSource = bySpec(isHeatSelected ? baseHeatCandidates : (gmFiltered.length ? gmFiltered : pool), 'dien');
+  const pmDiens = [...dienSource, ...bySpecStrict(projNoHeat, 'dien')].map(m => m.dienNo || m.dien);
+  const gmDiens = bySpec(gmFiltered, 'dien').map(g => g.dienNo || g.dien);
+  const availDiens = ddVisible('input-mat-dien', makeOpts(pmDiens, gmDiens), curDien);
 
   // 7. Material Code
-  const codeSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : (gmFiltered.length ? gmFiltered : pool);
-  const pmCodes = codeSource.map(m => m.materialCode || m.code);
-  const gmCodes = gmFiltered.map(g => g.materialCode || g.code);
-  const availCodes = makeOpts(pmCodes, gmCodes);
+  const codeSource = bySpec(isHeatSelected ? baseHeatCandidates : (gmFiltered.length ? gmFiltered : pool), 'code');
+  const pmCodes = [...codeSource, ...bySpecStrict(projNoHeat, 'code')].map(m => m.materialCode || m.code);
+  const gmCodes = bySpec(gmFiltered, 'code').map(g => g.materialCode || g.code);
+  const availCodes = ddVisible('input-mat-code', makeOpts(pmCodes, gmCodes), curCode);
 
   // 8. Diameter (Port 1)
-  const diaSource = isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : (gmFiltered.length ? gmFiltered : pool);
-  let pmDias = diaSource.map(m => m.diameter);
-  let gmDias = gmFiltered.map(g => g.diameter);
+  const diaSource = bySpec(isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : (gmFiltered.length ? gmFiltered : pool), 'diameter');
+  let pmDias = [...diaSource, ...bySpecStrict(projNoHeat, 'diameter')].map(m => m.diameter);
+  let gmDias = bySpec(gmFiltered, 'diameter').map(g => g.diameter);
   if (!isHeatSelected && curDn && curDn !== '__other__' && !pmDias.filter(Boolean).length && !gmDias.filter(Boolean).length) {
     gmDias = globalMats.filter(g => (g.dn1 || g.dimension) === curDn).map(g => g.diameter);
   }
-  const availDias = makeOpts(pmDias, gmDias);
+  const availDias = ddVisible('input-mat-diameter', makeOpts(pmDias, gmDias), curDia);
 
   // 9. Thickness (Port 1)
-  const thkSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : (curDia && curDia !== '__other__' ? gmFiltered.filter(g => !g.diameter || g.diameter === curDia) : (gmFiltered.length ? gmFiltered : pool));
-  let pmThks = thkSource.map(m => m.thickness);
+  const thkSource = bySpec(isHeatSelected ? baseHeatCandidates : (gmFiltered.length ? gmFiltered : pool), 'thickness');
+  let pmThks = [...thkSource, ...bySpecStrict(projNoHeat, 'thickness')].map(m => m.thickness);
   let gmThks = thkSource.map(g => g.thickness);
   if (!isHeatSelected && curDn && curDn !== '__other__' && !pmThks.filter(Boolean).length && !gmThks.filter(Boolean).length) {
     gmThks = globalMats.filter(g => (g.dn1 || g.dimension) === curDn && (!curDia || curDia === '__other__' || g.diameter === curDia)).map(g => g.thickness);
   }
-  const availThks = makeOpts(pmThks, gmThks);
+  const availThks = ddVisible('input-mat-thickness', makeOpts(pmThks, gmThks), curThk);
 
   // 10. Surface
-  const surfSource = isHeatSelected ? (curDia && curDia !== '__other__' ? baseHeatCandidates.filter(m => !m.diameter || m.diameter === curDia) : baseHeatCandidates) : (gmFiltered.length ? gmFiltered : pool);
-  const pmSurfs = surfSource.map(m => m.surface);
-  const gmSurfs = gmFiltered.map(g => g.surface);
-  const availSurfs = makeOpts(pmSurfs, gmSurfs);
+  const surfSource = bySpec(isHeatSelected ? baseHeatCandidates : (gmFiltered.length ? gmFiltered : pool), 'surface');
+  const pmSurfs = [...surfSource, ...bySpecStrict(projNoHeat, 'surface')].map(m => m.surface);
+  const gmSurfs = bySpec(gmFiltered, 'surface').map(g => g.surface);
+  const availSurfs = ddVisible('input-mat-surface', makeOpts(pmSurfs, gmSurfs), curSurf);
 
   const isDnTrigger = Boolean(triggerField && (triggerField === 'dn' || /^dn\d+$/.test(triggerField)));
 
-  function getFieldValue(fieldKey, curVal, availVals, selId) {
+  function getFieldValue(fieldKey, curVal, availVals, selId, preferred) {
     const selEl = selId ? document.getElementById(selId) : null;
     const isOtherSelected = selEl && selEl.value === '__other__';
     if (triggerField === fieldKey) return isOtherSelected ? '__other__' : curVal;
     if (isTriggerOther && isOtherSelected) return '__other__';
     if (isOtherSelected) return '__other__';
     if (curVal && availVals.includes(curVal)) return curVal;
-    if (availVals.length === 1 && !curVal) return availVals[0];
+    if (!curVal && preferred) {            /* the value of the existing no-heat project material */
+      if (_MAT_SPEC_KEY.test(fieldKey)) _matAutoFilled.add(fieldKey);
+      return preferred;
+    }
+    if (availVals.length === 1 && !curVal) {
+      if (_MAT_SPEC_KEY.test(fieldKey)) _matAutoFilled.add(fieldKey);
+      return availVals[0];
+    }
+    if (!curVal) _matAutoFilled.delete(fieldKey);
     return curVal || '';
   }
 
@@ -3322,7 +3435,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
     if (sel) {
       const pmExtraDns = dnScopePms.map(m => _dnOf(m, i));
       const gmExtraDns = dnScopeGms.map(g => _dnOf(g, i));
-      const availExtraDns = isHeatSelected ? [...new Set(pmExtraDns.filter(Boolean))] : makeOpts(pmExtraDns, gmExtraDns);
+      const availExtraDns = ddVisible(`input-mat-dimension${i}`, isHeatSelected ? [...new Set(pmExtraDns.filter(Boolean))] : makeOpts(pmExtraDns, gmExtraDns), curExtraDns[i]);
       const extraDnOpts = availExtraDns.length ? availExtraDns : (isHeatSelected ? [] : DIMENSION_OPTIONS);
       let targetExtraDn = getFieldValue(`dn${i}`, curExtraDns[i], extraDnOpts, `input-mat-dimension${i}`);
       if (!targetExtraDn && availExtraDns.length === 1) targetExtraDn = availExtraDns[0];
@@ -3337,7 +3450,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
 
   // 6. DIN EN
   const dienOpts = availDiens;
-  const targetDien = getFieldValue('dien', curDien, availDiens, 'input-mat-dien');
+  const targetDien = getFieldValue('dien', curDien, availDiens, 'input-mat-dien', _projNoHeatPick('dien', m => m.dienNo || m.dien));
   const isDienOther = document.getElementById('input-mat-dien') && document.getElementById('input-mat-dien').value === '__other__';
   if (targetDien && targetDien !== '__other__' && !isDienOther && !dienOpts.includes(targetDien)) dienOpts.unshift(targetDien);
   if (triggerField !== 'dien') {
@@ -3346,7 +3459,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
 
   // 7. Material Code
   const codeOpts = availCodes;
-  const targetCode = getFieldValue('code', curCode, availCodes, 'input-mat-code');
+  const targetCode = getFieldValue('code', curCode, availCodes, 'input-mat-code', _projNoHeatPick('code', m => m.materialCode || m.code));
   const isCodeOther = document.getElementById('input-mat-code') && document.getElementById('input-mat-code').value === '__other__';
   if (targetCode && targetCode !== '__other__' && !isCodeOther && !codeOpts.includes(targetCode)) codeOpts.unshift(targetCode);
   if (triggerField !== 'code') {
@@ -3355,7 +3468,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
 
   // 8. Diameter (Port 1)
   const diaOpts = availDias;
-  const targetDia = getFieldValue('diameter', curDia, availDias, 'input-mat-diameter');
+  const targetDia = getFieldValue('diameter', curDia, availDias, 'input-mat-diameter', _projNoHeatPick('diameter', m => m.diameter));
   const isDiaOther = document.getElementById('input-mat-diameter') && document.getElementById('input-mat-diameter').value === '__other__';
   if (targetDia && targetDia !== '__other__' && !isDiaOther && !diaOpts.includes(targetDia)) diaOpts.unshift(targetDia);
   if (triggerField !== 'diameter') {
@@ -3367,13 +3480,13 @@ function _refreshPipelineMatCombinations(triggerField = null) {
     const sel = document.getElementById(`input-mat-diameter${i}`);
     if (sel) {
       const portDn = curExtraDns[i];
-      let pmExtraDias = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : pool).map(m => m[`diameter${i}`] || (portDn && (m[`dimension${i}`] || m[`dn${i}`]) === portDn ? m.diameter : ''));
-      let gmExtraDias = gmFiltered.map(g => g[`diameter${i}`] || (portDn && (g[`dimension${i}`] || g[`dn${i}`]) === portDn ? g.diameter : ''));
+      let pmExtraDias = bySpec(isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : pool).map(m => m[`diameter${i}`] || (portDn && (m[`dimension${i}`] || m[`dn${i}`]) === portDn ? m.diameter : ''));
+      let gmExtraDias = bySpec(gmFiltered).map(g => g[`diameter${i}`] || (portDn && (g[`dimension${i}`] || g[`dn${i}`]) === portDn ? g.diameter : ''));
       if (!isHeatSelected && portDn && portDn !== '__other__' && !pmExtraDias.filter(Boolean).length && !gmExtraDias.filter(Boolean).length) {
         gmExtraDias = globalMats.filter(g => (g.dn1 || g.dimension) === portDn).map(g => g.diameter);
       }
-      const availExtraDias = isHeatSelected ? [...new Set(pmExtraDias.filter(Boolean))] : makeOpts(pmExtraDias, gmExtraDias);
-      let targetExtraDia = getFieldValue(`diameter${i}`, curExtraDias[i], availExtraDias, `input-mat-diameter${i}`);
+      const availExtraDias = ddVisible(`input-mat-diameter${i}`, isHeatSelected ? [...new Set(pmExtraDias.filter(Boolean))] : makeOpts(pmExtraDias, gmExtraDias), curExtraDias[i]);
+      let targetExtraDia = getFieldValue(`diameter${i}`, curExtraDias[i], availExtraDias, `input-mat-diameter${i}`, _projNoHeatPick(`diameter${i}`, m => m[`diameter${i}`]));
       const isExtraDiaOther = sel.value === '__other__';
       if (targetExtraDia && targetExtraDia !== '__other__' && !isExtraDiaOther && !availExtraDias.includes(targetExtraDia)) availExtraDias.unshift(targetExtraDia);
       if (triggerField !== `diameter${i}`) {
@@ -3384,7 +3497,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
 
   // 9. Thickness (Port 1)
   const thkOpts = availThks;
-  const targetThk = getFieldValue('thickness', curThk, availThks, 'input-mat-thickness');
+  const targetThk = getFieldValue('thickness', curThk, availThks, 'input-mat-thickness', _projNoHeatPick('thickness', m => m.thickness));
   const isThkOther = document.getElementById('input-mat-thickness') && document.getElementById('input-mat-thickness').value === '__other__';
   if (targetThk && targetThk !== '__other__' && !isThkOther && !thkOpts.includes(targetThk)) thkOpts.unshift(targetThk);
   if (triggerField !== 'thickness') {
@@ -3397,13 +3510,13 @@ function _refreshPipelineMatCombinations(triggerField = null) {
     if (sel) {
       const portDn = curExtraDns[i];
       const portDia = curExtraDias[i];
-      let pmExtraThks = (isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : pool).map(m => m[`thickness${i}`] || (portDn && (m[`dimension${i}`] || m[`dn${i}`]) === portDn ? m.thickness : ''));
-      let gmExtraThks = gmFiltered.map(g => g[`thickness${i}`] || (portDn && (g[`dimension${i}`] || g[`dn${i}`]) === portDn ? g.thickness : ''));
+      let pmExtraThks = bySpec(isHeatSelected ? (baseHeatCandidates.length ? baseHeatCandidates : pool) : pool).map(m => m[`thickness${i}`] || (portDn && (m[`dimension${i}`] || m[`dn${i}`]) === portDn ? m.thickness : ''));
+      let gmExtraThks = bySpec(gmFiltered).map(g => g[`thickness${i}`] || (portDn && (g[`dimension${i}`] || g[`dn${i}`]) === portDn ? g.thickness : ''));
       if (!isHeatSelected && portDn && portDn !== '__other__' && !pmExtraThks.filter(Boolean).length && !gmExtraThks.filter(Boolean).length) {
         gmExtraThks = globalMats.filter(g => (g.dn1 || g.dimension) === portDn && (!portDia || portDia === '__other__' || g.diameter === portDia)).map(g => g.thickness);
       }
-      const availExtraThks = isHeatSelected ? [...new Set(pmExtraThks.filter(Boolean))] : makeOpts(pmExtraThks, gmExtraThks);
-      let targetExtraThk = getFieldValue(`thickness${i}`, curExtraThks[i], availExtraThks, `input-mat-thickness${i}`);
+      const availExtraThks = ddVisible(`input-mat-thickness${i}`, isHeatSelected ? [...new Set(pmExtraThks.filter(Boolean))] : makeOpts(pmExtraThks, gmExtraThks), curExtraThks[i]);
+      let targetExtraThk = getFieldValue(`thickness${i}`, curExtraThks[i], availExtraThks, `input-mat-thickness${i}`, _projNoHeatPick(`thickness${i}`, m => m[`thickness${i}`]));
       const isExtraThkOther = sel.value === '__other__';
       if (targetExtraThk && targetExtraThk !== '__other__' && !isExtraThkOther && !availExtraThks.includes(targetExtraThk)) availExtraThks.unshift(targetExtraThk);
       if (triggerField !== `thickness${i}`) {
@@ -3414,7 +3527,7 @@ function _refreshPipelineMatCombinations(triggerField = null) {
 
   // 10. Surface
   const surfOpts = availSurfs;
-  const targetSurf = getFieldValue('surface', curSurf, availSurfs, 'input-mat-surface');
+  const targetSurf = getFieldValue('surface', curSurf, availSurfs, 'input-mat-surface', _projNoHeatPick('surface', m => m.surface));
   const isSurfOther = document.getElementById('input-mat-surface') && document.getElementById('input-mat-surface').value === '__other__';
   if (targetSurf && targetSurf !== '__other__' && !isSurfOther && !surfOpts.includes(targetSurf)) surfOpts.unshift(targetSurf);
   if (triggerField !== 'surface') {
@@ -3451,24 +3564,24 @@ function _refreshPipelineMatCombinations(triggerField = null) {
   const badgeScope = isHeatSelected
     ? (baseHeatCandidates.length ? baseHeatCandidates : candidates)
     : scopedPms.filter(descMatches);
-  const countOf = (getter) => [...new Set(badgeScope.map(getter).filter(Boolean))].length;
+  const countOf = (getter, specKey) => [...new Set((specKey === undefined ? badgeScope : bySpec(badgeScope, specKey)).map(getter).filter(Boolean))].length;
   _pipelineMatPmCounts = {
     'input-mat-piece': [...new Set(projMats.map(pm => pm.category || pm.piece).filter(Boolean))].length,
     'input-mat-desc': countOf(pm => pm.itemDescription || pm.description),
     'input-mat-heat': availHeatsCount,
     'input-mat-certificate': countOf(pm => pm.certificate),
     'input-mat-dimension': availDnsCount,
-    'input-mat-dien': countOf(pm => pm.dienNo || pm.dien),
-    'input-mat-code': countOf(pm => pm.materialCode || pm.code),
-    'input-mat-diameter': countOf(pm => pm.diameter),
-    'input-mat-thickness': countOf(pm => pm.thickness),
-    'input-mat-surface': countOf(pm => pm.surface),
+    'input-mat-dien': countOf(pm => pm.dienNo || pm.dien, 'dien'),
+    'input-mat-code': countOf(pm => pm.materialCode || pm.code, 'code'),
+    'input-mat-diameter': countOf(pm => pm.diameter, 'diameter'),
+    'input-mat-thickness': countOf(pm => pm.thickness, 'thickness'),
+    'input-mat-surface': countOf(pm => pm.surface, 'surface'),
   };
   for (let i = 2; i <= dnCount; i++) {
     _pipelineMatPmCounts[`input-mat-dimension${i}`] = [...new Set(dnScopePms.map(pm => _dnOf(pm, i)).filter(Boolean))].length;
   }
-  for (let i = 2; i <= diaCount; i++) _pipelineMatPmCounts[`input-mat-diameter${i}`] = countOf(pm => pm[`diameter${i}`]);
-  for (let i = 2; i <= thkCount; i++) _pipelineMatPmCounts[`input-mat-thickness${i}`] = countOf(pm => pm[`thickness${i}`]);
+  for (let i = 2; i <= diaCount; i++) _pipelineMatPmCounts[`input-mat-diameter${i}`] = countOf(pm => pm[`diameter${i}`], null);
+  for (let i = 2; i <= thkCount; i++) _pipelineMatPmCounts[`input-mat-thickness${i}`] = countOf(pm => pm[`thickness${i}`], null);
   /* A hand-typed heat that is not in this project means we are on the pure global cascade,
      so there is nothing meaningful to count - hide every badge. */
   _pipelineMatBadgesOff = isUnknownHeat;
@@ -3854,6 +3967,7 @@ function onStartEndChange() {
   updateConnHint();
 }
 function openMaterialModal(id = null, returnToWeld = false) {
+  _matAutoFilled = new Set();
   materialReturnToWeld = !!returnToWeld; editingMaterialId = (typeof id === 'number') ? id : null;
   document.getElementById('material-form').reset(); document.getElementById('material-err').classList.remove('show');
   const src = matSource();
@@ -4810,7 +4924,15 @@ async function restorePipeline(id) {
   saveDB(); renderArchivePage();
 }
 async function restoreWeld(id) {
-  try { await apiPost('/welds', { id, archived: false }); } catch (e) { alertSaveFailed(e); return; }
+  try {
+    await apiPost('/welds', { id, archived: false });
+  } catch (e) {
+    if (e && e.body && e.body.error === 'joint_has_weld') {
+      if (!confirm(e.message + '\n\n' + t('restore_anyway_q', 'Restore it anyway?'))) return;
+      try { await apiPost('/welds', { id, archived: false, confirmDuplicate: true }); }
+      catch (e2) { alertSaveFailed(e2); return; }
+    } else { alertSaveFailed(e); return; }
+  }
   const w = DB.welds.find(x => x.id === id); if (w) w.archived = false;
   saveDB(); renderArchivePage();
 }
@@ -5519,7 +5641,7 @@ function renderWeldList() {
     return `<tr class="${selectedWeldIds.has(w.id) ? 'row-selected' : ''}">
       <td class="col-select"><input type="checkbox" class="weld-select" aria-label="${t('select_weld', 'Select weld')} ${escapeHtml(w.weldNo)}" ${selectedWeldIds.has(w.id) ? 'checked' : ''} onchange="toggleWeldSelect(${w.id}, this.checked); this.closest('tr').classList.toggle('row-selected', this.checked);"></td>
       <td><button class="pipe-no" onclick="showSeamDetail(${w.id})">${escapeHtml(w.weldNo)}</button></td>
-      <td>${betweenCell(w.materialIds)}</td>
+      <td>${betweenCell(w.materialIds)}${w.needsChecking ? ` <span class="needs-check" title="${escapeHtml(t('needs_checking_hint', 'This weld is not linked to its two materials yet. Open it with Edit and choose the two materials it joins.'))}">⚠ ${t('needs_checking', 'needs checking')}</span>` : ''}</td>
       <td><span class="type-tag">${escapeHtml(w.type) || '—'}</span></td>
       <td class="col-mono">${escapeHtml(w.procedure) || '—'}</td>
       <td>${weldWireDropdown(w)}</td>
@@ -8061,7 +8183,16 @@ function findMandatoryMatchingProjectMaterials(projectId, specs, excludePmId) {
   for (const pm of pms) {
     if (norm(pm.heatNo) !== '') continue; // only check materials without heat number
     const gm = (DB.globalMaterials || []).find(g => g.id === pm.globalMaterialId) || {};
+    if (_requiredFieldsMatch(gm, specs)) matches.push({ projectMaterial: pm, globalMaterial: gm });
+  }
+  return matches;
+}
 
+/* Do a global material's REQUIRED fields (category, description, DNs, diameters, thicknesses,
+   material code) equal the new material's? DIN EN, surface and certificate are not required. */
+function _requiredFieldsMatch(gm, specs) {
+  const norm = v => (v === null || v === undefined ? '' : String(v)).trim().toLowerCase();
+  {
     const matchCat = norm(gm.category) === norm(specs.category);
     const matchDesc = norm(gm.itemDescription || gm.category) === norm(specs.itemDescription || specs.category);
     const matchDn1 = norm(gm.dn1) === norm(specs.dn1 || specs.dimension);
@@ -8086,11 +8217,35 @@ function findMandatoryMatchingProjectMaterials(projectId, specs, excludePmId) {
       }
     }
 
-    if (matchCat && matchDesc && matchDn1 && matchDia && matchDia2 && matchDia3 && matchThk && matchThk2 && matchThk3 && matchCode && matchExtraDns) {
-      matches.push({ projectMaterial: pm, globalMaterial: gm });
-    }
+    return Boolean(matchCat && matchDesc && matchDn1 && matchDia && matchDia2 && matchDia3 && matchThk && matchThk2 && matchThk3 && matchCode && matchExtraDns);
   }
-  return matches;
+}
+
+/* A material WITHOUT a heat number is compared on its required fields with the project
+   materials without a heat number and with the global materials (one not already used by such
+   a project material). Exactly one match whose other fields differ -> ask Update / Add as new;
+   no match, or several -> it is simply added as a new material. */
+function findRequiredFieldMatches(projectId, specs, excludePmId, excludeGmId) {
+  const proj = findMandatoryMatchingProjectMaterials(projectId, specs, excludePmId).map(m => ({ kind: 'project', ...m }));
+  const covered = new Set(proj.map(m => m.globalMaterial.id));
+  const glob = (DB.globalMaterials || [])
+    .filter(g => !g.archived && !covered.has(g.id) && g.id !== excludeGmId && _requiredFieldsMatch(g, specs))
+    .map(g => ({ kind: 'global', projectMaterial: null, globalMaterial: g }));
+  return [...proj, ...glob];
+}
+/* The differences to show for such a match. A global material has no certificate of its own. */
+function requiredMatchDiffs(match, specs) {
+  return getMaterialDiffs(match.projectMaterial, match.globalMaterial, specs)
+    .filter(d => d.field !== 'heatNo' && (match.kind === 'project' || d.field !== 'certificate'));
+}
+/* Update for a global-material match: that global material takes the new values. */
+async function updateGlobalMaterialTo(gmId, specs) {
+  const body = { gmId, category: specs.category, itemDescription: specs.itemDescription, materialCode: specs.materialCode || '',
+    dn1: specs.dn1 || '', diameter: specs.diameter || '', diameter2: specs.diameter2 || '', diameter3: specs.diameter3 || '',
+    thickness: specs.thickness || '', thickness2: specs.thickness2 || '', thickness3: specs.thickness3 || '',
+    dienNo: specs.dienNo || '', surface: specs.surface || '' };
+  for (let i = 2; i <= 6; i++) body[`dn${i}`] = specs[`dn${i}`] || '';
+  await apiPost('/global-materials/update-spec', body);
 }
 
 function getMaterialDiffs(existingPm, existingGm, newSpecs) {
@@ -8752,7 +8907,7 @@ function pmCascadeFromDesc() {
   if (selDn1 && selDn1.value !== '__other__') {
     const dn1s = [...new Set(filtered.map(g => g.dn1).filter(Boolean))];
     const curDn1 = readSelectOther('pm-dn1', 'pm-dn1-new');
-    buildSelectOther('pm-dn1', 'pm-dn1-new', dn1s.length ? dn1s : DIMENSION_OPTIONS, curDn1 || (dn1s.length === 1 ? dn1s[0] : ''));
+    buildSelectOther('pm-dn1', 'pm-dn1-new', dn1s.length ? dn1s : DIMENSION_OPTIONS, curDn1 || ddSingle('pm-dn1', dn1s));
   }
 
   // Extra DNs auto-selection
@@ -8762,7 +8917,7 @@ function pmCascadeFromDesc() {
     if (sel && sel.value !== '__other__') {
       const extraDns = [...new Set(filtered.map(g => g[`dn${i}`] || g[`dimension${i}`]).filter(Boolean))];
       const curExtra = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
-      buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, extraDns.length ? extraDns : DIMENSION_OPTIONS, curExtra || (extraDns.length === 1 ? extraDns[0] : ''));
+      buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, extraDns.length ? extraDns : DIMENSION_OPTIONS, curExtra || ddSingle(`pm-dn${i}`, extraDns));
     }
   }
 
@@ -8770,14 +8925,14 @@ function pmCascadeFromDesc() {
   if (selDien && selDien.value !== '__other__') {
     const diens = [...new Set(filtered.map(g => g.dienNo).filter(Boolean))];
     const curDien = readSelectOther('pm-dien', 'pm-dien-new');
-    buildSelectOther('pm-dien', 'pm-dien-new', diens, curDien || (desc && diens.length === 1 ? diens[0] : ''));
+    buildSelectOther('pm-dien', 'pm-dien-new', diens, curDien || (desc ? ddSingle('pm-dien', diens) : ''));
   }
 
   const selCode = document.getElementById('pm-code');
   if (selCode && selCode.value !== '__other__') {
     const codes = [...new Set(filtered.map(g => g.materialCode).filter(Boolean))];
     const curCode = readSelectOther('pm-code', 'pm-code-new');
-    buildSelectOther('pm-code', 'pm-code-new', codes, curCode || (desc && codes.length === 1 ? codes[0] : ''));
+    buildSelectOther('pm-code', 'pm-code-new', codes, curCode || (desc ? ddSingle('pm-code', codes) : ''));
   }
   pmCascadeDiameter();
 }
@@ -8799,7 +8954,7 @@ function onPmDnChange() {
     if (sel && sel.value !== '__other__') {
       const extraDns = [...new Set(filtered.map(g => g[`dn${i}`] || g[`dimension${i}`]).filter(Boolean))];
       const curExtra = readSelectOther(`pm-dn${i}`, `pm-dn${i}-new`);
-      buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, extraDns.length ? extraDns : DIMENSION_OPTIONS, curExtra || (extraDns.length === 1 ? extraDns[0] : ''));
+      buildSelectOther(`pm-dn${i}`, `pm-dn${i}-new`, extraDns.length ? extraDns : DIMENSION_OPTIONS, curExtra || ddSingle(`pm-dn${i}`, extraDns));
     }
   }
   pmCascadeDiameter();
@@ -8829,7 +8984,7 @@ function pmCascadeDiameter() {
   if (selDia && selDia.value !== '__other__') {
     const diameters = [...new Set(filtered.map(g => g.diameter).filter(Boolean))];
     const curDia = readSelectOther('pm-diameter', 'pm-diameter-new');
-    buildSelectOther('pm-diameter', 'pm-diameter-new', diameters, curDia || (diameters.length === 1 ? diameters[0] : ''));
+    buildSelectOther('pm-diameter', 'pm-diameter-new', diameters, curDia || ddSingle('pm-diameter', diameters));
   }
 
   for (let i = 2; i <= diaCount; i++) {
@@ -8841,7 +8996,7 @@ function pmCascadeDiameter() {
         extraDias = [...new Set(allGm.filter(g => (g.dn1 || g.dimension) === portDn).map(g => g.diameter).filter(Boolean))];
       }
       const curExtraDia = readSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`);
-      buildSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`, extraDias, curExtraDia || (extraDias.length === 1 ? extraDias[0] : ''));
+      buildSelectOther(`pm-diameter${i}`, `pm-diameter${i}-new`, extraDias, curExtraDia || ddSingle(`pm-diameter${i}`, extraDias));
     }
   }
 
@@ -8870,7 +9025,7 @@ function pmCascadeThickness() {
   if (selThk && selThk.value !== '__other__') {
     const thicknesses = [...new Set(filtered.map(g => g.thickness).filter(Boolean))];
     const curThk = readSelectOther('pm-thickness', 'pm-thickness-new');
-    buildSelectOther('pm-thickness', 'pm-thickness-new', thicknesses, curThk || (thicknesses.length === 1 ? thicknesses[0] : ''));
+    buildSelectOther('pm-thickness', 'pm-thickness-new', thicknesses, curThk || ddSingle('pm-thickness', thicknesses));
   }
 
   for (let i = 2; i <= thkCount; i++) {
@@ -8883,7 +9038,7 @@ function pmCascadeThickness() {
         extraThks = [...new Set(allGm.filter(g => (g.dn1 || g.dimension) === portDn && (!portDia || portDia === '__other__' || g.diameter === portDia)).map(g => g.thickness).filter(Boolean))];
       }
       const curExtraThk = readSelectOther(`pm-thickness${i}`, `pm-thickness${i}-new`);
-      buildSelectOther(`pm-thickness${i}`, `pm-thickness${i}-new`, extraThks, curExtraThk || (extraThks.length === 1 ? extraThks[0] : ''));
+      buildSelectOther(`pm-thickness${i}`, `pm-thickness${i}-new`, extraThks, curExtraThk || ddSingle(`pm-thickness${i}`, extraThks));
     }
   }
 
@@ -9065,12 +9220,35 @@ async function saveProjectMaterial(e) {
       return;
     }
 
-    // Step 2: If no heat number, check if exactly 1 material matches all MANDATORY fields
+    // Step 2: No heat number - exactly 1 project or global material with the same REQUIRED
+    // fields but other fields different -> ask. None or several -> added as new below.
     if (!heatNo) {
-      const mandatoryMatches = findMandatoryMatchingProjectMaterials(currentProjectId, specsObj, isEditingPm ? _projMatEditId : null);
-      if (mandatoryMatches.length === 1) {
-        const matched = mandatoryMatches[0];
-        const diffs = getMaterialDiffs(matched.projectMaterial, matched.globalMaterial, specsObj);
+      const reqMatches = findRequiredFieldMatches(currentProjectId, specsObj,
+        isEditingPm ? _projMatEditId : null,
+        isEditingPm && existingPm ? existingPm.globalMaterialId : null);
+      const matched = reqMatches.length === 1 ? reqMatches[0] : null;
+      const diffs = matched ? requiredMatchDiffs(matched, specsObj) : [];
+      const saveArgs = { category, itemDescription, dn1, materialCode, dienNo, diameter, diameter2, diameter3, thickness, thickness2, thickness3, surface, certificate, heatNo, dns, wazFile, attachedWazPdfUrl, submitBtn, projectId: currentProjectId };
+      if (matched && diffs.length && matched.kind === 'global') {
+        promptHeatConflictModal({
+          mode: 'update_or_add_new',
+          title: t('similar_global_material_title', 'Similar Global Material Exists'),
+          desc: t('similar_global_material_desc', 'A global material with the same required specifications already exists, but some other specifications differ.<br><br><strong>Update</strong> — the global material is changed to these values, in <strong>every project that uses it</strong>.<br><strong>Add as New Material</strong> — a separate material is created with these values.'),
+          diffs,
+          updateBtnText: t('update', 'Update'),
+          addBtnText: t('add_as_new', 'Add as New Material'),
+          existingMaterial: { globalMaterialId: matched.globalMaterial.id, projectMaterialId: null },
+          onAddAsNew: async () => {
+            await doSaveProjectMaterial({ ...saveArgs, forceNew: true });
+          },
+          onUpdateExisting: async () => {
+            try { await updateGlobalMaterialTo(matched.globalMaterial.id, specsObj); } catch (ex) { alertSaveFailed(ex); return; }
+            await doSaveProjectMaterial({ ...saveArgs, forceNew: false });
+          }
+        });
+        return;
+      }
+      if (matched && diffs.length) {
         promptHeatConflictModal({
           mode: 'update_or_add_new',
           title: t('similar_material_exists_title', 'Similar Material Exists'),

@@ -168,6 +168,8 @@ def create_pipeline_material():
             new_weld = Weld(
                 pipeline_id=pipeline_id,
                 weld_no=str(weld_count + 1),
+                material_a_id=prev.id,
+                material_b_id=m.id,
                 between_a=prev.position,
                 between_b=m.position,
             )
@@ -203,7 +205,7 @@ def edit_pipeline_material(pm_id):
     new_pos = data.get("position") or m.position
     at_risk = []
     if data.get("archived") and not m.archived:
-        at_risk += _welds_on_material(m.pipeline_id, new_pos)
+        at_risk += _welds_on_material(m.pipeline_id, m.id, new_pos)
     if "connections" in data and not _is_wire(m):
         at_risk += _welds_deleted_by_connection_change(
             m.pipeline_id, new_pos, [c for c in m.connections], data["connections"],
@@ -323,6 +325,9 @@ def edit_pipeline_material(pm_id):
 
     db.session.commit()
     _sync_pipeline_waz_nos(m.pipeline_id)
+    if "position" in data:
+        _refresh_weld_labels(m.pipeline_id)
+        db.session.commit()
 
     if "connections" in data:
         _update_connections(m, data["connections"], m.pipeline_id)
@@ -492,7 +497,7 @@ def get_waz_package(pm_id):
 def delete_pipeline_material(pm_id):
     """Archive a pipeline material with connection bridging, weld cleanup, and WAZ SharePoint sync."""
     m = PipelineMaterial.query.get_or_404(pm_id)
-    ask = _confirm_weld_deletion(_welds_on_material(m.pipeline_id, m.position),
+    ask = _confirm_weld_deletion(_welds_on_material(m.pipeline_id, m.id, m.position),
                                  request.get_json(silent=True) or {})
     if ask:
         return ask
@@ -664,6 +669,7 @@ def reorder_pipeline_materials():
     #    the only identity a weld has that survives a reorder. Without this snapshot the
     #    welds cannot be matched afterwards and the welder, inspector, date, wire and
     #    results recorded on them would have to be thrown away.
+    _ensure_weld_ids(pipeline_id)     # welds not matched yet: match them while the letters still hold
     old_pos_rows = db.session.execute(db.text("""
         SELECT id, position FROM weldoc_pipeline_materials
         WHERE pipeline_id = :pid AND archived = 0
@@ -671,8 +677,8 @@ def reorder_pipeline_materials():
     old_pos_to_id = {r.position: r.id for r in old_pos_rows if r.position}
 
     existing_welds = db.session.execute(db.text("""
-        SELECT id, between_a, between_b, type, welding_wire, welder_id, inspector_id,
-               date, visual, endoscopy, remarks
+        SELECT id, between_a, between_b, material_a_id, material_b_id, type, welding_wire,
+               welder_id, inspector_id, date, visual, endoscopy, remarks
         FROM weldoc_welds
         WHERE pipeline_id = :pid AND archived = 0
     """), {"pid": pipeline_id}).fetchall()
@@ -689,8 +695,12 @@ def reorder_pipeline_materials():
     weld_by_pair = {}     # (id_a, id_b) -> the weld row to keep
     stale_weld_ids = []   # welds that no longer correspond to anything
     for w in existing_welds:
-        a = old_pos_to_id.get(w.between_a)
-        b = old_pos_to_id.get(w.between_b)
+        # A weld's materials: its ids, or - not matched yet - what its letters point at now
+        if w.material_a_id and w.material_b_id:
+            a, b = w.material_a_id, w.material_b_id
+        else:
+            a = old_pos_to_id.get(w.between_a)
+            b = old_pos_to_id.get(w.between_b)
         if not a or not b or a == b:
             stale_weld_ids.append(w.id)     # dangling: an end no longer exists
             continue
@@ -788,26 +798,28 @@ def reorder_pipeline_materials():
     weld_inserts = []
     for idx, (key, letters) in enumerate(desired_welds, 1):
         kept = weld_by_pair.get(key)
+        ids = {"ma": pos_to_id[letters[0]], "mb": pos_to_id[letters[1]]}
         if kept is not None:
             weld_updates.append({
-                "id": kept.id, "wno": str(idx), "ba": letters[0], "bb": letters[1],
+                "id": kept.id, "wno": str(idx), "ba": letters[0], "bb": letters[1], **ids,
             })
         else:
             weld_inserts.append({
-                "pid": pipeline_id, "wno": str(idx), "ba": letters[0], "bb": letters[1],
+                "pid": pipeline_id, "wno": str(idx), "ba": letters[0], "bb": letters[1], **ids,
             })
 
     if weld_updates:
         db.session.execute(db.text("""
             UPDATE weldoc_welds
-            SET weld_no = :wno, between_a = :ba, between_b = :bb
+            SET weld_no = :wno, between_a = :ba, between_b = :bb,
+                material_a_id = :ma, material_b_id = :mb
             WHERE id = :id
         """), weld_updates)
 
     if weld_inserts:
         db.session.execute(db.text("""
-            INSERT INTO weldoc_welds (pipeline_id, weld_no, between_a, between_b, archived)
-            VALUES (:pid, :wno, :ba, :bb, 0)
+            INSERT INTO weldoc_welds (pipeline_id, weld_no, between_a, between_b, material_a_id, material_b_id, archived)
+            VALUES (:pid, :wno, :ba, :bb, :ma, :mb, 0)
         """), weld_inserts)
 
     db.session.commit()
@@ -835,9 +847,9 @@ def _archive_pipeline_material(m):
 
     pos = m.position
     pipeline_id = m.pipeline_id
-    Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
-        db.or_(Weld.between_a == pos, Weld.between_b == pos)
-    ).delete(synchronize_session=False)
+    _ensure_weld_ids(pipeline_id)
+    for w in _welds_on_material(pipeline_id, m.id, pos):
+        db.session.delete(w)
 
     # Release the position letter. An archived material that keeps its letter collides with
     # whichever active material is relabelled onto it, and that duplicate then corrupts the
@@ -1432,23 +1444,82 @@ def _weld_work(w):
     return work
 
 
-def _welds_on_joint(pipeline_id, pos_a, pos_b):
+# --- Welds belong to materials, not to letters (phase 2) ------------------------------------
+# A weld records the two materials it joins in material_a_id / material_b_id. The position
+# letters between_a / between_b are only labels: after any relabelling they are refreshed
+# from the materials (_refresh_weld_labels), so relabelling can never move a weld to other
+# materials. A weld that has no ids yet ("needs checking") is still handled by its letters.
+
+def _unmatched(q):
+    return q.filter(db.or_(Weld.material_a_id.is_(None), Weld.material_b_id.is_(None)))
+
+
+def _welds_on_joint(pipeline_id, a_id, a_pos, b_id, b_pos):
+    """Active welds on the joint between two materials: by their ids, plus welds not matched
+    yet whose letters are those two materials' letters."""
+    q = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False)
+    out = []
+    if a_id and b_id:
+        out += q.filter(db.or_(
+            db.and_(Weld.material_a_id == a_id, Weld.material_b_id == b_id),
+            db.and_(Weld.material_a_id == b_id, Weld.material_b_id == a_id),
+        )).all()
+    if a_pos and b_pos:
+        out += [w for w in _unmatched(q).filter(db.or_(
+            db.and_(Weld.between_a == a_pos, Weld.between_b == b_pos),
+            db.and_(Weld.between_a == b_pos, Weld.between_b == a_pos),
+        )).all() if w not in out]
+    return out
+
+
+def _welds_on_material(pipeline_id, m_id, pos):
+    """Active welds on a material: by id, plus welds not matched yet that carry its letter."""
+    q = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False)
+    out = []
+    if m_id:
+        out += q.filter(db.or_(Weld.material_a_id == m_id, Weld.material_b_id == m_id)).all()
+    if pos:
+        out += [w for w in _unmatched(q).filter(db.or_(Weld.between_a == pos, Weld.between_b == pos)).all()
+                if w not in out]
+    return out
+
+
+def _resolve_letters(pipeline_id, pos_a, pos_b, mats=None):
+    """(id_a, id_b) when each letter is the letter of exactly one active material of the
+    pipeline and they differ - the same rule migration 009 used. Otherwise None."""
     if not pos_a or not pos_b:
-        return []
-    return Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
-        db.or_(
-            db.and_(Weld.between_a == pos_a, Weld.between_b == pos_b),
-            db.and_(Weld.between_a == pos_b, Weld.between_b == pos_a),
-        )
-    ).all()
+        return None
+    if mats is None:
+        mats = PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, archived=False).all()
+    a = [m.id for m in mats if m.position == pos_a]
+    b = [m.id for m in mats if m.position == pos_b]
+    if len(a) == 1 and len(b) == 1 and a[0] != b[0]:
+        return a[0], b[0]
+    return None
 
 
-def _welds_on_material(pipeline_id, pos):
-    if not pos:
-        return []
-    return Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
-        db.or_(Weld.between_a == pos, Weld.between_b == pos)
-    ).all()
+def _ensure_weld_ids(pipeline_id):
+    """Give active welds without ids their materials from their letters, where that is
+    unambiguous. Must run before letters change, while the letters still describe the joint."""
+    mats = PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, archived=False).all()
+    for w in _unmatched(Weld.query.filter_by(pipeline_id=pipeline_id, archived=False)).all():
+        ids = _resolve_letters(pipeline_id, w.between_a, w.between_b, mats)
+        if ids:
+            w.material_a_id, w.material_b_id = ids
+    db.session.flush()
+
+
+def _refresh_weld_labels(pipeline_id):
+    """between_a / between_b = the current letters of the weld's two materials."""
+    pos = {m.id: m.position for m in PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, archived=False)}
+    for w in Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
+            Weld.material_a_id.isnot(None), Weld.material_b_id.isnot(None)).all():
+        a, b = pos.get(w.material_a_id), pos.get(w.material_b_id)
+        if a and w.between_a != a:
+            w.between_a = a
+        if b and w.between_b != b:
+            w.between_b = b
+    db.session.flush()
 
 
 def _is_wire(pm):
@@ -1476,7 +1547,7 @@ def _welds_deleted_by_connection_change(pipeline_id, own_pos, current_conns, con
     welds = []
     for rem in current_conns:
         if rem not in target:
-            welds += _welds_on_joint(pipeline_id, own_pos, rem.position)
+            welds += _welds_on_joint(pipeline_id, own_id, own_pos, rem.id, rem.position)
 
     changed = {c.id for c in current_conns} != {c.id for c in target}
     if changed or start_of_plumbing:
@@ -1484,7 +1555,7 @@ def _welds_deleted_by_connection_change(pipeline_id, own_pos, current_conns, con
         pairs = [(a, b) for i, a in enumerate(conns) for b in conns[i + 1:] if b in a.connections]
         if len(pairs) == 1:
             a, b = pairs[0]
-            welds += _welds_on_joint(pipeline_id, a.position, b.position)
+            welds += _welds_on_joint(pipeline_id, a.id, a.position, b.id, b.position)
     return welds
 
 
@@ -1548,12 +1619,8 @@ def _split_linked_pair(m, pipeline_id):
     if a in b.connections:
         b.connections.remove(a)
 
-    Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
-        db.or_(
-            db.and_(Weld.between_a == a.position, Weld.between_b == b.position),
-            db.and_(Weld.between_a == b.position, Weld.between_b == a.position),
-        )
-    ).delete(synchronize_session=False)
+    for w in _welds_on_joint(pipeline_id, a.id, a.position, b.id, b.position):
+        db.session.delete(w)
     db.session.commit()
     return a, b
 
@@ -1570,6 +1637,7 @@ def _reposition_by_connections(m, pipeline_id):
 
     Deliberately standalone: the existing _renumber_positions / reorder paths are untouched.
     """
+    _ensure_weld_ids(pipeline_id)
     mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
     ).all()
@@ -1603,12 +1671,14 @@ def _reposition_by_connections(m, pipeline_id):
     db.session.commit()
 
     if pos_map:
-        welds = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).all()
-        for w in welds:
+        # Welds with ids simply take their materials' new letters; only welds not matched
+        # yet still have their letters remapped.
+        for w in _unmatched(Weld.query.filter_by(pipeline_id=pipeline_id, archived=False)).all():
             if w.between_a in pos_map:
                 w.between_a = pos_map[w.between_a]
             if w.between_b in pos_map:
                 w.between_b = pos_map[w.between_b]
+        _refresh_weld_labels(pipeline_id)
         db.session.commit()
 
 
@@ -1628,13 +1698,10 @@ def _update_connections(m, conn_positions, pipeline_id):
     removed = [c for c in m.connections if c not in target_connected]
 
     # Delete welds for removed connections
+    _ensure_weld_ids(pipeline_id)
     for rem in removed:
-        Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).filter(
-            db.or_(
-                db.and_(Weld.between_a == m.position, Weld.between_b == rem.position),
-                db.and_(Weld.between_a == rem.position, Weld.between_b == m.position),
-            )
-        ).delete(synchronize_session=False)
+        for w in _welds_on_joint(pipeline_id, m.id, m.position, rem.id, rem.position):
+            db.session.delete(w)
 
         if m in rem.connections:
             rem.connections.remove(m)
@@ -1672,21 +1739,31 @@ def _sync_and_renumber_welds(pipeline_id):
         pipeline_id=pipeline_id, archived=False
     ).order_by(db.func.length(PipelineMaterial.position), PipelineMaterial.position).all()
     mat_positions = {m.position for m in mats if m.position}
+    mat_by_id = {m.id: m for m in mats}
+    _ensure_weld_ids(pipeline_id)
 
-    # 1. Clean up invalid/dangling and duplicate welds
+    # 1. Clean up invalid/dangling and duplicate welds. A weld with ids is identified by its
+    #    two materials; one not matched yet ("needs checking") still by its letters.
     welds = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).order_by(Weld.id).all()
     valid_welds = []
-    seen_pairs = set()
+    seen_pairs = set()        # joints that have a weld: ("id", lo, hi) or ("pos", a, b)
     by_pair = {}
 
     for w in welds:
-        if not w.between_a or not w.between_b:
-            db.session.delete(w)
-            continue
-        if w.between_a not in mat_positions or w.between_b not in mat_positions:
-            db.session.delete(w)
-            continue
-        pair = tuple(sorted([w.between_a, w.between_b], key=_letter_to_pos))
+        if w.material_a_id and w.material_b_id:
+            if w.material_a_id not in mat_by_id or w.material_b_id not in mat_by_id:
+                db.session.delete(w)          # one of its materials is no longer active
+                continue
+            pair = ("id",) + tuple(sorted((w.material_a_id, w.material_b_id)))
+        else:
+            if (not w.between_a or not w.between_b
+                    or w.between_a not in mat_positions or w.between_b not in mat_positions):
+                # Letters that no longer describe a joint. An empty weld goes; one with
+                # recorded work stays, as "needs checking", for someone to assign.
+                if not _weld_work(w):
+                    db.session.delete(w)
+                continue
+            pair = ("pos",) + tuple(sorted([w.between_a, w.between_b], key=_letter_to_pos))
         by_pair.setdefault(pair, []).append(w)
 
     # Two or more welds on the same joint: keep the one with the most recorded details
@@ -1702,21 +1779,33 @@ def _sync_and_renumber_welds(pipeline_id):
         seen_pairs.add(pair)
         valid_welds.append(keep)
 
-    # 2. Ensure every active connection pair has a weld
+    # 2. Ensure every active connection pair has a weld. A joint whose weld is not matched
+    #    yet (letters only) counts as having one - no second weld is added next to it.
     for m in mats:
         for conn in m.connections:
-            if not conn.archived and m.position and conn.position:
-                pair = tuple(sorted([m.position, conn.position], key=_letter_to_pos))
-                if pair not in seen_pairs:
-                    w = Weld(
-                        pipeline_id=pipeline_id,
-                        weld_no="0",
-                        between_a=pair[0],
-                        between_b=pair[1],
-                    )
-                    db.session.add(w)
-                    valid_welds.append(w)
-                    seen_pairs.add(pair)
+            if not conn.archived and conn.id in mat_by_id and m.position and conn.position:
+                id_pair = ("id",) + tuple(sorted((m.id, conn.id)))
+                pos_pair = ("pos",) + tuple(sorted([m.position, conn.position], key=_letter_to_pos))
+                if id_pair in seen_pairs or pos_pair in seen_pairs:
+                    continue
+                first, second = sorted((m, conn), key=lambda x: _letter_to_pos(x.position))
+                w = Weld(
+                    pipeline_id=pipeline_id,
+                    weld_no="0",
+                    material_a_id=first.id,
+                    material_b_id=second.id,
+                    between_a=first.position,
+                    between_b=second.position,
+                )
+                db.session.add(w)
+                valid_welds.append(w)
+                seen_pairs.add(id_pair)
+
+    # Labels: every weld with ids carries its materials' current letters
+    for w in valid_welds:
+        if w.material_a_id in mat_by_id and w.material_b_id in mat_by_id:
+            w.between_a = mat_by_id[w.material_a_id].position
+            w.between_b = mat_by_id[w.material_b_id].position
 
     # 3. Assign weld numbers, in physical order along the run.
     valid_welds.sort(key=lambda w: (_letter_to_pos(w.between_a), _letter_to_pos(w.between_b)))
@@ -1780,13 +1869,14 @@ def _renumber_positions(pipeline_id):
     second material overwrites the first, and every weld pointing at that letter is rewired
     to the wrong material. Resolving each weld end to a material id first cannot collide.
     """
+    _ensure_weld_ids(pipeline_id)
     mats = PipelineMaterial.query.filter_by(
         pipeline_id=pipeline_id, archived=False
     ).order_by(db.func.length(PipelineMaterial.position), PipelineMaterial.position).all()
 
-    # Resolve every weld end to a material id using the letters as they stand right now,
-    # before any relabelling happens.
-    welds = Weld.query.filter_by(pipeline_id=pipeline_id, archived=False).all()
+    # Welds with ids follow their materials by themselves (labels refreshed below). Only welds
+    # not matched yet are resolved from the letters as they stand now, before relabelling.
+    welds = _unmatched(Weld.query.filter_by(pipeline_id=pipeline_id, archived=False)).all()
     old_pos_to_id = {}
     for m in mats:
         if m.position:
@@ -1814,6 +1904,7 @@ def _renumber_positions(pipeline_id):
                 w.between_a = id_to_new_pos[a_id]
             if b_id in id_to_new_pos:
                 w.between_b = id_to_new_pos[b_id]
+        _refresh_weld_labels(pipeline_id)
         db.session.commit()
 
     _sync_and_renumber_welds(pipeline_id)

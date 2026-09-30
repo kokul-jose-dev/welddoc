@@ -11,6 +11,12 @@ class Weld(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     pipeline_id = db.Column(db.Integer, db.ForeignKey("weldoc_pipelines.id"), nullable=False)
     weld_no = db.Column(WholeNumberColumn(20, label="Weld number"))
+    # The two materials the weld joins (db/migrations/009). These are what the weld belongs
+    # to; between_a / between_b are only their current position letters, kept up to date as
+    # labels (_refresh_weld_labels). A weld without ids has not been matched yet ("needs
+    # checking") and is handled by its letters as before.
+    material_a_id = db.Column(db.Integer, nullable=True)
+    material_b_id = db.Column(db.Integer, nullable=True)
     between_a = db.Column(db.String(5))
     between_b = db.Column(db.String(5))
     type = db.Column(db.String(10))

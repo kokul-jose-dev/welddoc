@@ -787,3 +787,6 @@ body.page-project-detail .col-filter-btn {
 .dd-hide-btn{position:absolute;right:26px;top:50%;transform:translateY(-50%);z-index:3;display:none;border:none;background:transparent;color:var(--text-muted);font-size:16px;line-height:1;padding:2px 6px;border-radius:4px;cursor:pointer;}
 .dd-hide-btn.show{display:block;}
 .dd-hide-btn:hover{color:var(--danger);background:var(--danger-soft);}
+
+/* weld not linked to its two materials yet (phase 2: welds by material id) */
+.needs-check{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;background:#FFF3EA;color:#B35815;border:1px solid #F5C99F;font-size:0.7rem;font-weight:700;white-space:nowrap;}

@@ -368,7 +368,7 @@ def get_home_page():
     mat_rows = spec_rows(mat_rows)
 
     weld_rows = db.session.execute(db.text("""
-        SELECT id, pipeline_id, weld_no, between_a, between_b, type, [procedure],
+        SELECT id, pipeline_id, weld_no, between_a, between_b, material_a_id, material_b_id, type, [procedure],
                welding_wire, welder, inspector, welder_id, inspector_id, date,
                endoscopy_video_url, endoscopy_image_url, remarks, archived
         FROM weldoc_welds WHERE archived = 0
@@ -403,6 +403,9 @@ def get_home_page():
         "welds": [{
             "id": w.id, "pipelineId": w.pipeline_id,
             "weldNo": w.weld_no, "betweenA": w.between_a, "betweenB": w.between_b,
+            "materialAId": w.material_a_id, "materialBId": w.material_b_id,
+            "materialIds": [w.material_a_id, w.material_b_id] if w.material_a_id and w.material_b_id else [],
+            "needsChecking": not w.archived and not (w.material_a_id and w.material_b_id),
             "type": w.type, "procedure": getattr(w, 'procedure', ''),
             "weldingWire": w.welding_wire, "welder": w.welder, "inspector": w.inspector,
             "welderId": w.welder_id, "inspectorId": w.inspector_id,
@@ -606,7 +609,7 @@ def get_archive_page():
     mat_rows = spec_rows(mat_rows)
 
     weld_rows = db.session.execute(db.text("""
-        SELECT id, pipeline_id, weld_no, between_a, between_b, type, [procedure],
+        SELECT id, pipeline_id, weld_no, between_a, between_b, material_a_id, material_b_id, type, [procedure],
                welding_wire, welder, inspector, welder_id, inspector_id, date,
                endoscopy_video_url, endoscopy_image_url, remarks, archived
         FROM weldoc_welds
@@ -651,6 +654,9 @@ def get_archive_page():
         "welds": [{
             "id": w.id, "pipelineId": w.pipeline_id,
             "weldNo": w.weld_no, "betweenA": w.between_a, "betweenB": w.between_b,
+            "materialAId": w.material_a_id, "materialBId": w.material_b_id,
+            "materialIds": [w.material_a_id, w.material_b_id] if w.material_a_id and w.material_b_id else [],
+            "needsChecking": not w.archived and not (w.material_a_id and w.material_b_id),
             "type": w.type, "procedure": getattr(w, 'procedure', ''),
             "weldingWire": w.welding_wire, "welder": w.welder, "inspector": w.inspector,
             "welderId": w.welder_id, "inspectorId": w.inspector_id,

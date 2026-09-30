@@ -27,6 +27,11 @@ def create_or_update_weld():
     data = request.get_json()
     if "id" in data and data["id"]:
         w = Weld.query.get_or_404(data["id"])
+        # Restoring an archived weld: find its materials in the pipeline as it is now
+        if w.archived and data.get("archived") is False:
+            ask = _prepare_restore(w, data)
+            if ask:
+                return ask
         _update(w, data)
     else:
         # Check if weld with same pipeline_id + weld_no already exists
@@ -253,11 +258,92 @@ def upload_weld_files(weld_id):
     return jsonify(_serialize(w)), 200
 
 
+def _set_materials(w, data):
+    """The two materials a weld joins.
+
+    The weld form sends materialAId / materialBId: they must be two different active materials
+    of the weld's pipeline, and the letters are taken from them. Letters alone (betweenA /
+    betweenB, e.g. from an older page) are turned into ids when that is unambiguous; otherwise
+    the weld keeps its letters and has no ids - "needs checking".
+    """
+    from app.models.pipeline_material import PipelineMaterial
+    from app.routes.pipeline_materials import _resolve_letters
+    from app.spec_values import SpecValueError
+
+    a, b = data.get("materialAId"), data.get("materialBId")
+    if a and b:
+        try:
+            a, b = int(a), int(b)
+        except (TypeError, ValueError):
+            raise SpecValueError("The weld's materials are not valid.")
+        mats = {m.id: m for m in PipelineMaterial.query.filter(
+            PipelineMaterial.id.in_([a, b]), PipelineMaterial.pipeline_id == w.pipeline_id,
+            PipelineMaterial.archived == False).all()}  # noqa: E712
+        if a == b or len(mats) != 2:
+            raise SpecValueError("A weld joins two different active materials of its own pipeline.")
+        w.material_a_id, w.material_b_id = a, b
+        w.between_a, w.between_b = mats[a].position, mats[b].position
+        return
+    if "betweenA" in data or "betweenB" in data:
+        new_a = data.get("betweenA", w.between_a)
+        new_b = data.get("betweenB", w.between_b)
+        changed = (new_a, new_b) != (w.between_a, w.between_b)
+        w.between_a, w.between_b = new_a, new_b
+        if changed or not (w.material_a_id and w.material_b_id):
+            ids = _resolve_letters(w.pipeline_id, new_a, new_b) if w.pipeline_id else None
+            w.material_a_id, w.material_b_id = ids if ids else (None, None)
+
+
+def _prepare_restore(w, data):
+    """Before an archived weld is restored: give it its materials and check its joint.
+
+    Its letters are from when it was archived. They are trusted only when each still points
+    at exactly one active material and those two are connected - then it is the same joint.
+    Otherwise the weld is restored with all its data but no materials ("needs checking").
+    If the joint already has an active weld, the user is asked first (confirmDuplicate).
+    """
+    from app.models.pipeline_material import PipelineMaterial
+    from app.routes.pipeline_materials import _resolve_letters, _welds_on_joint
+
+    active = {m.id: m for m in PipelineMaterial.query.filter_by(pipeline_id=w.pipeline_id, archived=False).all()}
+
+    def connected(i, j):
+        return bool(db.session.execute(db.text("""
+            SELECT 1 FROM weldoc_pipeline_material_connections
+            WHERE (pipeline_material_id = :a AND connected_id = :b) OR (pipeline_material_id = :b AND connected_id = :a)
+        """), {"a": i, "b": j}).first())
+
+    ids = None
+    if w.material_a_id in active and w.material_b_id in active and connected(w.material_a_id, w.material_b_id):
+        ids = (w.material_a_id, w.material_b_id)
+    else:
+        r = _resolve_letters(w.pipeline_id, w.between_a, w.between_b, list(active.values()))
+        if r and connected(*r):
+            ids = r
+    if ids:
+        w.material_a_id, w.material_b_id = ids
+        w.between_a, w.between_b = active[ids[0]].position, active[ids[1]].position
+    else:
+        w.material_a_id = w.material_b_id = None
+
+    if not data.get("confirmDuplicate"):
+        a_id, b_id = ids if ids else (None, None)
+        others = [x for x in _welds_on_joint(w.pipeline_id, a_id, w.between_a, b_id, w.between_b) if x.id != w.id]
+        if others:
+            db.session.rollback()
+            o = others[0]
+            return jsonify({
+                "error": "joint_has_weld",
+                "message": (f"The joint {w.between_a}–{w.between_b} already has weld {o.weld_no}. "
+                            "Restoring this weld makes it a second weld on the same joint."),
+            }), 409
+    return None
+
+
 def _update(w, data):
     w.pipeline_id = data.get("pipelineId", w.pipeline_id)
     w.weld_no = data.get("weldNo", w.weld_no)
-    w.between_a = data.get("betweenA", w.between_a)
-    w.between_b = data.get("betweenB", w.between_b)
+    _set_materials(w, data)
     w.type = data.get("type", w.type)
     w.procedure = data.get("procedure", w.procedure)
     w.welding_wire = data.get("weldingWire", w.welding_wire)
@@ -287,6 +373,10 @@ def _serialize(w):
         "weldNo": w.weld_no,
         "betweenA": w.between_a,
         "betweenB": w.between_b,
+        "materialAId": w.material_a_id,
+        "materialBId": w.material_b_id,
+        "materialIds": [w.material_a_id, w.material_b_id] if w.material_a_id and w.material_b_id else [],
+        "needsChecking": not w.archived and not (w.material_a_id and w.material_b_id),
         "type": w.type,
         "procedure": w.procedure,
         "weldingWire": w.welding_wire,
