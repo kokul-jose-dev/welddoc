@@ -106,6 +106,10 @@ def create_app():
         except Exception:
             db.session.rollback()
 
+    # The event log: every change is written to weldoc_event_log (app/event_log.py)
+    from app.event_log import init_event_log
+    init_event_log(app)
+
     register_routes(app)
 
     @app.before_request
@@ -118,6 +122,7 @@ def create_app():
             # DEV_USER_NAME in .env so "who did it" fields show the real person.
             session['user'] = {'email': os.getenv('DEV_USER_EMAIL', 'jeny@istinox.ch').strip().lower(),
                                'name': os.getenv('DEV_USER_NAME', 'Jeny M Jerry').strip(), 'role': 'office'}
+            app.logger.warning(f"LOGIN (local auto-login, debug mode): {session['user']['email']} - no Microsoft check")
         path = request.path
         # Allow public paths and static assets (css/js/images)
         if path in PUBLIC_PATHS:

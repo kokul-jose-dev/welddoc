@@ -185,9 +185,8 @@ def merge_project_materials(source_pm_id, target_pm_id):
     if not source_pm or not target_pm:
         return
 
-    PipelineMaterial.query.filter_by(project_material_id=source_pm_id).update(
-        {"project_material_id": target_pm_id}, synchronize_session=False
-    )
+    for row in PipelineMaterial.query.filter_by(project_material_id=source_pm_id).all():
+        row.project_material_id = target_pm_id      # one by one, so the event log records it
 
     if not target_pm.waz_pdf_url and source_pm.waz_pdf_url:
         target_pm.waz_pdf_url = source_pm.waz_pdf_url

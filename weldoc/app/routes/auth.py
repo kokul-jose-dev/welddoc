@@ -106,6 +106,11 @@ def auth_callback():
         ), 403
 
     session["user"] = {"email": email, "name": name, "role": "office"}
+    current_app.logger.warning(f"LOGIN (Microsoft): {email} ({name})")
+    from app.event_log import log_event
+    from app.database import db
+    log_event("user", None, "login")
+    db.session.commit()
     return redirect("/home.html")
 
 
@@ -119,6 +124,14 @@ def auth_me():
 
 @auth_bp.route("/logout")
 def logout():
+    if session.get("user"):
+        from app.event_log import log_event
+        from app.database import db
+        try:
+            log_event("user", None, "logout")
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
     session.clear()
     tenant = current_app.config["AZURE_TENANT_ID"]
     scheme = request.headers.get("X-Forwarded-Proto", request.scheme)

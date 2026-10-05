@@ -28,7 +28,7 @@ class PipelineMaterial(db.Model):
     archived_at = db.Column(db.DateTime, nullable=True)
     archived_by = db.Column(db.Unicode(255), nullable=True)
     archive_reason = db.Column(db.Unicode(1000), nullable=True)
-    struck = db.Column(db.Boolean, nullable=False, default=False)
+    struck = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text("0"))   # as migration 011
     # Place in the material list, which follows the pipe. NULL = by letter.
     sort_order = db.Column(db.Integer, nullable=True)
 

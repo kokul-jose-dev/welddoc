@@ -148,7 +148,7 @@ def _signature_placer(include_welder_sign, include_inspector_sign):
 
 # Where each document goes in SharePoint, and which pipeline column holds its link.
 SP_DOCS = {
-    "builder": {"subfolder": "02 Schweissnahtliste", "suffix": "_welder.xlsx", "field": "doc_builder"},
+    "builder": {"subfolder": "02 Material & Schweissnahtliste", "suffix": "_welder.xlsx", "field": "doc_builder"},
     "final":   {"subfolder": "Final",                "suffix": "_final.xlsx",  "field": "doc_final"},
 }
 
@@ -186,6 +186,9 @@ def generate_builder_doc(pipeline_id):
     # Uploaded straight away (it used to run in the background after the download), so the
     # page can be told when SharePoint refused it.
     sp_status = _upload_doc(pl, pr, "builder", file_bytes)
+    from app.event_log import log_event
+    log_event("document", None, "export", {"document": [None, "welder document"], "sharepoint": [None, sp_status]},
+              pipeline_id=pl.id, project_id=pl.project_id)
     db.session.commit()
     return _xlsx_response(file_bytes, f"{pl.no}_welder.xlsx", sp_status)
 
@@ -208,6 +211,10 @@ def export_final_excel(pipeline_id):
     )
     sp_status = _upload_doc(pl, pr, "final", file_bytes)
     pl.status = max(pl.status or 0, 5)
+    from app.event_log import log_event
+    log_event("document", None, "export", {"document": [None, "final documentation"], "sharepoint": [None, sp_status],
+              "welder_signatures": [None, include_welder_sign], "inspector_signatures": [None, include_inspector_sign]},
+              pipeline_id=pl.id, project_id=pl.project_id)
     db.session.commit()
     return _xlsx_response(file_bytes, f"{pl.no}_final.xlsx", sp_status)
 
@@ -255,6 +262,12 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
         def __init__(self, plm):
             pm = plm.project_material
             gm = pm.global_material if pm else None
+            self.id = plm.id
+            self.struck = bool(getattr(plm, "struck", False))
+            self.archived_at = getattr(plm, "archived_at", None)
+            self.archived_by = getattr(plm, "archived_by", None)
+            self.archive_reason = getattr(plm, "archive_reason", None)
+            self.sort_order = getattr(plm, "sort_order", None)
             self.position = plm.position
             self.start_of_plumbing = plm.start_of_plumbing
             self.end_of_plumbing = plm.end_of_plumbing
@@ -299,6 +312,7 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
     # junction's branch before an earlier one, which is why this export used to
     # disagree with the screen.
     mat_by_pos = {m.position: m for m in materials}
+    mat_by_pos_all = dict(mat_by_pos)          # + struck-through materials (filled further down)
     start_mat = next((m for m in materials if m.start_of_plumbing), materials[0] if materials else None)
 
     visited = set()
@@ -363,6 +377,57 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
         walk_line(seed.position)
         drain_branches()
     combined_rows = [r for r in combined_rows if r is not None]  # unused pointer slots
+
+    # Archived after welding ("struck"): the material and its welds stay in the document,
+    # struck through, where they were in the pipe - right after the part they were welded to,
+    # so a replacement reads directly below the one it replaced. A note row under each block
+    # says when, by whom and why (the same as the badge on screen).
+    struck_mats = [MatView(m) for m in PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, struck=True).all()]
+    struck_mats.sort(key=lambda m: (m.sort_order if m.sort_order is not None else 10 ** 9, _letter_to_pos(m.position or "")))
+    struck_welds = Weld.query.filter_by(pipeline_id=pipeline_id, struck=True).order_by(Weld.id).all()
+    for m in struck_mats:
+        if m.position:
+            mat_by_pos_all[m.position] = m
+
+    def _row_index_of_material(mat_id):
+        for i, r in enumerate(combined_rows):
+            if r[0] == "material" and r[1].id == mat_id:
+                return i
+        return None
+
+    def _note(row_obj):
+        when = row_obj.archived_at.strftime("%d-%b-%Y") if getattr(row_obj, "archived_at", None) else ""
+        who = getattr(row_obj, "archived_by", None) or ""
+        why = getattr(row_obj, "archive_reason", None) or ""
+        return ("note", f"\u2298 Archiviert / archived {when} \u00b7 {who} \u00b7 Grund / reason: {why}".replace(" \u00b7  \u00b7", " \u00b7"), None)
+
+    pool = list(struck_welds)
+    for m in struck_mats:
+        own = [w for w in pool if m.id in (w.material_a_id, w.material_b_id)]
+        for w in own:
+            pool.remove(w)
+        neighbour = {}
+        for w in own:
+            other = w.material_b_id if w.material_a_id == m.id else w.material_a_id
+            idx = _row_index_of_material(other)
+            if idx is not None:
+                neighbour[w.id] = idx
+        first = min(own, key=lambda w: neighbour.get(w.id, 10 ** 9)) if own else None
+        block = ([("weld", first, None)] if first is not None and first.id in neighbour else []) + [("material", m, None)]
+        block += [("weld", w, None) for w in own if not (first is not None and w.id == first.id and first.id in neighbour)]
+        block.append(_note(m))
+        at = neighbour.get(first.id) if first is not None else None
+        if at is None:
+            combined_rows.extend(block)
+        else:
+            combined_rows[at + 1:at + 1] = block
+    for w in pool:        # a weld struck on its own: after the first of its two materials
+        idxs = [i for i in (_row_index_of_material(w.material_a_id), _row_index_of_material(w.material_b_id)) if i is not None]
+        block = [("weld", w, None), _note(w)]
+        if idxs:
+            combined_rows[min(idxs) + 1:min(idxs) + 1] = block
+        else:
+            combined_rows.extend(block)
 
     # === Generate Excel (A-P = 16 columns) ===
     wb = openpyxl.Workbook()
@@ -511,13 +576,28 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
     def _weld_thickness(w):
         # thickness of the joined materials (first non-empty)
         for p in (w.between_a, w.between_b):
-            m = mat_by_pos.get(p)
+            m = mat_by_pos_all.get(p)
             if m and m.thickness:
                 return _clean_thk(m.thickness)
         return ""
 
+    struck_fill = PatternFill("solid", fgColor="EDEDED")
+
+    def _strike_row(row):
+        """A struck-through row: every value crossed out and greyed, like on screen."""
+        for c in range(1, 18):
+            cell = ws.cell(row, c)
+            f = cell.font
+            cell.font = Font(size=f.size or 10, bold=f.bold, italic=f.italic, strike=True, color="7F7F7F")
+
     def _write_rows(rows, row):
         for item_type, data, extra in rows:
+            if item_type == "note":
+                ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=17)
+                ws.cell(row, 1, data).font = Font(size=8, italic=True, color="9B2C2C")
+                ws.cell(row, 1).alignment = Alignment(vertical="center", horizontal="left", wrap_text=True)
+                bdr(row, 1, row, 17); ws.row_dimensions[row].height = 16; row += 1
+                continue
             if item_type == "material":
                 m = data
                 pos = m.position or ""
@@ -540,7 +620,10 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
                 ws.merge_cells(start_row=row,start_column=15,end_row=row,end_column=16)
                 ws.cell(row,15,m.heat_no or "").font=df; ws.cell(row,15).alignment=wc
                 ws.cell(row,17,m.waz_no or "").font=df; ws.cell(row,17).alignment=wc
-                fl(row,1,row,17,blue); bdr(row,1,row,17); ws.row_dimensions[row].height = 26; row+=1
+                fl(row,1,row,17,struck_fill if getattr(m, "struck", False) else blue); bdr(row,1,row,17); ws.row_dimensions[row].height = 26
+                if getattr(m, "struck", False):
+                    _strike_row(row)
+                row+=1
             elif item_type == "branch":
                 label, key = data, extra
                 ws.merge_cells(start_row=row,start_column=1,end_row=row,end_column=17)
@@ -572,6 +655,8 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
                 bdr(row,1,row,17); ws.row_dimensions[row].height = 24
                 if place_signatures:
                     place_signatures(ws, row, w)
+                if getattr(w, "struck", False):
+                    _strike_row(row)
                 row+=1
         return row
 
@@ -580,7 +665,7 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
     # tab that cell is one cell and would read the same on every printed page.
     # The budget is conservative on purpose - a tab that ends a little early just looks
     # normal, whereas overfilling one pushes rows onto a second printed page of that tab.
-    ROW_HEIGHT = {"material": 26, "weld": 24, "branch": 18}
+    ROW_HEIGHT = {"material": 26, "weld": 24, "branch": 18, "note": 16}
     PAGE_BUDGET = 400          # points of data rows per tab, after the header block
     pages, cur, used = [], [], 0
     for item in combined_rows:

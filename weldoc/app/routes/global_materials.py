@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from app.database import db
+from app.models.project_material import ProjectMaterial
 from app.models.global_material import GlobalMaterial
 from app.routes.dropdown_values import unhide_entered_values
 from app.material_utils import (
@@ -65,6 +66,8 @@ def edit_global_material(gm_id):
     """Edit an existing global material with automatic deduplication/merge."""
     m = GlobalMaterial.query.get_or_404(gm_id)
     data = request.get_json() or {}
+    from app.global_waz import snapshot, after_spec_change
+    waz_before = snapshot(ProjectMaterial.query.filter_by(global_material_id=gm_id).all())
 
     current_dict = {
         "category": data.get("category", m.category),
@@ -91,6 +94,7 @@ def edit_global_material(gm_id):
     if existing_other:
         merge_global_materials(gm_id, existing_other.id)
         db.session.commit()
+        after_spec_change(waz_before)       # the global WAZ copies take the new names
         return jsonify(_serialize(existing_other)), 200
 
     unhide_entered_values(norm, m)       # only values that changed in this edit
@@ -115,6 +119,7 @@ def edit_global_material(gm_id):
         m.archived = data["archived"]
 
     db.session.commit()
+    after_spec_change(waz_before)           # the global WAZ copies take the new names
     return jsonify(_serialize(m)), 200
 
 
@@ -177,6 +182,8 @@ def update_global_material_spec():
     gm = None
     if gm_id:
         gm = GlobalMaterial.query.get(gm_id)
+    from app.global_waz import snapshot, after_spec_change
+    waz_before = snapshot(ProjectMaterial.query.filter_by(global_material_id=gm.id).all()) if gm else {}
 
     if not gm:
         existing = find_matching_global_material(norm)
@@ -211,6 +218,7 @@ def update_global_material_spec():
         if existing_other:
             merge_global_materials(gm.id, existing_other.id)
             db.session.commit()
+            after_spec_change(waz_before)
             return jsonify(_serialize(existing_other)), 200
 
         unhide_entered_values(norm, gm)
@@ -233,6 +241,7 @@ def update_global_material_spec():
         gm.dien_no = norm["dien_no"]
 
         db.session.commit()
+        after_spec_change(waz_before)
         return jsonify(_serialize(gm)), 200
 
 

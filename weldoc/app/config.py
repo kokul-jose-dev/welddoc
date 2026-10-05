@@ -22,4 +22,10 @@ class Config:
     AZURE_CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET", "")
     SHAREPOINT_HOST = os.getenv("SHAREPOINT_HOST", "")
     SHAREPOINT_SITE_PATH = os.getenv("SHAREPOINT_SITE_PATH", "")
+    # Global WAZ folder: every WAZ certificate uploaded at project level is also kept here,
+    # under the same file name (app/global_waz.py). Empty folder = switched off.
+    # Who may read the event log: comma-separated logins (app/event_log.py)
+    SHAREPOINT_GLOBAL_WAZ_HOST = os.getenv("SHAREPOINT_GLOBAL_WAZ_HOST", "")
+    SHAREPOINT_GLOBAL_WAZ_SITE = os.getenv("SHAREPOINT_GLOBAL_WAZ_SITE", "")
+    SHAREPOINT_GLOBAL_WAZ_FOLDER = os.getenv("SHAREPOINT_GLOBAL_WAZ_FOLDER", "")
     SHAREPOINT_WELDER_FOLDER = os.getenv("SHAREPOINT_WELDER_FOLDER", "General/1_QMS ISO 9001_2015/4_Nachweisend/3.2_Personal & Ausbildung/Schweissprüfungen")

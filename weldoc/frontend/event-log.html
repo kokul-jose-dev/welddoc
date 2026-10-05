@@ -1,0 +1,25 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WeldDoc — Event log</title><link rel="stylesheet" href="styles.css?v=54"></head><body>
+<div id="chrome"></div>
+<main class="content">
+  <div class="page-header"><div><h1 data-i18n="event_log">Event log</h1><div class="page-subtitle" data-i18n="event_log_sub2">Everything WeldDoc recorded, newest first.</div></div>
+    <div class="el-head-actions">
+      <button class="btn btn-ghost btn-sm" id="el-refresh" data-i18n-title="el_refresh" title="Refresh">&#8635;</button>
+      <button class="btn btn-ghost btn-sm" id="el-export" data-i18n="export_excel">Export to Excel</button>
+    </div></div>
+  <section class="el-card">
+    <div class="el-toolbar" id="el-filters">
+      <div class="el-search"><span class="el-search-icon">&#9906;</span><input type="text" id="el-q" data-i18n-placeholder="el_search_ph" placeholder="Search the log (person, value, reason …)"></div>
+      <select id="el-cat"></select>
+      <div class="el-seg" id="el-seg"></div>
+      <label class="el-date"><span data-i18n="el_from">From</span> <input type="date" id="el-from"></label>
+      <label class="el-date"><span data-i18n="el_to">To</span> <input type="date" id="el-to"></label>
+    </div>
+    <div class="el-scope" id="el-scope"></div>
+    <div class="el-list" id="el-list"></div>
+    <div class="el-more"><span id="el-count"></span> <button class="btn btn-ghost btn-sm" id="el-more" data-i18n="el_load_more">Load more</button></div>
+  </section>
+</main>
+<div id="modal-root"></div>
+<script src="i18n.js?v=63"></script><script src="app.js?v=80"></script><script>initEventLogPage();</script>
+</body></html>

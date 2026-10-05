@@ -465,7 +465,7 @@ def get_materials_page():
                gm.diameter, gm.diameter2, gm.diameter3,
                gm.thickness, gm.thickness2, gm.thickness3,
                gm.surface, gm.material_code, gm.dien_no,
-               proj.certificate, proj.heat_no, proj.waz_pdf_url
+               proj.certificate, proj.heat_no, proj.waz_pdf_url, pm.project_material_id
         FROM weldoc_pipeline_materials pm
         LEFT JOIN weldoc_project_materials proj ON pm.project_material_id = proj.id
         LEFT JOIN weldoc_global_materials gm ON proj.global_material_id = gm.id
@@ -537,7 +537,7 @@ def get_materials_page():
         } for r in gm_rows],
         "materials": [{
             "id": r.id, "pipelineId": r.pipeline_id, "position": r.position,
-            "globalMaterialId": r.global_material_id,
+            "globalMaterialId": r.global_material_id, "projectMaterialId": r.project_material_id,
             "piece": r.category or "", "dimension": r.dn1 or "",
             "dimension2": r.dn2 or "", "dimension3": r.dn3 or "",
             "dimension4": r.dn4 or "", "dimension5": r.dn5 or "",

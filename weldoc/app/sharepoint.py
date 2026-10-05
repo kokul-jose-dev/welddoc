@@ -53,11 +53,17 @@ def _get_app_token():
     return token
 
 
-def _sanitize_name(name):
-    """Remove characters not allowed in SharePoint folder/file names."""
+def _sanitize_name(name, keep=""):
+    """Remove characters not allowed in SharePoint folder/file names.
+
+    keep: characters to leave in. Subfolder names keep "&" - SharePoint allows it, and the
+    customer's folders use it ("02 Material & Schweissnahtliste"). File names still swap it
+    for "_", so the names of files already uploaded do not change.
+    """
     invalid = ['~', '#', '%', '&', '*', '{', '}', '\\', ':', '<', '>', '?', '/', '|', '"']
     for ch in invalid:
-        name = name.replace(ch, '_')
+        if ch not in keep:
+            name = name.replace(ch, '_')
     return name.strip().strip('.')
 
 
@@ -203,6 +209,8 @@ def upload_waz_to_project_folder(drive_id, folder_id, file_name, file_content, c
 
         web_url = result.get("webUrl", "")
         current_app.logger.info(f"SharePoint: Uploaded WAZ document '{safe_file_name}' to WAZ/")
+        # The copy in the global WAZ folder is made by the caller, in the background, so this
+        # upload is as fast as before (app/global_waz.py: after_uploaded).
         return web_url
     except Exception as e:
         current_app.logger.error(f"SharePoint: Failed to upload WAZ document: {e}")
@@ -286,6 +294,118 @@ def _ensure_sharepoint_folder_path(drive_id, folder_path, token):
                 raise
 
     return current_parent_id
+
+
+# --- Global WAZ folder -------------------------------------------------------------------------
+# Its own site (SHAREPOINT_GLOBAL_WAZ_HOST / _SITE, default: the app's site) and folder path
+# (SHAREPOINT_GLOBAL_WAZ_FOLDER). Every call is best-effort: a failure is logged and never stops
+# the project-level action it belongs to.
+
+_global_drive_cache = {}
+
+
+def global_waz_enabled():
+    return bool((current_app.config.get("SHAREPOINT_GLOBAL_WAZ_FOLDER") or "").strip("/ "))
+
+
+def _global_waz_drive(token):
+    cfg = current_app.config
+    host = cfg.get("SHAREPOINT_GLOBAL_WAZ_HOST") or cfg.get("SHAREPOINT_HOST", "")
+    site = cfg.get("SHAREPOINT_GLOBAL_WAZ_SITE") or cfg.get("SHAREPOINT_SITE_PATH", "")
+    key = f"{host}:{site}"
+    if key not in _global_drive_cache:
+        req = urllib.request.Request(f"{GRAPH_BASE}/sites/{host}:{site}:/drive")
+        req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            _global_drive_cache[key] = json.loads(resp.read())["id"]
+    return _global_drive_cache[key]
+
+
+def _global_waz_path(file_name):
+    folder = (current_app.config.get("SHAREPOINT_GLOBAL_WAZ_FOLDER") or "").strip("/")
+    return urllib.parse.quote(f"{folder}/{file_name}", safe="/")
+
+
+def global_waz_put(file_name, file_content, content_type="application/pdf"):
+    """Upload (or replace) a file in the global WAZ folder. Returns its webUrl, or None."""
+    if not global_waz_enabled() or not file_content:
+        return None
+    try:
+        token = _get_app_token()
+        drive_id = _global_waz_drive(token)
+        _ensure_sharepoint_folder_path(drive_id, current_app.config["SHAREPOINT_GLOBAL_WAZ_FOLDER"], token)
+        req = urllib.request.Request(f"{GRAPH_BASE}/drives/{drive_id}/root:/{_global_waz_path(file_name)}:/content",
+                                     data=file_content, method="PUT")
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", content_type or "application/pdf")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            url = json.loads(resp.read()).get("webUrl", "")
+        current_app.logger.info(f"SharePoint: global WAZ '{file_name}' uploaded")
+        return url
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: global WAZ upload of '{file_name}' failed: {e}")
+        return None
+
+
+def _global_waz_item(file_name, token):
+    """The drive item of a file in the global WAZ folder, or None when it is not there."""
+    drive_id = _global_waz_drive(token)
+    req = urllib.request.Request(f"{GRAPH_BASE}/drives/{drive_id}/root:/{_global_waz_path(file_name)}")
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            return drive_id, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return drive_id, None
+        raise
+
+
+def global_waz_url(file_name):
+    """webUrl of the file in the global WAZ folder, or None."""
+    if not global_waz_enabled():
+        return None
+    try:
+        _, item = _global_waz_item(file_name, _get_app_token())
+        return item.get("webUrl") if item else None
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: global WAZ lookup of '{file_name}' failed: {e}")
+        return None
+
+
+def global_waz_download(file_name):
+    if not global_waz_enabled():
+        return None
+    try:
+        token = _get_app_token()
+        drive_id, item = _global_waz_item(file_name, token)
+        if not item:
+            return None
+        req = urllib.request.Request(f"{GRAPH_BASE}/drives/{drive_id}/items/{item['id']}/content")
+        req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+            return resp.read()
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: global WAZ download of '{file_name}' failed: {e}")
+        return None
+
+
+def global_waz_delete(file_name):
+    if not global_waz_enabled():
+        return False
+    try:
+        token = _get_app_token()
+        drive_id, item = _global_waz_item(file_name, token)
+        if not item:
+            return False
+        req = urllib.request.Request(f"{GRAPH_BASE}/drives/{drive_id}/items/{item['id']}", method="DELETE")
+        req.add_header("Authorization", f"Bearer {token}")
+        urllib.request.urlopen(req, context=_ssl_context())
+        current_app.logger.info(f"SharePoint: global WAZ '{file_name}' deleted")
+        return True
+    except Exception as e:
+        current_app.logger.error(f"SharePoint: global WAZ delete of '{file_name}' failed: {e}")
+        return False
 
 
 def _get_welder_folder_base():
@@ -613,7 +733,7 @@ def upload_to_pipeline_subfolder_ex(drive_id, folder_id, pipeline_no, subfolder,
     safe_pipeline, safe_file = pipeline_no, file_name
     try:
         safe_pipeline = _sanitize_name(pipeline_no)
-        safe_sub = _sanitize_name(subfolder)
+        safe_sub = _sanitize_name(subfolder, keep="&")
         safe_file = _sanitize_name(file_name)
         upload_path = f"Rohrleitungen/{safe_pipeline}/{safe_sub}/{safe_file}"
 
@@ -664,7 +784,7 @@ def delete_pipeline_subfolder_file(drive_id, folder_id, pipeline_no, subfolder, 
         return False
     try:
         safe_pipeline = _sanitize_name(pipeline_no)
-        safe_sub = _sanitize_name(subfolder)
+        safe_sub = _sanitize_name(subfolder, keep="&")
         safe_file = _sanitize_name(file_name)
         relative_path = f"Rohrleitungen/{safe_pipeline}/{safe_sub}/{safe_file}"
         token = _get_app_token()
@@ -732,7 +852,7 @@ def list_pipeline_subfolder_files(drive_id, folder_id, pipeline_no, subfolder="0
         return []
     try:
         safe_pipeline = _sanitize_name(pipeline_no)
-        safe_sub = _sanitize_name(subfolder)
+        safe_sub = _sanitize_name(subfolder, keep="&")
         subfolder_path = f"Rohrleitungen/{safe_pipeline}/{safe_sub}"
         token = _get_app_token()
         list_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/{urllib.parse.quote(subfolder_path)}:/children"

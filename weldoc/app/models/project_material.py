@@ -1,4 +1,6 @@
 from app.spec_values import CertificateColumn
+from sqlalchemy import event
+
 from app.database import db
 
 
@@ -15,6 +17,15 @@ class ProjectMaterial(db.Model):
     certificate = db.Column(CertificateColumn(100))     # e.g. 3.1 (DECIMAL(3,1), migration 012)
     heat_no = db.Column(db.String(200))
     waz_pdf_url = db.Column(db.String(500))
+    # The same certificate in the global WAZ folder (migration 013, app/global_waz.py)
+    waz_global_url = db.Column(db.Unicode(500), nullable=True)
     archived = db.Column(db.Boolean, default=False)
 
     global_material = db.relationship("GlobalMaterial", lazy="joined")
+
+
+@event.listens_for(ProjectMaterial.waz_pdf_url, "set")
+def _certificate_removed(target, value, oldvalue, initiator):
+    """No certificate any more -> no global copy of it either (on every path that clears it)."""
+    if not value:
+        target.waz_global_url = None

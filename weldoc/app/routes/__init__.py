@@ -8,6 +8,7 @@ from app.routes.welds import welds_bp
 from app.routes.persons import users_bp
 from app.routes.builder_doc import builder_doc_bp
 from app.routes.export_final import export_bp
+from app.routes.event_log import event_log_bp
 from app.routes.auth import auth_bp
 from app.routes.welders import welders_bp
 from app.routes.wps_processes import wps_processes_bp
@@ -27,6 +28,7 @@ def register_routes(app):
     app.register_blueprint(users_bp, url_prefix="/api/users")
     app.register_blueprint(builder_doc_bp, url_prefix="/api/pipelines")
     app.register_blueprint(export_bp, url_prefix="/api/pipelines")
+    app.register_blueprint(event_log_bp, url_prefix="/api/event-log")
     app.register_blueprint(welders_bp, url_prefix="/api/welders")
     app.register_blueprint(wps_processes_bp, url_prefix="/api/wps-processes")
     app.register_blueprint(dropdown_values_bp, url_prefix="/api/dropdown-hidden")

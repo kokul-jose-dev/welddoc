@@ -522,6 +522,8 @@ def upload_waz_for_pipeline_material(pm_id):
                     sib.waz_package_url = m.waz_package_url
         db.session.commit()
 
+    from app.global_waz import after_uploaded
+    after_uploaded(pm, file_content, content_type)    # global copy + its address, in the background
     return jsonify(_serialize(m)), 200
 
 
@@ -651,6 +653,9 @@ def restore_pipeline_material(pm_id):
         )
         if url:
             pm.waz_pdf_url = url
+            from app.global_waz import after_uploaded
+            db.session.commit()
+            after_uploaded(pm, file_content, content_type)
 
     # Assign its position letter
     locked = _numbering_frozen(m.pipeline_id)
@@ -732,6 +737,8 @@ def reorder_pipeline_materials():
     #    welds cannot be matched afterwards and the welder, inspector, date, wire and
     #    results recorded on them would have to be thrown away.
     _ensure_weld_ids(pipeline_id)     # welds not matched yet: match them while the letters still hold
+    db.session.flush()
+    reorder_before = _reorder_snapshot(pipeline_id)     # for the event log: the raw SQL below is not seen
     old_pos_rows = db.session.execute(db.text("""
         SELECT id, position FROM weldoc_pipeline_materials
         WHERE pipeline_id = :pid AND archived = 0
@@ -884,6 +891,7 @@ def reorder_pipeline_materials():
             VALUES (:pid, :wno, :ba, :bb, :ma, :mb, 0)
         """), weld_inserts)
 
+    _log_reorder(pipeline_id, reorder_before, _reorder_snapshot(pipeline_id))
     db.session.commit()
     _sync_sort_order(pipeline_id)
     _sync_pipeline_waz_nos(pipeline_id)
@@ -934,6 +942,7 @@ def _archive_pipeline_material(m, reason=None):
     # The mirrored rows (neighbour -> m) survive it, and they re-link this material to its
     # old neighbours the moment it is restored - at their new letters, so it comes back
     # wired to the wrong materials. Remove both directions.
+    _log_mirrored_connections_removed(m)
     db.session.execute(db.text("""
         DELETE FROM weldoc_pipeline_material_connections
         WHERE pipeline_material_id = :mid OR connected_id = :mid
@@ -1546,6 +1555,9 @@ def _strike_pipeline_material(m, reason):
 
     # Its connections go - the struck welds are the history of what it was joined to. Both
     # directions, see _archive_pipeline_material.
+    m.connections = []
+    db.session.flush()
+    _log_mirrored_connections_removed(m)
     db.session.execute(db.text("""
         DELETE FROM weldoc_pipeline_material_connections
         WHERE pipeline_material_id = :mid OR connected_id = :mid
@@ -1644,6 +1656,60 @@ def _restore_in_place(m):
     _refresh_weld_labels(pipeline_id)
     db.session.commit()
     _sync_and_renumber_welds(pipeline_id)
+
+
+def _log_mirrored_connections_removed(m):
+    """The raw DELETE of the neighbours' rows pointing at m is not seen by the event log."""
+    from app.event_log import log_event
+    rows = db.session.execute(db.text(
+        "SELECT pipeline_material_id FROM weldoc_pipeline_material_connections WHERE connected_id = :mid"),
+        {"mid": m.id}).fetchall()
+    for r in rows:
+        log_event("pipeline_material", r.pipeline_material_id, "update",
+                  {"connections": [f"connected to {m.id}", f"connection to {m.id} removed"]},
+                  pipeline_id=m.pipeline_id)
+
+
+def _reorder_snapshot(pipeline_id):
+    mats = {r.id: (r.position, bool(r.start_of_plumbing), bool(r.end_of_plumbing)) for r in db.session.execute(db.text(
+        "SELECT id, position, start_of_plumbing, end_of_plumbing FROM weldoc_pipeline_materials "
+        "WHERE pipeline_id = :pid AND archived = 0"), {"pid": pipeline_id}).fetchall()}
+    conns = {tuple(sorted((r.pipeline_material_id, r.connected_id))) for r in db.session.execute(db.text(
+        "SELECT c.pipeline_material_id, c.connected_id FROM weldoc_pipeline_material_connections c "
+        "JOIN weldoc_pipeline_materials m ON m.id = c.pipeline_material_id WHERE m.pipeline_id = :pid"),
+        {"pid": pipeline_id}).fetchall()}
+    welds = {r.id: (str(r.weld_no), r.between_a, r.between_b, r.material_a_id, r.material_b_id)
+             for r in db.session.execute(db.text(
+                 "SELECT id, weld_no, between_a, between_b, material_a_id, material_b_id FROM weldoc_welds "
+                 "WHERE pipeline_id = :pid AND archived = 0"), {"pid": pipeline_id}).fetchall()}
+    return mats, conns, welds
+
+
+def _log_reorder(pipeline_id, before, after):
+    """Reorder writes with raw SQL - log what it changed, entry by entry."""
+    from app.event_log import log_event
+    keys = ("position", "start_of_plumbing", "end_of_plumbing")
+    for mid, new in after[0].items():
+        old = before[0].get(mid)
+        ch = {k: [o, n] for k, o, n in zip(keys, old or (None,) * 3, new) if o != n}
+        if ch:
+            log_event("pipeline_material", mid, "update", ch, pipeline_id=pipeline_id)
+    for a, b in sorted(before[1] - after[1]):
+        log_event("connection", None, "delete", {"materials": [[a, b], None]}, pipeline_id=pipeline_id)
+    for a, b in sorted(after[1] - before[1]):
+        log_event("connection", None, "create", {"materials": [None, [a, b]]}, pipeline_id=pipeline_id)
+    wkeys = ("weld_no", "between_a", "between_b", "material_a_id", "material_b_id")
+    for wid, old in before[2].items():
+        if wid not in after[2]:
+            log_event("weld", wid, "delete", {k: [o, None] for k, o in zip(wkeys, old)}, pipeline_id=pipeline_id)
+    for wid, new in after[2].items():
+        old = before[2].get(wid)
+        if old is None:
+            log_event("weld", wid, "create", {k: [None, n] for k, n in zip(wkeys, new)}, pipeline_id=pipeline_id)
+        else:
+            ch = {k: [o, n] for k, o, n in zip(wkeys, old, new) if o != n}
+            if ch:
+                log_event("weld", wid, "update", ch, pipeline_id=pipeline_id)
 
 
 def _lettered_materials(pipeline_id):
@@ -2052,15 +2118,15 @@ def _update_connections(m, conn_positions, pipeline_id):
     # Let the connections decide where this material sits. Only when they actually changed,
     # so editing anything else on a material never reshuffles the pipeline.
     #
-    # Moving it is only right when it was spliced into an existing weld: connected to R and S
-    # that were welded together, the line becomes R-m-S and m belongs between them. Connected
-    # to a single part, or to two parts that were never joined, it is a branch or a tie-in and
-    # keeps the slot it already has - the end of the list for a new material, where it was for
-    # an edited one. Repositioning those dragged them up next to the part they hang off and
-    # pushed the rest of the pipeline down.
+    # Joined to two (or more) parts it sits between them, right after the first: when R and S
+    # were welded together that link goes (R-m-S, _split_linked_pair); when they were not, it
+    # still goes there - only the two new links are made. Connected to a single part it is a
+    # branch and keeps the slot it already has - the end of the list for a new material, where
+    # it was for an edited one. Repositioning those dragged them up next to the part they hang
+    # off and pushed the rest of the pipeline down.
     if (conns_changed or m.start_of_plumbing) and not _numbering_frozen(pipeline_id):
         spliced = _split_linked_pair(m, pipeline_id)
-        if spliced or m.start_of_plumbing:
+        if spliced or m.start_of_plumbing or len(target_connected) >= 2:
             _reposition_by_connections(m, pipeline_id)
 
     _sync_and_renumber_welds(pipeline_id)

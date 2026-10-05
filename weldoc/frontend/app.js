@@ -1334,6 +1334,7 @@ function reorderMaterialPositions(pipelineId) {
 
 /* ================================================================ SHARED CHROME (topbar + nav + modals) ================================================================ */
 const NAV_ICONS = {
+  eventlog: '<circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>',
   home: '<path d="M3 10.5 12 3l9 7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M5 9.5V20h14V9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   clients: '<circle cx="12" cy="8" r="3.2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M5 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>',
   projects: '<rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M8 9h8M8 13h8M8 17h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
@@ -1394,6 +1395,7 @@ function renderChrome(activeNav, breadcrumbHtml) {
         setCached('auth_user', u, 3600000);
         const nameEl = document.getElementById('topbar-username');
         if (nameEl) nameEl.textContent = getUserName(u, roleName);
+        showLoginEmail(u.email);
       }
     }).catch(() => { });
   }
@@ -1420,7 +1422,7 @@ function renderChrome(activeNav, breadcrumbHtml) {
           <span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,0.14);color:#fff;">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
           </span>
-          <span id="topbar-username">${escapeHtml(userDisplay)}</span>
+          <span id="topbar-username" title="${escapeHtml(cachedAuth.email || '')}">${escapeHtml(userDisplay)}</span><span id="topbar-email" class="topbar-email">${escapeHtml(cachedAuth.email || '')}</span>
         </div>
       </div>
     </header>
@@ -1432,12 +1434,244 @@ function renderChrome(activeNav, breadcrumbHtml) {
       <div class="nav-section-divider"></div>
       ${nav('materials', t('nav_materials', 'Materials'), 'materials.html', true)}
       ${nav('welders', t('welders', 'Welders'), 'welders.html', true)}
+      ${nav('eventlog', t('event_log', 'Event log'), 'event-log.html', false)}
       <div class="sidebar-role">
         <a href="role.html" title="${t('switch_role', 'Switch role')} (${roleName})">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         </a>
       </div>
     </nav>`;
+}
+
+/* The login actually in use (Microsoft account, or the local auto-login) - shown under the name. */
+function showLoginEmail(email) {
+  const el = document.getElementById('topbar-email');
+  if (el) el.textContent = email || '';
+  const nameEl = document.getElementById('topbar-username');
+  if (nameEl) nameEl.title = email || '';
+}
+function historyLink(entityType, id) {
+  return `<a class="btn-link" href="event-log.html?entityType=${entityType}&entityId=${id}" title="${escapeHtml(t('el_history_hint', 'Every change of this entry (event log)'))}">${t('el_history', 'History')}</a>`;
+}
+
+/* ================================================================ EVENT LOG PAGE ================================================================
+   Each user action is one card: who did what, in plain words, with the time on the right. The
+   details (every field old -> new, and what else that same action changed) fold out on click.
+   The log itself is app/event_log.py; reading it is for admins only. */
+const EL_CATEGORIES = [
+  ['', 'el_cat_all', 'All categories'],
+  ['weld', 'el_cat_welds', 'Welds'],
+  ['pipeline_material,connection', 'el_cat_materials', 'Pipeline materials'],
+  ['project_material,global_material', 'el_cat_catalogue', 'Project & catalogue materials'],
+  ['pipeline,project,client', 'el_cat_projects', 'Pipelines, projects, clients'],
+  ['welder,certificate,wps_process', 'el_cat_welders', 'Welders & certificates'],
+  ['document', 'el_cat_documents', 'Documents'],
+  ['user', 'el_cat_signin', 'Sign-in'],
+  ['dropdown_hidden', 'el_cat_settings', 'Dropdown values'],
+];
+const EL_SEGMENTS = [
+  ['', 'el_seg_all', 'All'],
+  ['create', 'el_seg_added', 'Added'],
+  ['update', 'el_seg_changed', 'Changed'],
+  ['archive,strike,restore', 'el_seg_archived', 'Archived'],
+  ['delete', 'el_seg_deleted', 'Deleted'],
+];
+const EL_ENTITY = {   /* entity type -> [i18n key, default, icon] */
+  weld: ['el_e_weld', 'Weld', 'weld'], pipeline_material: ['el_e_material', 'Material', 'mat'], connection: ['el_e_connection', 'Connection', 'mat'],
+  project_material: ['el_e_project_material', 'Project material', 'mat'], global_material: ['el_e_global_material', 'Catalogue material', 'mat'],
+  pipeline: ['el_e_pipeline', 'Pipeline', 'pipe'], project: ['el_e_project', 'Project', 'pipe'], client: ['el_e_client', 'Client', 'pipe'],
+  welder: ['el_e_welder', 'Welder', 'person'], certificate: ['el_e_certificate', 'Welder certificate', 'person'], wps_process: ['el_e_wps', 'WPS', 'person'],
+  document: ['el_e_document', 'Document', 'doc'], user: ['el_e_signin', 'Sign-in', 'key'], dropdown_hidden: ['el_e_dropdown', 'Dropdown value', 'gear'],
+};
+const EL_ACTION = {   /* action -> [i18n key, default, verb key, verb default, tone] */
+  create: ['el_a_create', 'Added', 'el_v_create', 'added', 'ok'], update: ['el_a_update', 'Changed', 'el_v_update', 'changed', 'info'],
+  archive: ['el_a_archive', 'Archived', 'el_v_archive', 'archived', 'warn'], strike: ['el_a_strike', 'Struck through', 'el_v_strike', 'struck through', 'warn'],
+  restore: ['el_a_restore', 'Restored', 'el_v_restore', 'restored', 'ok'], delete: ['el_a_delete', 'Deleted', 'el_v_delete', 'deleted', 'bad'],
+  login: ['el_a_login', 'Signed in', 'el_v_login', 'signed in', 'info'], logout: ['el_a_logout', 'Signed out', 'el_v_logout', 'signed out', 'info'],
+  export: ['el_a_export', 'Exported', 'el_v_export', 'exported', 'info'],
+};
+const EL_FIELDS = {   /* column -> [i18n key, default] */
+  weld_no: ['th_weld_no', 'Weld no.'], type: ['weld_type', 'Type'], procedure: ['procedure', 'Procedure'], welding_wire: ['th_welding_wire', 'Welding wire'],
+  welder_id: ['th_welder', 'Welder'], inspector_id: ['th_inspector', 'Inspector'], welder: ['th_welder', 'Welder'], inspector: ['th_inspector', 'Inspector'],
+  date: ['date_of_welding', 'Date of welding'], visual: ['visual_result', 'Visual result'], endoscopy: ['endoscopy_result', 'Endoscopy result'],
+  remarks: ['remarks', 'Remarks'], material_a_id: ['el_f_material_a', 'Material 1'], material_b_id: ['el_f_material_b', 'Material 2'],
+  position: ['th_pos', 'Pos.'], start_of_plumbing: ['el_f_start', 'Start of plumbing'], end_of_plumbing: ['el_f_end', 'End of plumbing'],
+  connections: ['el_f_connections', 'Connections'], project_material_id: ['el_f_project_material', 'Project material'],
+  global_material_id: ['el_f_global_material', 'Catalogue material'], heat_no: ['th_heat_no', 'Heat no.'], certificate: ['th_certificate', 'Certificate'],
+  waz_no: ['th_waz_no', 'WAZ no.'], waz_pdf_url: ['el_f_waz_pdf', 'WAZ document'], category: ['th_category', 'Category'],
+  item_description: ['th_item_description', 'Item description'], dien_no: ['th_din_en_no', 'DIN EN No.'], material_code: ['th_material', 'Material'],
+  surface: ['th_surface', 'Surface'], archived: ['el_f_archived', 'Archived'], archive_reason: ['el_reason', 'Reason'],
+  status: ['el_f_status', 'Status'], no: ['th_pipeline_no', 'Pipeline no.'], title: ['el_f_title', 'Title'], name: ['el_f_name', 'Name'],
+  document: ['el_f_document', 'Document'], sharepoint: ['el_f_sharepoint', 'SharePoint'], value: ['el_f_value', 'Value'],
+};
+/* Bookkeeping the app does by itself - in the details, not in the sentence. */
+const EL_TECHNICAL = new Set(['id', 'sort_order', 'archived_at', 'archived_by', 'struck', 'between_a', 'between_b', 'waz_package_url',
+  'waz_global_url', 'endoscopy_video_url', 'endoscopy_image_url', 'pipeline_id', 'project_id', 'hidden_by', 'hidden_at']);
+const EL_ICONS = {
+  weld: '<circle cx="12" cy="12" r="3.2"/><path d="M4 12h4.8M15.2 12H20"/>',
+  mat: '<rect x="4" y="9" width="16" height="6" rx="1.5"/>',
+  pipe: '<path d="M4 6h7v12h9"/>',
+  person: '<circle cx="12" cy="8" r="3.2"/><path d="M5 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/>',
+  doc: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/>',
+  key: '<circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H20M17 12v3"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>',
+};
+let EL_STATE = { offset: 0, total: 0, scope: {}, entries: [], seg: '' };
+
+function elTxt(pair) { return t(pair[0], pair[1]); }
+function elField(f) { return EL_FIELDS[f] ? elTxt(EL_FIELDS[f]) : f.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase()); }
+function elVal(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  if (v === true) return t('yes', 'Yes');
+  if (v === false) return t('no', 'No');
+  if (Array.isArray(v)) return v.length ? v.join(', ') : '—';
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return elDay(new Date(s + 'T00:00:00'));
+  if (/^https?:\/\//.test(s)) return t('el_file', 'file');
+  return s;
+}
+function elDay(d) {
+  const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()];
+  return `${String(d.getDate()).padStart(2, '0')}-${m}-${d.getFullYear()}`;
+}
+function elWhen(iso, full) {
+  if (!iso) return '—';
+  const d = new Date(/Z$|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');      /* stored in UTC */
+  if (isNaN(d)) return escapeHtml(iso);
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (full) return `${elDay(d)} ${hm}:${String(d.getSeconds()).padStart(2, '0')}`;
+  const today = new Date(); const yest = new Date(); yest.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return hm;
+  if (d.toDateString() === yest.toDateString()) return `${t('el_yesterday', 'Yesterday')}, ${hm}`;
+  return `${elDay(d)}, ${hm}`;
+}
+/* "Jeny M Jerry changed weld 3 – visual result: — → OK, welder: — → Hans (098)" */
+function elSentence(e) {
+  const who = `<strong>${escapeHtml(e.userName || e.userEmail)}</strong>`;
+  const act = EL_ACTION[e.action] || [null, e.action, null, e.action];
+  const verb = act[2] ? t(act[2], act[3]) : e.action;
+  const ent = EL_ENTITY[e.entityType];
+  const what = e.entityType === 'user' ? '' : ` ${escapeHtml((e.entityLabel || (ent ? elTxt(ent) : e.entityType)) + (e.entityLabel || e.entityId == null ? '' : ' #' + e.entityId))}`;
+  if (e.action === 'export') {
+    const doc = (e.shown || {}).document; return `${who} ${verb} ${escapeHtml(elVal(Array.isArray(doc) ? doc[1] : doc))}`;
+  }
+  let main = `${who} ${verb}${what}`;
+  if (e.action === 'update') {
+    const parts = Object.entries(e.shown || {}).filter(([f]) => !EL_TECHNICAL.has(f));
+    if (parts.length) {
+      const shown = parts.slice(0, 3).map(([f, p]) => `${escapeHtml(elField(f))}: <span class="el-old">${escapeHtml(elVal(p[0]))}</span> → <span class="el-new">${escapeHtml(elVal(p[1]))}</span>`);
+      main += ` <span class="el-dash">–</span> ${shown.join(', ')}${parts.length > 3 ? ` <span class="muted">+${parts.length - 3}</span>` : ''}`;
+    }
+  }
+  return main;
+}
+function elDetails(list) {
+  return list.map(e => {
+    const ent = EL_ENTITY[e.entityType];
+    const head = `<div class="el-det-head">${escapeHtml(ent ? elTxt(ent) : e.entityType)} ${escapeHtml(e.entityLabel || (e.entityId != null ? '#' + e.entityId : ''))} · ${escapeHtml((EL_ACTION[e.action] ? elTxt(EL_ACTION[e.action]) : e.action))} · <span class="muted">${elWhen(e.at, true)}</span></div>`;
+    const rows = Object.entries(e.shown || {}).map(([f, p]) => {
+      const [o, n] = Array.isArray(p) && p.length === 2 ? p : [null, p];
+      return `<tr${EL_TECHNICAL.has(f) ? ' class="el-tech"' : ''}><td>${escapeHtml(elField(f))}</td><td>${escapeHtml(elVal(o))}</td><td>${escapeHtml(elVal(n))}</td></tr>`;
+    }).join('');
+    return head + (rows ? `<table class="el-det"><thead><tr><th>${t('el_field', 'Field')}</th><th>${t('el_before', 'Before')}</th><th>${t('el_after', 'After')}</th></tr></thead><tbody>${rows}</tbody></table>` : '');
+  }).join('');
+}
+/* One card per user action: entries that share a request id belong together. */
+function elGroups(entries) {
+  const groups = [];
+  entries.forEach(e => {
+    const last = groups[groups.length - 1];
+    if (last && e.requestId && last.requestId === e.requestId) last.items.push(e);
+    else groups.push({ requestId: e.requestId, items: [e] });
+  });
+  groups.forEach(g => { g.main = g.items[g.items.length - 1]; });   /* newest first -> the first thing done is last */
+  return groups;
+}
+function elCard(g, idx) {
+  const e = g.main;
+  const ent = EL_ENTITY[e.entityType] || [null, e.entityType, 'gear'];
+  const act = EL_ACTION[e.action] || [null, e.action, null, null, 'info'];
+  const others = g.items.length - 1;
+  const where = [e.pipelineNo ? `<a class="cell-link" href="pipeline-detail.html?id=${e.pipelineId}">${escapeHtml(e.pipelineNo)}</a>` : '',
+    escapeHtml(e.userEmail)].filter(Boolean).join(' · ');
+  return `<div class="el-item el-tone-${act[4]}" data-idx="${idx}">
+      <div class="el-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${EL_ICONS[ent[2]] || EL_ICONS.gear}</svg></div>
+      <div class="el-body">
+        <div class="el-title"><span class="el-cat">${escapeHtml(ent[0] ? elTxt(ent) : e.entityType)}</span><span class="el-badge">${escapeHtml(act[0] ? elTxt(act) : e.action)}</span><span class="el-where">${where}</span></div>
+        <div class="el-text">${elSentence(e)}</div>
+        ${e.reason ? `<div class="el-reason">${t('el_reason', 'Reason')}: ${escapeHtml(e.reason)}</div>` : ''}
+        <button class="el-toggle" type="button" onclick="elToggle(${idx})">${t('el_details', 'Details')}${others ? ` · ${t('el_plus_related', '+{n} related changes').replace('{n}', others)}` : ''}</button>
+        <div class="el-details" id="el-details-${idx}"></div>
+      </div>
+      <div class="el-time" title="${escapeHtml(elWhen(e.at, true))}">${elWhen(e.at)}</div>
+    </div>`;
+}
+function elToggle(idx) {
+  const box = document.getElementById(`el-details-${idx}`);
+  if (!box) return;
+  if (box.classList.toggle('open')) box.innerHTML = elDetails(EL_STATE.groups[idx].items.slice().reverse());
+}
+function elQuery(extra) {
+  const q = new URLSearchParams();
+  const val = id => (document.getElementById(id) || {}).value || '';
+  Object.entries(EL_STATE.scope).forEach(([k, v]) => q.set(k, v));
+  if (val('el-q')) q.set('q', val('el-q'));
+  if (val('el-cat') && !EL_STATE.scope.entityType) q.set('entityTypes', val('el-cat'));
+  if (EL_STATE.seg) q.set('actions', EL_STATE.seg);
+  if (val('el-from')) q.set('from', val('el-from'));
+  if (val('el-to')) q.set('to', val('el-to'));
+  Object.entries(extra || {}).forEach(([k, v]) => q.set(k, v));
+  return q.toString();
+}
+async function elLoad(append) {
+  if (!append) { EL_STATE.offset = 0; EL_STATE.entries = []; }
+  const list = document.getElementById('el-list');
+  let data;
+  try {
+    const r = await fetch(`${API_BASE}/event-log?${elQuery({ limit: 200, offset: EL_STATE.offset })}`);
+    if (r.status === 403) {
+      list.innerHTML = `<div class="el-empty">${t('el_sign_in', 'Please sign in to see the event log.')}</div>`;
+      ['el-filters', 'el-export', 'el-more', 'el-refresh'].forEach(id => { const x = document.getElementById(id); if (x) x.style.display = 'none'; });
+      return;
+    }
+    data = await r.json();
+  } catch (e) { list.innerHTML = `<div class="el-empty">${escapeHtml(String(e))}</div>`; return; }
+  EL_STATE.entries = EL_STATE.entries.concat(data.entries || []);
+  EL_STATE.groups = elGroups(EL_STATE.entries);
+  list.innerHTML = EL_STATE.groups.length ? EL_STATE.groups.map(elCard).join('') : `<div class="el-empty">${t('el_none', 'No entries match these filters.')}</div>`;
+  EL_STATE.total = data.total || 0;
+  EL_STATE.offset += (data.entries || []).length;
+  document.getElementById('el-count').textContent = `${EL_STATE.offset} / ${EL_STATE.total}`;
+  document.getElementById('el-more').style.display = EL_STATE.offset < EL_STATE.total ? '' : 'none';
+}
+async function initEventLogPage() {
+  PAGE.name = 'event-log'; initDB();
+  renderChrome('eventlog', t('event_log', 'Event log'));
+  const params = new URLSearchParams(location.search);
+  ['entityType', 'entityId', 'pipelineId', 'projectId'].forEach(k => { if (params.get(k)) EL_STATE.scope[k] = params.get(k); });
+  if (Object.keys(EL_STATE.scope).length) {
+    const ent = EL_ENTITY[EL_STATE.scope.entityType];
+    const label = ent ? `${elTxt(ent)}${EL_STATE.scope.entityId ? ' #' + EL_STATE.scope.entityId : ''}` : Object.entries(EL_STATE.scope).map(([k, v]) => `${k} ${v}`).join(', ');
+    document.getElementById('el-scope').innerHTML = `${t('el_history_of', 'History of')} <strong>${escapeHtml(label)}</strong> · <a href="event-log.html">${t('el_show_all', 'show everything')}</a>`;
+  }
+  document.getElementById('el-cat').innerHTML = EL_CATEGORIES.map(([v, k, d]) => `<option value="${v}">${escapeHtml(t(k, d))}</option>`).join('');
+  if (EL_STATE.scope.entityType) document.getElementById('el-cat').style.display = 'none';
+  const seg = document.getElementById('el-seg');
+  seg.innerHTML = EL_SEGMENTS.map(([v, k, d]) => `<button type="button" data-v="${v}" class="${v === '' ? 'active' : ''}">${escapeHtml(t(k, d))}</button>`).join('');
+  seg.addEventListener('click', ev => {
+    const b = ev.target.closest('button'); if (!b) return;
+    seg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+    EL_STATE.seg = b.dataset.v; elLoad(false);
+  });
+  let timer = null;
+  const reload = () => { clearTimeout(timer); timer = setTimeout(() => elLoad(false), 250); };
+  document.getElementById('el-q').addEventListener('input', reload);
+  ['el-cat', 'el-from', 'el-to'].forEach(id => document.getElementById(id).addEventListener('change', reload));
+  document.getElementById('el-more').addEventListener('click', () => elLoad(true));
+  document.getElementById('el-refresh').addEventListener('click', () => elLoad(false));
+  document.getElementById('el-export').addEventListener('click', () => { location.href = `${API_BASE}/event-log/export?${elQuery()}`; });
+  if (typeof translatePage === 'function') translatePage();
+  elLoad(false);
 }
 
 /* All modals live in one template, injected into #modal-root on every page. */
@@ -5605,7 +5839,7 @@ function renderMaterialsList() {
       <td class="col-mono">${escapeHtml(m.heatNo)}</td>
       <td>${wazCellHtml(m)}</td>
       <td><a class="img-btn" href="material-detail.html?id=${m.id}">${t('welds', 'Welds')}</a></td>
-      <td class="col-actions"><button class="btn-link" onclick="openMaterialModal(${m.id})">${t('edit', 'Edit')}</button>${archiveBtn('material', m.id)}</td>
+      <td class="col-actions"><button class="btn-link" onclick="openMaterialModal(${m.id})">${t('edit', 'Edit')}</button>${archiveBtn('material', m.id)}${historyLink('pipeline_material', m.id)}</td>
     </tr>`;
   }).join('') : `<tr class="empty-row"><td colspan="${14 + (maxDn - 1) + (maxDia - 1) + (maxThk - 1)}">${t('no_materials_yet', 'No project materials yet. Click "+ Add material" to add one.')}</td></tr>`;
   /* update table header to include DN, Diameter, Thickness columns dynamically */
@@ -5876,7 +6110,7 @@ function renderWeldList() {
       <td>${resultTag(w.visual)}</td>
       <td>${resultTag(w.endoscopy)}</td>
       <td>${photo}</td><td>${endo}</td><td>${rem}</td>
-      <td class="col-actions"><button class="btn-link" onclick="showSeamDetail(${w.id})">${t('seam', 'Seam')}</button><button class="btn-link" onclick="openWeldModal(${w.id})">${t('edit', 'Edit')}</button>${archiveBtn('weld', w.id)}</td>
+      <td class="col-actions"><button class="btn-link" onclick="showSeamDetail(${w.id})">${t('seam', 'Seam')}</button><button class="btn-link" onclick="openWeldModal(${w.id})">${t('edit', 'Edit')}</button>${archiveBtn('weld', w.id)}${historyLink('weld', w.id)}</td>
     </tr>`;
   }).join('') : '<tr class="empty-row"><td colspan="15">' + t('no_welds_yet', 'No welds yet — add materials with connections (welds are created automatically) or use \"+ Add weld\".') + '</td></tr>';
   /* welds can disappear on a re-render (archive, resync) — drop stale selections */
@@ -6812,7 +7046,7 @@ async function initMaterialUsagePage() {
   renderMaterialUsagePage();
 }
 function getMaterialUsageParams() {
-  return { pmId: Number(qp('pmId')) || 0, piece: qp('piece') || '', desc: qp('desc') || '', dn: qp('dn') || '', dien: qp('dien') || '', dia: qp('dia') || '', thk: qp('thk') || '', code: qp('code') || '' };
+  return { pmId: Number(qp('pmId')) || 0, gmId: Number(qp('gm')) || 0, piece: qp('piece') || '', desc: qp('desc') || '', dn: qp('dn') || '', dien: qp('dien') || '', dia: qp('dia') || '', thk: qp('thk') || '', code: qp('code') || '' };
 }
 let muWazFilters = { wazNo: '', cert: '', heatNo: '', pipeline: '', project: '' };
 let muUsageFilters = { pipeline: '', project: '', client: '', pos: '', wazNo: '', cert: '', heatNo: '' };
@@ -6845,6 +7079,12 @@ function muUsageColFilter(label, filterKey, options, curVal) {
   return `<th class="col-filter ${isActive ? 'active' : ''}" onclick="toggleColFilter(this,event)"><span class="col-filter-btn">${label}${badge ? ' <span style=\"display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:var(--copper);color:#fff;font-size:0.6rem;font-weight:700;\">' + badge + '</span>' : ''}</span><div class="col-filter-panel">${optsHtml}</div></th>`;
 }
 
+/* A heat number on the Materials page: opens that heat's WAZ certificate from the global WAZ
+   folder (app/global_waz.py). Without an uploaded certificate it is shown, not clickable. */
+function heatChipHtml(h) {
+  if (!h.pmId) return `<span class="doc-chip doc-weld chip-no-doc" title="${escapeHtml(t('no_waz_document', 'No WAZ certificate uploaded for this heat'))}">${escapeHtml(h.heatNo)}</span>`;
+  return `<a class="doc-chip doc-weld" href="${API_BASE}/project-materials/${h.pmId}/global-waz" target="_blank" rel="noopener" title="${escapeHtml(t('open_global_waz', 'Open the WAZ certificate (global WAZ folder)'))}">${escapeHtml(h.heatNo)}</a>`;
+}
 function renderMaterialUsagePage() {
   const p = getMaterialUsageParams();
   /* Opened from a project material: show exactly where THAT material is used. Opened from
@@ -6861,8 +7101,13 @@ function renderMaterialUsagePage() {
     p.thk = p.thk || pm.thickness || '';
     p.code = p.code || pm.materialCode || '';
   }
+  /* Exactly one material: a project material (pmId), or a global material (gm, from the
+     Materials list) - so two catalogue entries that only differ in a field not in the link
+     (e.g. the surface) are never mixed. Old links without either still match by the values. */
   const matching = p.pmId
     ? materials().filter(m => m.projectMaterialId === p.pmId)
+    : p.gmId
+    ? materials().filter(m => m.globalMaterialId === p.gmId)
     : materials().filter(m => {
     if (p.piece && m.piece !== p.piece) return false;
     if (p.desc && m.itemDescription !== p.desc) return false;
@@ -6903,41 +7148,37 @@ function renderMaterialUsagePage() {
 
   renderMuArchiveBar(p, matching.length);
 
-  /* WAZ documents table */
+  /* WAZ documents table: one row per heat number + certificate - one real certificate each.
+     (WAZ numbers are counted per pipeline, so "Z001" in two pipelines are two different
+     documents; they are shown on the pipeline page.) The PDF opens from the global WAZ folder. */
   const wazGroups = {};
-  matching.filter(m => m.wazNo).forEach(m => {
-    if (!wazGroups[m.wazNo]) {
-      wazGroups[m.wazNo] = { wazNo: m.wazNo, certs: new Set(), heats: new Set(), pipelineIds: new Set(), projectIds: new Set(), matId: m.id };
+  matching.filter(m => m.heatNo || m.certificate).forEach(m => {
+    const key = `${String(m.heatNo || '').trim().toLowerCase()}|${String(m.certificate || '').trim()}`;
+    if (!wazGroups[key]) {
+      wazGroups[key] = { key, heat: String(m.heatNo || '').trim(), cert: String(m.certificate || '').trim(), pipelineIds: new Set(), projectIds: new Set(), pdfPmId: null, matId: m.id };
     }
-    const wg = wazGroups[m.wazNo];
-    if (m.certificate) wg.certs.add(m.certificate);
-    if (m.heatNo) wg.heats.add(m.heatNo);
+    const wg = wazGroups[key];
+    if (!wg.pdfPmId && m.wazPdfUrl && m.projectMaterialId) wg.pdfPmId = m.projectMaterialId;
     if (m.pipelineId) {
       wg.pipelineIds.add(m.pipelineId);
       const pl = getPipeline(m.pipelineId);
       if (pl && pl.projectId) wg.projectIds.add(pl.projectId);
     }
   });
-  const allWazKeys = Object.keys(wazGroups).sort((a, b) => {
-    const numA = (a.match(/(\d+)/) || [])[1];
-    const numB = (b.match(/(\d+)/) || [])[1];
-    if (numA && numB && Number(numA) !== Number(numB)) {
-      return Number(numB) - Number(numA);
-    }
-    const idA = wazGroups[a].matId || 0;
-    const idB = wazGroups[b].matId || 0;
-    if (idB !== idA) return idB - idA;
-    return b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' });
-  });
+  const allWazKeys = Object.keys(wazGroups).sort((a, b) =>
+    wazGroups[a].heat.localeCompare(wazGroups[b].heat, undefined, { numeric: true, sensitivity: 'base' })
+    || wazGroups[a].cert.localeCompare(wazGroups[b].cert, undefined, { numeric: true }));
+  /* the WAZ-documents tile counts real certificates */
+  const wazTileNum = document.querySelector('#mu-stats .stat-tile:last-child .stat-num');
+  if (wazTileNum) wazTileNum.textContent = String(allWazKeys.filter(k => wazGroups[k].pdfPmId).length);
 
-  /* filter WAZ documents */
+  /* filter */
   const filteredWazKeys = allWazKeys.filter(k => {
     const wg = wazGroups[k];
     const pls = [...wg.pipelineIds].map(getPipeline).filter(Boolean);
     const prs = [...wg.projectIds].map(getProject).filter(Boolean);
-    if (muWazFilters.wazNo && wg.wazNo !== muWazFilters.wazNo) return false;
-    if (muWazFilters.cert && !wg.certs.has(muWazFilters.cert)) return false;
-    if (muWazFilters.heatNo && !wg.heats.has(muWazFilters.heatNo)) return false;
+    if (muWazFilters.cert && wg.cert !== muWazFilters.cert) return false;
+    if (muWazFilters.heatNo && wg.heat !== muWazFilters.heatNo) return false;
     if (muWazFilters.pipeline && !pls.some(p => p.no === muWazFilters.pipeline)) return false;
     if (muWazFilters.project && !prs.some(p => p.title === muWazFilters.project)) return false;
     return true;
@@ -6945,15 +7186,13 @@ function renderMaterialUsagePage() {
 
   const wazThead = document.getElementById('mu-waz-thead');
   if (wazThead) {
-    const optWaz = allWazKeys;
-    const optCert = [...new Set(allWazKeys.flatMap(k => [...wazGroups[k].certs]))].sort();
-    const optHeat = [...new Set(allWazKeys.flatMap(k => [...wazGroups[k].heats]))].sort();
+    const optCert = [...new Set(allWazKeys.map(k => wazGroups[k].cert).filter(Boolean))].sort();
+    const optHeat = [...new Set(allWazKeys.map(k => wazGroups[k].heat).filter(Boolean))].sort();
     const optPipe = [...new Set(allWazKeys.flatMap(k => [...wazGroups[k].pipelineIds].map(id => (getPipeline(id) || {}).no).filter(Boolean)))].sort();
     const optProj = [...new Set(allWazKeys.flatMap(k => [...wazGroups[k].projectIds].map(id => (getProject(id) || {}).title).filter(Boolean)))].sort();
 
-    let hdr = muWazColFilter(t('th_waz_no', 'WAZ No.'), 'wazNo', optWaz, muWazFilters.wazNo);
+    let hdr = muWazColFilter(t('th_heat_no', 'Heat / Melt No.'), 'heatNo', optHeat, muWazFilters.heatNo);
     hdr += muWazColFilter(t('th_certificate', 'Certificate'), 'cert', optCert, muWazFilters.cert);
-    hdr += muWazColFilter(t('th_heat_no', 'Heat / Melt No.'), 'heatNo', optHeat, muWazFilters.heatNo);
     hdr += muWazColFilter(t('th_pipeline_no', 'Pipeline'), 'pipeline', optPipe, muWazFilters.pipeline);
     hdr += muWazColFilter(t('th_project', 'Project'), 'project', optProj, muWazFilters.project);
     hdr += `<th>${t('th_pdf', 'PDF')}</th>`;
@@ -6966,15 +7205,17 @@ function renderMaterialUsagePage() {
       const wg = wazGroups[k];
       const pls = [...wg.pipelineIds].map(getPipeline).filter(Boolean);
       const prs = [...wg.projectIds].map(getProject).filter(Boolean);
+      const pdf = wg.pdfPmId
+        ? `<a class="doc-chip doc-iso" href="${API_BASE}/project-materials/${wg.pdfPmId}/global-waz" target="_blank" rel="noopener" title="${escapeHtml(t('open_global_waz', 'Open the WAZ certificate (global WAZ folder)'))}">PDF</a>`
+        : '<span class="muted">—</span>';
       return `<tr>
-        <td><button class="doc-chip doc-weld" onclick="showWaz(${wg.matId})" title="${t('view_document', 'View WAZ PDF')}">${escapeHtml(wg.wazNo)}</button></td>
-        <td>${escapeHtml([...wg.certs].join(', ')) || '<span class="muted">—</span>'}</td>
-        <td class="col-mono">${escapeHtml([...wg.heats].join(', ')) || '<span class="muted">—</span>'}</td>
+        <td class="col-mono">${escapeHtml(wg.heat) || '<span class="muted">—</span>'}</td>
+        <td>${escapeHtml(wg.cert) || '<span class="muted">—</span>'}</td>
         <td>${pls.map(p => `<a class="cell-link" href="pipeline-detail.html?id=${p.id}">${escapeHtml(p.no)}</a>`).join(', ') || '<span class="muted">—</span>'}</td>
         <td>${prs.map(p => `<a class="cell-link" href="project-detail.html?id=${p.id}">${escapeHtml(p.title)}</a>`).join(', ') || '<span class="muted">—</span>'}</td>
-        <td><button class="doc-chip doc-iso" onclick="showWaz(${wg.matId})">PDF</button></td>
+        <td>${pdf}</td>
       </tr>`;
-    }).join('') : `<tr class="empty-row"><td colspan="6">${t('no_waz_documents_for_material', 'No WAZ documents match these filters.')}</td></tr>`;
+    }).join('') : `<tr class="empty-row"><td colspan="5">${t('no_waz_documents_for_material', 'No WAZ documents match these filters.')}</td></tr>`;
   }
 
   /* filter usage table */
@@ -7762,8 +8003,11 @@ function renderMaterialsPage() {
     const uses = usesByGm.get(gm.id) || [];
     const heatEntries = [];
     uses.forEach(m => {
-      if (m.heatNo && !heatEntries.some(h => h.heatNo === m.heatNo)) {
-        heatEntries.push({ heatNo: m.heatNo, matId: m.id, wazPdfUrl: m.wazPdfUrl || m.wazPackageUrl || '' });
+      const known = m.heatNo && heatEntries.find(h => h.heatNo === m.heatNo);
+      if (m.heatNo && !known) {
+        heatEntries.push({ heatNo: m.heatNo, matId: m.id, pmId: m.wazPdfUrl ? m.projectMaterialId : null, wazPdfUrl: m.wazPdfUrl || m.wazPackageUrl || '' });
+      } else if (known && !known.pmId && m.wazPdfUrl) {
+        known.pmId = m.projectMaterialId;     /* another use of this heat has the certificate */
       }
     });
     return {
@@ -7841,25 +8085,10 @@ function renderMaterialsPage() {
     let extraThkCells = '';
     for (let i = 2; i <= maxThk; i++) extraThkCells += `<td class="col-mono">${escapeHtml(g[`thickness${i}`]) || '<span class="muted">—</span>'}</td>`;
 
-    let heatChips = '<span class="muted">—</span>';
-    if (g.heatEntries.length) {
-      const maxVisible = 3;
-      const visibleHeats = g.heatEntries.slice(0, maxVisible);
-      const hiddenHeats = g.heatEntries.slice(maxVisible);
-      const visibleHtml = visibleHeats.map(h => `<button class="doc-chip doc-weld" onclick="showWaz(${h.matId})" title="${t('view_document', 'View WAZ PDF')}">${escapeHtml(h.heatNo)}</button>`).join('');
-      let hiddenHtml = '';
-      if (hiddenHeats.length) {
-        const hiddenChips = hiddenHeats.map(h => `<button class="doc-chip doc-weld" onclick="showWaz(${h.matId})" title="${t('view_document', 'View WAZ PDF')}">${escapeHtml(h.heatNo)}</button>`).join('');
-        hiddenHtml = `<div class="waz-popover-wrap" id="waz-wrap-${idx}">` +
-          `<button type="button" class="doc-chip doc-more" onclick="toggleWazPopover(event, '${idx}')" title="${t('view_all', 'View')} +${hiddenHeats.length} ${t('heat_numbers', 'Heat numbers')}">+${hiddenHeats.length}</button>` +
-          `<div class="waz-popover-panel" id="waz-popover-${idx}">` +
-          `<div class="waz-popover-header">${t('more_heat_numbers', 'Extra heat numbers')} (${hiddenHeats.length})</div>` +
-          `<div class="waz-popover-list">${hiddenChips}</div>` +
-          `</div>` +
-          `</div>`;
-      }
-      heatChips = `<div class="waz-chip-group">${visibleHtml}${hiddenHtml}</div>`;
-    }
+    // Every heat number is shown, three per line: the row grows taller as heat numbers are added.
+    const heatChips = g.heatEntries.length
+      ? `<div class="waz-chip-grid">${g.heatEntries.map(heatChipHtml).join('')}</div>`
+      : '<span class="muted">—</span>';
 
     return `<tr>
       <td>${escapeHtml(g.piece)}</td>

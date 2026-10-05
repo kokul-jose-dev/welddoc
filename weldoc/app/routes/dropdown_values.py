@@ -71,8 +71,9 @@ def show_value():
     dd_type, value, err = _read()
     if err:
         return err
-    DropdownHidden.query.filter(DropdownHidden.type == dd_type,
-                                db.func.lower(DropdownHidden.value) == value.lower()).delete(synchronize_session=False)
+    for row in DropdownHidden.query.filter(DropdownHidden.type == dd_type,
+                                           db.func.lower(DropdownHidden.value) == value.lower()).all():
+        db.session.delete(row)          # one by one, so the event log records it
     db.session.commit()
     return jsonify(hidden_map())
 
@@ -95,5 +96,6 @@ def unhide_entered_values(new_norm, old=None):
             continue
         by_type.setdefault(dd_type, set()).add(new.lower())
     for dd_type, values in by_type.items():
-        DropdownHidden.query.filter(DropdownHidden.type == dd_type,
-                                    db.func.lower(DropdownHidden.value).in_(values)).delete(synchronize_session=False)
+        for row in DropdownHidden.query.filter(DropdownHidden.type == dd_type,
+                                               db.func.lower(DropdownHidden.value).in_(values)).all():
+            db.session.delete(row)      # one by one, so the event log records it

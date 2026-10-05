@@ -128,6 +128,8 @@ def create_or_update_project_material():
 
     if "id" in data and data["id"]:
         m = ProjectMaterial.query.get_or_404(data["id"])
+        from app.global_waz import snapshot, after_spec_change, after_removed
+        waz_before = snapshot([m])      # the global WAZ file name, before the specs change
         target_gm_id = data.get("globalMaterialId", m.global_material_id)
         # Remember what the existing WAZ packages were built from
         gm_before = m.global_material_id
@@ -146,6 +148,7 @@ def create_or_update_project_material():
             db.session.commit()
             # The pipeline rows moved to a different material, so their packages are stale
             _regenerate_waz_in_background(existing_other.id)
+            after_spec_change(waz_before)
             return jsonify(_serialize(existing_other)), 200
 
         # Update in place
@@ -169,6 +172,11 @@ def create_or_update_project_material():
                 }), 409
             m.archived = data["archived"]
         db.session.commit()
+        # The global WAZ copy follows: renamed with the specs, removed with the certificate
+        if waz_before and not m.waz_pdf_url:
+            after_removed(waz_before[m.id])
+        else:
+            after_spec_change(waz_before)
 
         if (gm_before != m.global_material_id
                 or cert_before.lower() != clean_str(m.certificate).lower()
@@ -278,6 +286,8 @@ def _copy_waz_file_for_pm(m):
             if new_url:
                 m.waz_pdf_url = new_url
                 db.session.commit()
+                from app.global_waz import after_uploaded
+                after_uploaded(m, file_content)
     except Exception as e:
         current_app.logger.error(f"Failed to copy WAZ file for project material {m.id}: {e}")
 
@@ -422,6 +432,8 @@ def upload_waz(pm_id):
     if url:
         m.waz_pdf_url = url
         db.session.commit()
+        from app.global_waz import after_uploaded
+        after_uploaded(m, file_content, content_type)    # global copy + its address, in the background
         # Every pipeline using this material can now have its WAZ package built: the certificate
         # it was waiting for exists. Without this the package is only created the first time
         # somebody happens to open that WAZ from the pipeline.
@@ -440,8 +452,12 @@ def delete_waz(pm_id):
 
     m = ProjectMaterial.query.get_or_404(pm_id)
 
-    # Try to delete from SharePoint using the project's saved folder
-    if m.waz_pdf_url:
+    # Try to delete from SharePoint using the project's saved folder - unless another project
+    # material still points at the same file (a restore or a copy can share it)
+    shared = m.waz_pdf_url and ProjectMaterial.query.filter(
+        ProjectMaterial.id != m.id, ProjectMaterial.archived == False,  # noqa: E712
+        ProjectMaterial.waz_pdf_url == m.waz_pdf_url).first() is not None
+    if m.waz_pdf_url and not shared:
         try:
             project = Project.query.get(m.project_id)
             if project.sharepoint_drive_id:
@@ -449,7 +465,9 @@ def delete_waz(pm_id):
                 import urllib.request
                 import ssl, certifi
                 ctx = ssl.create_default_context(cafile=certifi.where())
-                file_name = _sanitize_name(f"{m.heat_no or 'unknown'}_{m.certificate or 'unknown'}") + ".pdf"
+                # the name it was uploaded under (upload_waz_to_project_folder)
+                from app.global_waz import waz_file_name
+                file_name = waz_file_name(m)
                 # Get file by path: /WAZ/filename.pdf relative to the project folder
                 file_path = urllib.parse.quote(f"WAZ/{file_name}", safe="/")
                 item_url = f"{GRAPH_BASE}/drives/{project.sharepoint_drive_id}/items/{project.sharepoint_folder_id}:/{file_path}"
@@ -467,9 +485,26 @@ def delete_waz(pm_id):
         except Exception as e:
             current_app.logger.error(f"SharePoint delete failed: {e}")
 
+    from app.global_waz import waz_file_name, after_removed
+    removed_name = waz_file_name(m) if m.waz_pdf_url else None
     m.waz_pdf_url = None
     db.session.commit()
+    after_removed(removed_name)          # and from the global WAZ folder, unless still used
     return jsonify({"ok": True}), 200
+
+
+@project_materials_bp.route("/<int:pm_id>/global-waz", methods=["GET"])
+def open_global_waz(pm_id):
+    """Open this material's WAZ certificate from the global WAZ folder (copied there first if
+    it was uploaded before the folder existed)."""
+    from flask import redirect
+    from app.global_waz import global_url_for
+
+    m = ProjectMaterial.query.get_or_404(pm_id)
+    url = global_url_for(m)
+    if not url:
+        return jsonify({"error": "No WAZ document for this material."}), 404
+    return redirect(url)
 
 
 def _serialize(m):
@@ -481,6 +516,7 @@ def _serialize(m):
         "certificate": m.certificate,
         "heatNo": m.heat_no,
         "wazPdfUrl": m.waz_pdf_url,
+        "wazGlobalUrl": m.waz_global_url or "",
         "archived": m.archived,
         # Include global material fields for convenience
         "category": gm.category if gm else None,
