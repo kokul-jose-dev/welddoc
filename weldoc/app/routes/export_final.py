@@ -316,8 +316,11 @@ def export_final(pipeline_id):
     pdf_bytes = output.getvalue()
 
     # Upload to SharePoint, next to the final Excel in "Final". The pipeline's "Final" link
-    # (doc_final) stays on the Excel - the PDF is the second file of the same export.
-    filename = f"{pl.no}_final.pdf"
+    # (doc_final) stays on the Excel - the PDF is the second file of the same export. A
+    # regenerate passes the version its Excel got (PL_final_v2.pdf next to PL_final_v2.xlsx).
+    from app.routes.builder_doc import final_file_name
+    version = request.args.get("version", type=int)
+    filename = final_file_name(pl, "pdf", version if version and version > 0 else None)
     sp_status = "none"
     if pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id:
         from app.sharepoint import upload_to_pipeline_subfolder_ex
@@ -327,7 +330,8 @@ def export_final(pipeline_id):
         )
 
     from app.event_log import log_event
-    log_event("document", None, "export", {"document": [None, "final documentation PDF"], "sharepoint": [None, sp_status],
+    log_event("document", None, "regenerate" if version else "export",
+              {"document": [None, "final documentation PDF" + (f" v{version}" if version else "")], "sharepoint": [None, sp_status],
               "welder_signatures": [None, include_welder_sign], "inspector_signatures": [None, include_inspector_sign]},
               pipeline_id=pl.id, project_id=pl.project_id)
     db.session.commit()
@@ -364,7 +368,7 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.units import mm
     from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
     from reportlab.pdfgen import canvas as rl_canvas
@@ -711,45 +715,56 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
             return Table.drawOn(self, canvas, x, y, _sW)
 
     # Build the data table
-    data_table = _LinkTable(all_rows, colWidths=col_widths, repeatRows=REPEAT_ROWS)
-    style_cmds = [
-        ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 1), ('BOTTOMPADDING', (0,0), (-1,-1), 1),
-        ('LEFTPADDING', (0,0), (-1,-1), 2), ('RIGHTPADDING', (0,0), (-1,-1), 2),
-        # Header rows: 0 = trades, 1-2 = weld columns, 3 = material band
-        ('BACKGROUND', (0,3), (-1,3), blue_bg),
-        ('BACKGROUND', (0,1), (-1,2), colors.HexColor("#F2F2F2")),
-        ('SPAN', (0,0), (3,0)), ('SPAN', (4,0), (7,0)), ('SPAN', (8,0), (15,0)),
-        ('SPAN', (1,1), (2,2)),  # Drawing No spans 2 rows
-        ('SPAN', (0,1), (0,2)),  # Naht Nr spans 2 rows
-        ('SPAN', (3,1), (3,2)),  # Wandstärke spans 2 rows
-        ('SPAN', (4,1), (4,2)),  # Status spans 2 rows
-        ('SPAN', (5,1), (5,2)),  # Schweisser spans 2 rows
-        ('SPAN', (6,1), (6,2)),  # Datum spans 2 rows
-        ('SPAN', (7,1), (7,2)),  # Signatur spans 2 rows
-        ('SPAN', (8,1), (8,2)),  # Visuell spans 2 rows
-        ('SPAN', (9,1), (10,1)),  # Endoskopie header spans 2 cols
-        ('SPAN', (11,1), (12,1)),  # Ferrit header spans 2 cols
-        ('SPAN', (13,1), (13,2)),  # Hersteller spans 2 rows
-        ('SPAN', (14,1), (14,2)),  # Kunde spans 2 rows
-        ('SPAN', (15,1), (15,2)),  # Bemerkung spans 2 rows
-        ('SPAN', (1,3), (3,3)), ('SPAN', (8,3), (12,3)), ('SPAN', (13,3), (14,3)),
-    ]
-    for i, meta in enumerate(row_meta):
-        if meta and meta["type"] == "mat":
-            style_cmds.append(('BACKGROUND', (0,i), (-1,i), struck_bg if meta.get("struck") else blue_bg))
-            style_cmds.append(('SPAN', (1,i), (3,i)))
-            style_cmds.append(('SPAN', (8,i), (12,i)))
-            style_cmds.append(('SPAN', (13,i), (14,i)))
-        elif meta and meta["type"] == "weld":
-            style_cmds.append(('SPAN', (1,i), (2,i)))
-        elif meta and meta["type"] == "branch":
-            style_cmds.append(('SPAN', (0,i), (-1,i)))
-            style_cmds.append(('BACKGROUND', (0,i), (-1,i), branch_bg(meta["key"])))
-        elif meta and meta["type"] == "note":
-            style_cmds.append(('SPAN', (0,i), (-1,i)))
-    data_table.setStyle(TableStyle(style_cmds))
+    def _table(rows, metas):
+        style_cmds = [
+            ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('TOPPADDING', (0,0), (-1,-1), 1), ('BOTTOMPADDING', (0,0), (-1,-1), 1),
+            ('LEFTPADDING', (0,0), (-1,-1), 2), ('RIGHTPADDING', (0,0), (-1,-1), 2),
+            # Header rows: 0 = trades, 1-2 = weld columns, 3 = material band
+            ('BACKGROUND', (0,3), (-1,3), blue_bg),
+            ('BACKGROUND', (0,1), (-1,2), colors.HexColor("#F2F2F2")),
+            ('SPAN', (0,0), (3,0)), ('SPAN', (4,0), (7,0)), ('SPAN', (8,0), (15,0)),
+            ('SPAN', (1,1), (2,2)),  # Drawing No spans 2 rows
+            ('SPAN', (0,1), (0,2)),  # Naht Nr spans 2 rows
+            ('SPAN', (3,1), (3,2)),  # Wandstärke spans 2 rows
+            ('SPAN', (4,1), (4,2)),  # Status spans 2 rows
+            ('SPAN', (5,1), (5,2)),  # Schweisser spans 2 rows
+            ('SPAN', (6,1), (6,2)),  # Datum spans 2 rows
+            ('SPAN', (7,1), (7,2)),  # Signatur spans 2 rows
+            ('SPAN', (8,1), (8,2)),  # Visuell spans 2 rows
+            ('SPAN', (9,1), (10,1)),  # Endoskopie header spans 2 cols
+            ('SPAN', (11,1), (12,1)),  # Ferrit header spans 2 cols
+            ('SPAN', (13,1), (13,2)),  # Hersteller spans 2 rows
+            ('SPAN', (14,1), (14,2)),  # Kunde spans 2 rows
+            ('SPAN', (15,1), (15,2)),  # Bemerkung spans 2 rows
+            ('SPAN', (1,3), (3,3)), ('SPAN', (8,3), (12,3)), ('SPAN', (13,3), (14,3)),
+        ]
+        for i, meta in enumerate(metas):
+            if meta and meta["type"] == "mat":
+                style_cmds.append(('BACKGROUND', (0,i), (-1,i), struck_bg if meta.get("struck") else blue_bg))
+                style_cmds.append(('SPAN', (1,i), (3,i)))
+                style_cmds.append(('SPAN', (8,i), (12,i)))
+                style_cmds.append(('SPAN', (13,i), (14,i)))
+            elif meta and meta["type"] == "weld":
+                style_cmds.append(('SPAN', (1,i), (2,i)))
+            elif meta and meta["type"] == "branch":
+                style_cmds.append(('SPAN', (0,i), (-1,i)))
+                style_cmds.append(('BACKGROUND', (0,i), (-1,i), branch_bg(meta["key"])))
+            elif meta and meta["type"] == "note":
+                style_cmds.append(('SPAN', (0,i), (-1,i)))
+        t = _LinkTable(rows, colWidths=col_widths, repeatRows=REPEAT_ROWS)
+        t.setStyle(TableStyle(style_cmds))
+        return t
+
+    def _data_tables(tail=0):
+        """The table as one flowable, or - tail rows - split so that its last `tail` rows
+        start a page of their own (under the repeated column headings)."""
+        if not tail:
+            return [_table(all_rows, row_meta)]
+        head, head_meta = all_rows[:REPEAT_ROWS], row_meta[:REPEAT_ROWS]
+        return [_table(all_rows[:-tail], row_meta[:-tail]), PageBreak(),
+                _table(head + all_rows[-tail:], head_meta + row_meta[-tail:])]
 
     # Build header elements
     elements = []
@@ -793,18 +808,20 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     t4.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.black), ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('SPAN', (0,0), (2,0)), ('SPAN', (3,0), (5,0)), ('SPAN', (6,0), (7,0)), ('SPAN', (8,0), (12,0)), ('SPAN', (13,0), (14,0))]))
     elements.append(Spacer(1, 1*mm))
-    elements.append(data_table)
-    elements.append(Spacer(1, 3*mm))
-    elements.append(Paragraph(
+
+    # The legend (and the welding dates) are a footer on every page, in space kept free for
+    # them - flowed under the table they ended up alone on an extra page whenever the table
+    # filled the last page exactly.
+    page_footer = [Paragraph(
         "<b>H</b>=Handnaht/Manual  <b>O</b>=Orbital  <b>V</b>=Vorfertigung/Prefabrication  <b>M</b>=Montage/Installation  |  "
         "o.k.=In Ordnung  F=Fehler/Failure  P=Photo  n.a.=nicht Anwendbar  |  "
-        "R=Reparatur/Repair  Ferrit &lt;3.0%  |  Signatur=Bestätigung Visuelle Prüfung / acceptance visual test", s_legend))
+        "R=Reparatur/Repair  Ferrit &lt;3.0%  |  Signatur=Bestätigung Visuelle Prüfung / acceptance visual test", s_legend)]
     if pl.welding_start or pl.welding_end:
-        elements.append(Spacer(1, 2*mm))
-        dash = "\u2014"
+        dash = "—"
         ws = fmt_date(pl.welding_start) or dash
         we = fmt_date(pl.welding_end) or dash
-        elements.append(Paragraph(f"Schweissen: {ws} \u2013 {we}", s9b))
+        page_footer.append(Paragraph(f"Schweissen: {ws} – {we}", s9b))
+    footer_h = sum(_f.wrap(total_w, page_size[1])[1] for _f in page_footer) + 1 * mm * (len(page_footer) - 1)
 
     # The three header tables are drawn by hand at the top of EVERY page instead of being
     # flowed once: a list that runs to page 2 or 3 otherwise arrives with no order number,
@@ -821,6 +838,12 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
             _w, _h = _t.wrap(total_w, page_size[1])
             y -= _h
             _t.drawOn(canvas, margin, y)
+        y = margin + footer_h                      # footer: legend (+ welding dates)
+        for _f in page_footer:
+            _w, _h = _f.wrap(total_w, page_size[1])
+            y -= _h
+            _f.drawOn(canvas, margin, y)
+            y -= 1 * mm
     # "Seite / Page: 2 von 3" - the total is only known once the whole document has been
     # laid out, so every page is held back and the number written on a second pass.
     _page_no_y = page_size[1] - margin - hdr_table.wrap(total_w, page_size[1])[1] - 11
@@ -851,11 +874,21 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
                 super().showPage()
             super().save()
 
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=page_size, leftMargin=margin, rightMargin=margin,
-                            topMargin=margin + header_h + 1 * mm, bottomMargin=margin)
-    doc.build(elements, onFirstPage=_draw_page_header, onLaterPages=_draw_page_header,
-              canvasmaker=_NumberedCanvas)
+    def _build(tail):
+        chunks_info.clear()
+        out = io.BytesIO()
+        doc = SimpleDocTemplate(out, pagesize=page_size, leftMargin=margin, rightMargin=margin,
+                                topMargin=margin + header_h + 1 * mm, bottomMargin=margin + footer_h + 3 * mm)
+        doc.build(elements + _data_tables(tail), onFirstPage=_draw_page_header,
+                  onLaterPages=_draw_page_header, canvasmaker=_NumberedCanvas)
+        return out
+
+    buf = _build(0)
+    # Never one row alone on the last page (2026-10-06): build again with the last two rows
+    # starting that page together. The pages above are full, so they cannot take it.
+    if (len(chunks_info) > 1 and chunks_info[-1]["chunk_rows"] - REPEAT_ROWS == 1
+            and len(all_rows) - REPEAT_ROWS >= 3):
+        buf = _build(2)
 
     # Build row_positions from all captured chunks across all pages
     row_positions = []

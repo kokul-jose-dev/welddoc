@@ -153,12 +153,13 @@ SP_DOCS = {
 }
 
 
-def _upload_doc(pl, pr, doc, file_bytes):
+def _upload_doc(pl, pr, doc, file_bytes, file_name=None):
     """Upload a weld list document to SharePoint straight away and store its link.
 
     Returns "ok", "locked" (open in Excel - SharePoint would not replace it), "failed" or
     "none" (the project has no SharePoint folder). On anything but "ok" the stored link is
-    left as it was, so it keeps pointing at the previous version.
+    left as it was, so it keeps pointing at the previous version. file_name: a regenerated
+    final document's versioned name (final_file_name).
     """
     if not (pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id):
         return "none"
@@ -166,10 +167,30 @@ def _upload_doc(pl, pr, doc, file_bytes):
     spec = SP_DOCS[doc]
     url, status = upload_to_pipeline_subfolder_ex(
         pr.sharepoint_drive_id, pr.sharepoint_folder_id,
-        pl.no, spec["subfolder"], f"{pl.no}{spec['suffix']}", file_bytes, XLSX_MIME)
+        pl.no, spec["subfolder"], file_name or f"{pl.no}{spec['suffix']}", file_bytes, XLSX_MIME)
     if status == "ok" and url:
         setattr(pl, spec["field"], url)
     return status
+
+
+def final_file_name(pl, ext, version=None):
+    """The final documents: PL_final.xlsx / .pdf from the export, PL_final_v1, _v2 ... from
+    each "Regenerate" - every version stays in the Final folder."""
+    return f"{pl.no}_final{f'_v{int(version)}' if version else ''}.{ext}"
+
+
+def next_final_version(pl, pr):
+    """The next free version number in the pipeline's Final folder (1 when there is none yet,
+    or no SharePoint folder to look in). Excel and PDF of one regenerate share the number."""
+    import re
+    from app.sharepoint import list_pipeline_subfolder_files, _sanitize_name
+    if not (pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id):
+        return 1
+    pat = re.compile(re.escape(_sanitize_name(f"{pl.no}_final")) + r"_v(\d+)\.(xlsx|pdf)$", re.IGNORECASE)
+    used = [int(m.group(1)) for f in list_pipeline_subfolder_files(
+        pr.sharepoint_drive_id, pr.sharepoint_folder_id, pl.no, "Final")
+        for m in [pat.match(f.get("name", ""))] if m]
+    return max(used, default=0) + 1
 
 
 def _xlsx_response(file_bytes, filename, sp_status):
@@ -209,14 +230,22 @@ def export_final_excel(pipeline_id):
         include_welder_sign=include_welder_sign,
         include_inspector_sign=include_inspector_sign,
     )
-    sp_status = _upload_doc(pl, pr, "final", file_bytes)
+    # "Regenerate" after the export: a new version next to the earlier ones (never overwritten)
+    regenerate = request.args.get("regenerate", "false").lower() in ("true", "1", "yes")
+    version = next_final_version(pl, pr) if regenerate else None
+    name = final_file_name(pl, "xlsx", version)
+    sp_status = _upload_doc(pl, pr, "final", file_bytes, file_name=name)
     pl.status = max(pl.status or 0, 5)
     from app.event_log import log_event
-    log_event("document", None, "export", {"document": [None, "final documentation"], "sharepoint": [None, sp_status],
-              "welder_signatures": [None, include_welder_sign], "inspector_signatures": [None, include_inspector_sign]},
+    log_event("document", None, "regenerate" if regenerate else "export",
+              {"document": [None, "final documentation" + (f" v{version}" if version else "")], "sharepoint": [None, sp_status],
+               "welder_signatures": [None, include_welder_sign], "inspector_signatures": [None, include_inspector_sign]},
               pipeline_id=pl.id, project_id=pl.project_id)
     db.session.commit()
-    return _xlsx_response(file_bytes, f"{pl.no}_final.xlsx", sp_status)
+    resp = _xlsx_response(file_bytes, name, sp_status)
+    if version:
+        resp.headers["X-Final-Version"] = str(version)     # the PDF of this regenerate takes it too
+    return resp
 
 
 @builder_doc_bp.route("/<int:pipeline_id>/sharepoint-upload/<doc>", methods=["POST"])
@@ -233,7 +262,12 @@ def retry_sharepoint_upload(pipeline_id, doc):
         return jsonify({"error": "invalid_request", "message": "This is not an Excel file."}), 400
     pl = Pipeline.query.get_or_404(pipeline_id)
     pr = Project.query.get(pl.project_id) if pl.project_id else None
-    status = _upload_doc(pl, pr, doc, content)
+    # A regenerated final Excel keeps its version name (PL_final_v3.xlsx); anything else is
+    # uploaded under the document's normal name.
+    import re
+    sent = (f.filename or "").strip() if f else ""
+    keep = doc == "final" and re.fullmatch(re.escape(f"{pl.no}_final_v") + r"\d+\.xlsx", sent)
+    status = _upload_doc(pl, pr, doc, content, file_name=sent if keep else None)
     db.session.commit()
     if status == "ok":
         return jsonify({"status": "ok", "url": getattr(pl, SP_DOCS[doc]["field"])}), 200
@@ -677,6 +711,9 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
         used += h
     if cur or not pages:
         pages.append(cur)
+    # Never one row alone on the last page: the row before it moves down with it (2026-10-06)
+    if len(pages) > 1 and len(pages[-1]) == 1 and len(pages[-2]) > 1:
+        pages[-1].insert(0, pages[-2].pop())
 
     # A field with nothing in it is crossed out, so nobody can write into the document after
     # it has been signed off. The signature boxes are the exception: they are deliberately

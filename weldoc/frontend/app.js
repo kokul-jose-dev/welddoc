@@ -845,11 +845,24 @@ function handleSharePointUploadResult(plId, doc, status, blob, filename) {
 }
 const _exportingFinalPipelines = new Set();
 let _exportingPipelineId = null;
+let _exportRegenerate = false;      /* the dialog was opened from "Regenerate" (after the export) */
 
-function openExportFinalModal(id) {
+function openExportFinalModal(id, regenerate) {
   const pl = getPipeline(id);
   if (!pl || pl.status < 4 || _exportingFinalPipelines.has(id)) return;
   _exportingPipelineId = id;
+  _exportRegenerate = Boolean(regenerate);
+  /* the heading and text carry data-i18n (translated again on open): switch the key too */
+  const title = document.querySelector('#modal-export-final h2');
+  if (title) {
+    title.setAttribute('data-i18n', _exportRegenerate ? 'regenerate_final_doc' : 'export_final_doc');
+    title.textContent = _exportRegenerate ? t('regenerate_final_doc', 'Regenerate final document') : t('export_final_doc', 'Export final document');
+  }
+  const sub = document.querySelector('#modal-export-final .modal > p');
+  if (sub) sub.setAttribute('data-i18n', _exportRegenerate ? 'regenerate_final_sub' : 'export_final_modal_sub');
+  if (sub) sub.textContent = _exportRegenerate
+    ? t('regenerate_final_sub', 'Creates the Excel and the PDF again with the current data. They are saved in SharePoint as a new version (…_final_v1, v2 …); the earlier files stay.')
+    : t('export_final_modal_sub', 'Choose which signatures should be included in the exported document.');
   const cbWelder = document.getElementById('input-exp-welder-sign');
   const cbInsp = document.getElementById('input-exp-inspector-sign');
   if (cbWelder) cbWelder.checked = true;
@@ -857,7 +870,7 @@ function openExportFinalModal(id) {
   openModal('modal-export-final');
 }
 
-async function exportFinalDoc(id, includeWelder = true, includeInspector = true) {
+async function exportFinalDoc(id, includeWelder = true, includeInspector = true, regenerate = false) {
   const pl = getPipeline(id);
   if (!pl || pl.status < 4 || _exportingFinalPipelines.has(id)) return;
   _exportingFinalPipelines.add(id);
@@ -869,11 +882,14 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true)
       include_welder_sign: includeWelder ? 'true' : 'false',
       include_inspector_sign: includeInspector ? 'true' : 'false'
     });
+    /* Regenerate: the server picks the next version for the Excel; the PDF takes the same one */
+    const excelParams = new URLSearchParams(params);
+    if (regenerate) excelParams.set('regenerate', 'true');
     /* The final export is two files: the weld list Excel (same as the welder document, now
        with the recorded welding details and, if chosen, the signatures), then the final PDF -
        the same list with every WAZ certificate and welder certificate attached and linked,
        the struck-through materials' WAZ included. */
-    const resp = await fetch(`${API_BASE}/pipelines/${id}/export-final-excel?${params.toString()}`);
+    const resp = await fetch(`${API_BASE}/pipelines/${id}/export-final-excel?${excelParams.toString()}`);
     if (!resp.ok) {
       const errData = await resp.json().catch(() => ({}));
       throw new Error(errData.error || resp.statusText || 'Export failed');
@@ -882,6 +898,8 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true)
     const filename = downloadNameFrom(resp, `${pl.no}_final.xlsx`);
     saveBlobAs(blob, filename);
     const spStatus = resp.headers.get('X-SharePoint-Upload');
+    const version = resp.headers.get('X-Final-Version');
+    if (version) params.set('version', version);
 
     /* Second file: the PDF. It downloads every certificate, so it takes longer; the Excel is
        already saved if this one fails. */
@@ -1519,6 +1537,7 @@ const EL_ACTION = {   /* action -> [i18n key, default, verb key, verb default, t
   restore: ['el_a_restore', 'Restored', 'el_v_restore', 'restored', 'ok'], delete: ['el_a_delete', 'Deleted', 'el_v_delete', 'deleted', 'bad'],
   login: ['el_a_login', 'Signed in', 'el_v_login', 'signed in', 'info'], logout: ['el_a_logout', 'Signed out', 'el_v_logout', 'signed out', 'info'],
   export: ['el_a_export', 'Exported', 'el_v_export', 'exported', 'info'],
+  regenerate: ['el_a_regenerate', 'Regenerated', 'el_v_regenerate', 'regenerated', 'info'],
 };
 const EL_FIELDS = {   /* column -> [i18n key, default] */
   weld_no: ['th_weld_no', 'Weld no.'], type: ['weld_type', 'Type'], procedure: ['procedure', 'Procedure'], welding_wire: ['th_welding_wire', 'Welding wire'],
@@ -2186,8 +2205,9 @@ function attachFormHandlers() {
     const includeWelder = document.getElementById('input-exp-welder-sign')?.checked ?? true;
     const includeInspector = document.getElementById('input-exp-inspector-sign')?.checked ?? true;
     const pipeId = _exportingPipelineId;
+    const regenerate = _exportRegenerate;
     closeModal('modal-export-final');
-    await exportFinalDoc(pipeId, includeWelder, includeInspector);
+    await exportFinalDoc(pipeId, includeWelder, includeInspector, regenerate);
   });
   document.getElementById('weld-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -5673,7 +5693,14 @@ function renderWorkflowBar(pl) {
       action = `<button class="btn btn-success btn-sm" onclick="openExportFinalModal(${pl.id})">${t('export_final_doc', 'Export final document')}</button>`;
     }
   }
-  else if (pl.status === 5) action = `<span class="done-chip"><svg viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg> ${t('exported_complete', 'Exported · complete')}</span>`;
+  else if (pl.status === 5) {
+    const done = `<span class="done-chip"><svg viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg> ${t('exported_complete', 'Exported · complete')}</span>`;
+    /* After the export: build the Excel and the PDF again, saved as a new version */
+    const regen = isExporting
+      ? `<button class="btn btn-ghost btn-sm is-loading" disabled style="display:inline-flex;align-items:center;gap:6px;cursor:wait;"><span class="doc-spinner"></span> <span>${t('regenerating', 'Regenerating…')}</span></button>`
+      : `<button class="btn btn-ghost btn-sm" onclick="openExportFinalModal(${pl.id}, true)" title="${escapeHtml(t('regenerate_final_hint', 'Create the Excel and the PDF again; saved in SharePoint as a new version'))}">&#8635; ${t('regenerate', 'Regenerate')}</button>`;
+    action = `${done} ${regen}`;
+  }
   html += `<span style="flex:1"></span>${action}</div>`;
   document.getElementById('detail-workflow').innerHTML = html;
 }
