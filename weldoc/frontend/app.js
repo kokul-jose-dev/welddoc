@@ -662,11 +662,11 @@ function docCell(pl) {
   } else if (pl.docIso) {
     iso = `<span class="doc-chip-group"><a class="doc-chip doc-iso" href="${escapeHtml(pl.docIso)}" target="_blank" rel="noopener" title="${t('upload_iso', 'Isometric drawing (SharePoint)')}">ISO</a><button class="btn-iso-reload" onclick="uploadIsoDoc(${pl.id})" title="${t('replace_iso', 'Replace / Re-upload ISO document')}">✎</button></span>`;
   } else {
-    iso = `<button class="btn btn-primary btn-sm" onclick="uploadIsoDoc(${pl.id})" title="${t('upload_iso', 'Upload ISO document')}">+</button>`;
+    iso = `<button class="btn btn-sm btn-doc-add" onclick="uploadIsoDoc(${pl.id})" title="${t('upload_iso', 'Upload ISO document')}">+</button>`;
   }
   let builder;
   if (pl.status >= 3 && pl.docBuilder) {
-    builder = `<a class="doc-chip doc-weld" href="${escapeHtml(pl.docBuilder)}" target="_blank" rel="noopener" title="${t('doc_welder', 'Welder Doc')} (SharePoint)">${t('doc_welder', 'Welder Doc')}</a>`;
+    builder = `<a class="doc-chip doc-builder" href="${escapeHtml(pl.docBuilder)}" target="_blank" rel="noopener" title="${t('doc_welder', 'Welder Doc')} (SharePoint)">${t('doc_welder', 'Welder Doc')}</a>`;
   } else {
     builder = slot(t('doc_welder', 'Welder Doc'));
   }
@@ -1456,15 +1456,15 @@ function renderChrome(activeNav, breadcrumbHtml) {
     <div class="accent-bar"></div>
     <header class="topbar">
       <a class="brand" href="home.html">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 4H10V14C10 17.3137 12.6863 20 16 20H20" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="4" cy="4" r="1.7" fill="currentColor"/><circle cx="20" cy="20" r="1.7" fill="currentColor"/></svg>
+        <span class="brand-logo"><img src="ist-logo.png" alt="IST Inox System Tech"></span>
         <span class="brand-text"><span class="brand-name">WELDDOC</span><span class="brand-tagline" data-i18n="brand_tagline">${t('brand_tagline', 'Pharma Piping Documentation')}</span></span>
       </a>
       <div class="topbar-divider"></div>
       <div class="breadcrumb">${breadcrumbHtml || ''}</div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
         <div class="lang-toggle" style="display:inline-flex;border:1px solid rgba(255,255,255,0.25);border-radius:4px;overflow:hidden;font-size:0.8rem;font-weight:600;">
-          <button onclick="setLang('de')" style="padding:4px 10px;border:none;background:${lang === 'de' ? 'var(--copper, #d97706)' : 'transparent'};color:${lang === 'de' ? '#fff' : '#ccc'};cursor:pointer;">DE</button>
-          <button onclick="setLang('en')" style="padding:4px 10px;border:none;background:${lang === 'en' ? 'var(--copper, #d97706)' : 'transparent'};color:${lang === 'en' ? '#fff' : '#ccc'};cursor:pointer;">EN</button>
+          <button onclick="setLang('de')" style="padding:4px 10px;border:none;background:${lang === 'de' ? 'var(--ink)' : 'transparent'};color:${lang === 'de' ? '#fff' : 'rgba(255,255,255,0.8)'};cursor:pointer;">DE</button>
+          <button onclick="setLang('en')" style="padding:4px 10px;border:none;background:${lang === 'en' ? 'var(--ink)' : 'transparent'};color:${lang === 'en' ? '#fff' : 'rgba(255,255,255,0.8)'};cursor:pointer;">EN</button>
         </div>
         <div class="topbar-user-badge" style="display:inline-flex;align-items:center;gap:7px;padding:4px 12px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);border-radius:20px;color:#f3f4f6;font-size:0.82rem;font-weight:500;">
           <span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,0.14);color:#fff;">
@@ -1977,7 +1977,7 @@ function mountModals() {
       <div class="field"><span class="lbl" data-i18n="waz_no">WAZ No.</span><select id="input-waz-no" onchange="onWazNoChange()"></select></div>
       <div class="field"><span class="lbl" data-i18n="cert_no">Certificate No.</span><input type="text" id="input-waz-cert-edit" placeholder="Type certificate No.…" data-i18n-placeholder="type_cert_no"></div>
       <div class="field"><span class="lbl" data-i18n="heat_melt_no">Heat / melt No.</span><input type="text" id="input-waz-heat-edit" oninput="onWazHeatEditInput()" placeholder="Type heat/melt No.…" data-i18n-placeholder="type_heat_no"></div>
-      <div class="modal-note" id="waz-shared-warning" style="display:none;color:var(--copper);grid-column:1/-1;" data-i18n="waz_shared_warning">⚠ Any changes here will apply to every combination of heat number and certificate number under this project.</div>
+      <div class="modal-note" id="waz-shared-warning" style="display:none;color:var(--warn);grid-column:1/-1;" data-i18n="waz_shared_warning">⚠ Any changes here will apply to every combination of heat number and certificate number under this project.</div>
       <div class="field wide"><span class="lbl"><span data-i18n="waz_doc_sp">WAZ document (→ SharePoint)</span></span>
         <div id="waz-current-doc"></div>
         <input type="file" id="input-waz-file" accept="application/pdf">
@@ -5794,7 +5794,7 @@ function jumpToMaterialRow(matId) {
   const el = document.querySelector(`#materials-tbody tr[data-mat-id="${matId}"]`);
   if (!el) { location.href = 'material-detail.html?id=' + matId; return; }
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  el.querySelectorAll('td').forEach(td => td.style.background = 'rgba(168,93,44,0.4)');
+  el.querySelectorAll('td').forEach(td => td.style.background = 'rgba(62,102,144,0.30)');
   setTimeout(() => el.querySelectorAll('td').forEach(td => td.style.background = ''), 800);
 }
 /* Once a welder or inspector is on a weld, the weld numbers are on the pipe and in the
@@ -6556,7 +6556,7 @@ function jumpToBranch(weldId) {
   if (!el) return;
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   /* single blink */
-  el.querySelectorAll('td').forEach(td => td.style.background = 'rgba(168,93,44,0.4)');
+  el.querySelectorAll('td').forEach(td => td.style.background = 'rgba(62,102,144,0.30)');
   setTimeout(() => el.querySelectorAll('td').forEach(td => td.style.background = ''), 800);
 }
 function weldPersonCell(w, pl, role) {
@@ -6592,7 +6592,7 @@ function weldPersonCell(w, pl, role) {
     if (certs.length === 0 || rank === 'expired') {
       statusIcon = ` <span title="${t('cert_expired', 'Expired certificate')}" style="color:var(--danger,#e53e3e);cursor:help;font-weight:bold;margin-left:4px;">⚠️</span>`;
     } else if (rank === 'expiring') {
-      statusIcon = ` <span title="${t('cert_expiring', 'Certificate expiring soon')}" style="color:var(--copper,#d97706);cursor:help;margin-left:4px;">⏳</span>`;
+      statusIcon = ` <span title="${t('cert_expiring', 'Certificate expiring soon')}" style="color:var(--warn,#A85D2C);cursor:help;margin-left:4px;">⏳</span>`;
     }
   }
   const nameFallback = role === 'welder' ? w.welder : w.inspector;
