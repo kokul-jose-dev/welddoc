@@ -61,11 +61,22 @@ def export_final(pipeline_id):
         .all()
     )
 
-    materials = []
-    for plm in raw_materials:
+    # Archived after welding ("struck"): kept in the document, crossed out, with their WAZ
+    struck_raw = (
+        PipelineMaterial.query.filter_by(pipeline_id=pipeline_id, struck=True)
+        .order_by(PipelineMaterial.sort_order, PipelineMaterial.id)
+        .all()
+    )
+    struck_welds = Weld.query.filter_by(pipeline_id=pipeline_id, struck=True).order_by(Weld.id).all()
+
+    def _mat_dict(plm):
         pm = plm.project_material
         gm = pm.global_material if pm else None
-        materials.append({
+        return {
+            "id": plm.id,
+            "struck": bool(plm.struck),
+            "archived_at": plm.archived_at, "archived_by": plm.archived_by,
+            "archive_reason": plm.archive_reason,
             "position": plm.position,
             "waz_no": plm.waz_no or "",
             "category": gm.category if gm else "",
@@ -81,20 +92,24 @@ def export_final(pipeline_id):
             "waz_pdf_url": pm.waz_pdf_url if pm else "",
             "start_of_plumbing": plm.start_of_plumbing,
             "end_of_plumbing": plm.end_of_plumbing,
-        })
+        }
 
-    # Unique WAZ docs
+    materials = [_mat_dict(plm) for plm in raw_materials]
+    struck_materials = [_mat_dict(plm) for plm in struck_raw]
+
+    # Unique WAZ docs - the struck materials' certificates too, in number order
     waz_docs = []
     seen_waz = set()
-    for m in materials:
+    for m in materials + struck_materials:
         if m["waz_no"] and m["waz_pdf_url"] and m["waz_no"] not in seen_waz:
             seen_waz.add(m["waz_no"])
             waz_docs.append({"waz_no": m["waz_no"], "url": m["waz_pdf_url"], "heat_no": m["heat_no"]})
+    waz_docs.sort(key=lambda d: (len(d["waz_no"]), d["waz_no"]))
 
     # Unique welder certs — use pipeline copy if available
     from app.sharepoint import _sanitize_name
     welder_ids = set()
-    for w in welds:
+    for w in list(welds) + list(struck_welds):
         if w.welder_id:
             welder_ids.add(w.welder_id)
         if w.inspector_id:
@@ -147,7 +162,8 @@ def export_final(pipeline_id):
     table_pdf, row_positions = _generate_table_pdf(
         pl, pr, cli, materials, welds,
         include_welder_sign=include_welder_sign,
-        include_inspector_sign=include_inspector_sign
+        include_inspector_sign=include_inspector_sign,
+        struck_materials=struck_materials, struck_welds=struck_welds,
     )
 
     # --- Build final PDF with bookmarks ---
@@ -182,7 +198,7 @@ def export_final(pipeline_id):
     user_name = flask_session.get("user", {}).get("name", "") if flask_session else ""
 
     for waz in waz_docs:
-        mat = next((m for m in materials if m["waz_no"] == waz["waz_no"]), {})
+        mat = next((m for m in materials + struck_materials if m["waz_no"] == waz["waz_no"]), {})
         cover_data = {
             "user_name": user_name, "date": today_str(),
             "client_name": cli.name if cli else "",
@@ -299,20 +315,26 @@ def export_final(pipeline_id):
     writer.write(output)
     pdf_bytes = output.getvalue()
 
-    # Upload to SharePoint
+    # Upload to SharePoint, next to the final Excel in "Final". The pipeline's "Final" link
+    # (doc_final) stays on the Excel - the PDF is the second file of the same export.
     filename = f"{pl.no}_final.pdf"
-    if pr.sharepoint_drive_id and pr.sharepoint_folder_id:
-        from app.sharepoint import upload_to_pipeline_subfolder
-        url = upload_to_pipeline_subfolder(
+    sp_status = "none"
+    if pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id:
+        from app.sharepoint import upload_to_pipeline_subfolder_ex
+        _url, sp_status = upload_to_pipeline_subfolder_ex(
             pr.sharepoint_drive_id, pr.sharepoint_folder_id,
             pl.no, "Final", filename, pdf_bytes, "application/pdf"
         )
-        if url:
-            pl.doc_final = url
 
+    from app.event_log import log_event
+    log_event("document", None, "export", {"document": [None, "final documentation PDF"], "sharepoint": [None, sp_status],
+              "welder_signatures": [None, include_welder_sign], "inspector_signatures": [None, include_inspector_sign]},
+              pipeline_id=pl.id, project_id=pl.project_id)
     db.session.commit()
 
-    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=True, download_name=filename)
+    resp = send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=True, download_name=filename)
+    resp.headers["X-SharePoint-Upload"] = sp_status
+    return resp
 
 
 def _result_mark(value):
@@ -332,8 +354,13 @@ def _result_mark(value):
     return ""
 
 
-def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True, include_inspector_sign=True):
-    """Generate the builder table as landscape PDF and return (pdf_bytes, row_positions)."""
+def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True, include_inspector_sign=True,
+                        struck_materials=(), struck_welds=()):
+    """Generate the builder table as landscape PDF and return (pdf_bytes, row_positions).
+
+    struck_materials / struck_welds: archived after welding. They stay in the table where they
+    were in the pipe, crossed out, each block followed by a note (when, who, why) - the same
+    as the Excel (builder_doc.build_weld_list_workbook)."""
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.units import mm
     from reportlab.lib import colors
@@ -359,6 +386,14 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     # The legend under the table explains the abbreviations; it should not compete with
     # the table itself, so it is set smaller than the data.
     s_legend = ParagraphStyle('s_legend', parent=styles['Normal'], fontSize=6, leading=7.5)
+    s_note = ParagraphStyle('s_note', parent=styles['Normal'], fontSize=6.5, leading=8,
+                            fontName='Helvetica-Oblique', textColor=colors.HexColor("#9B2C2C"))
+    struck_bg = colors.HexColor("#EDEDED")
+
+    def _x(text, struck):
+        """Crossed out and greyed when the row is struck."""
+        text = text or ""
+        return f'<strike><font color="#7F7F7F">{text}</font></strike>' if struck and text else text
 
     # Teil | Beschreibung (3 cols, = Wandstärke on weld rows) | DN | Dim | Material/Datum
     # | Attest/Signatur | Oberfläche (5 cols) | Heat (2 cols) | WAZ
@@ -480,6 +515,57 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
         drain_branches()
     combined = [c for c in combined if c is not None]  # unused pointer slots
 
+    # Struck blocks go in right after the part they were welded to: struck weld, the struck
+    # material, its other struck welds, then the note. A weld struck on its own (both its
+    # materials still active) goes after the first of them, before its replacement weld.
+    from xml.sax.saxutils import escape as _esc
+    for m in struck_materials:
+        if m.get("position"):
+            mat_by_pos.setdefault(m["position"], m)
+
+    def _idx_of(mat_id):
+        for i, c in enumerate(combined):
+            if c[0] == "mat" and c[1].get("id") == mat_id:
+                return i
+        return None
+
+    def _note(obj, is_dict):
+        get = (lambda k: obj.get(k)) if is_dict else (lambda k: getattr(obj, k, None))
+        when = get("archived_at").strftime("%d-%b-%Y") if get("archived_at") else ""
+        # No symbol in front: Helvetica (the PDF font) has no glyph for it and prints a box
+        parts = [f"Archiviert / archived {when}".strip(), get("archived_by") or "",
+                 f"Grund / reason: {get('archive_reason') or ''}"]
+        return ("note", _esc(" \u00b7 ".join(p for p in parts if p)))
+
+    pool = list(struck_welds)
+    for m in struck_materials:
+        own = [w for w in pool if m["id"] in (w.material_a_id, w.material_b_id)]
+        for w in own:
+            pool.remove(w)
+        near = {}
+        for w in own:
+            other = w.material_b_id if w.material_a_id == m["id"] else w.material_a_id
+            i = _idx_of(other)
+            if i is not None:
+                near[w.id] = i
+        first = min(own, key=lambda w: near.get(w.id, 10 ** 9)) if own else None
+        lead = first is not None and first.id in near
+        block = ([("weld", first)] if lead else []) + [("mat", m)]
+        block += [("weld", w) for w in own if not (lead and w.id == first.id)]
+        block.append(_note(m, True))
+        if lead:
+            at = near[first.id]
+            combined[at + 1:at + 1] = block
+        else:
+            combined.extend(block)
+    for w in pool:
+        idxs = [i for i in (_idx_of(w.material_a_id), _idx_of(w.material_b_id)) if i is not None]
+        block = [("weld", w), _note(w, False)]
+        if idxs:
+            combined[min(idxs) + 1:min(idxs) + 1] = block
+        else:
+            combined.extend(block)
+
     # Each branch gets its own shade, shared by its two marker rows, so a part
     # with two branches shows two distinguishable pairs.
     BRANCH_COLOURS = ["#F8CBAD", "#F4B6B6", "#FBE2D5", "#FAD4D4", "#E8C9A0", "#F2B27A"]
@@ -514,7 +600,10 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     row_meta = [None, None, None, None]  # no links on header rows
 
     for item_type, data in combined:
-        if item_type == "branch":
+        if item_type == "note":
+            all_rows.append([Paragraph(data, s_note)] + [""] * 15)
+            row_meta.append({"type": "note"})
+        elif item_type == "branch":
             # Blue like the other links in this document, so the row reads as clickable.
             all_rows.append(
                 [Paragraph(f"<font color=\"#0066CC\"><b>{data['label']}</b></font>", s7bc)] + [""] * 15
@@ -522,6 +611,7 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
             row_meta.append({"type": "branch", "key": data["key"]})
         elif item_type == "mat":
             m = data
+            st = bool(m.get("struck"))
             pos = m["position"] or ""
             if m["start_of_plumbing"]: pos += " (S)"
             if m["end_of_plumbing"]: pos += " (E)"
@@ -533,14 +623,17 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
             # the form prints the bare size ("15"), not the stored "DN 15"
             dn_bare = (m["dn1"] or "").replace("DN", "").strip()
             waz_text = f'<font color="#0066CC"><b>{m["waz_no"]}</b></font>' if m["waz_no"] else ""
-            row = [Paragraph(f"<b>{pos}</b>", s7c), Paragraph(m["item_description"] or m["category"] or "", s7), "", "",
-                   Paragraph(dn_bare, s7c), Paragraph(dim, s7c), Paragraph(m["material_code"], s7c),
-                   Paragraph(m["certificate"], s7c), Paragraph(surface, s7c), "", "", "", "",
-                   Paragraph(m["heat_no"] or "", s7c), "", Paragraph(waz_text, s7c)]
+            if st and waz_text:
+                waz_text = f"<strike>{waz_text}</strike>"     # crossed out, still a link
+            row = [Paragraph(_x(f"<b>{pos}</b>", st), s7c), Paragraph(_x(m["item_description"] or m["category"] or "", st), s7), "", "",
+                   Paragraph(_x(dn_bare, st), s7c), Paragraph(_x(dim, st), s7c), Paragraph(_x(m["material_code"], st), s7c),
+                   Paragraph(_x(m["certificate"], st), s7c), Paragraph(_x(surface, st), s7c), "", "", "", "",
+                   Paragraph(_x(m["heat_no"] or "", st), s7c), "", Paragraph(waz_text, s7c)]
             all_rows.append(row)
-            row_meta.append({"type": "mat", "waz_no": m["waz_no"]})
+            row_meta.append({"type": "mat", "waz_no": m["waz_no"], "struck": st})
         elif item_type == "weld":
             w = data
+            st = bool(getattr(w, "struck", False))
             welder_no_str = ""
             welder_sig_img = ""
             inspector_sig_img = ""
@@ -566,6 +659,8 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
                         inspector_sig_img = _get_sig_image(_insp.signature_url)
 
             wn_display = f'<font color="#0066CC">{welder_no_str}</font>' if welder_no_str else "\u2014"
+            if st and welder_no_str:
+                wn_display = f"<strike>{wn_display}</strike>"
             weld_thk = ""
             for _p in (w.between_a, w.between_b):
                 _m = mat_by_pos.get(_p)
@@ -581,22 +676,22 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
             if w.remarks:
                 _remark_parts.append(w.remarks)
             row = [
-                Paragraph(w.weld_no or "", s7c),
-                Paragraph(pl.no or "", s7), "",
-                Paragraph(weld_thk, s7c),
-                Paragraph(w.type or "", s7c),
+                Paragraph(_x(w.weld_no or "", st), s7c),
+                Paragraph(_x(pl.no or "", st), s7), "",
+                Paragraph(_x(weld_thk, st), s7c),
+                Paragraph(_x(w.type or "", st), s7c),
                 Paragraph(wn_display, s7c),
-                Paragraph(fmt_date(w.date), s7c),
+                Paragraph(_x(fmt_date(w.date), st), s7c),
                 welder_sig_img or "",
-                Paragraph(_result_mark(getattr(w, 'visual', None)), s7c),
+                Paragraph(_x(_result_mark(getattr(w, 'visual', None)), st), s7c),
                 inspector_sig_img or "",
-                Paragraph(_result_mark(getattr(w, 'endoscopy', None)), s7c),
+                Paragraph(_x(_result_mark(getattr(w, 'endoscopy', None)), st), s7c),
                 "", "",
                 "", "",
-                Paragraph(" · ".join(_remark_parts), s7)
+                Paragraph(_x(" · ".join(_remark_parts), st), s7)
             ]
             all_rows.append(row)
-            row_meta.append({"type": "weld", "welder_id": w.welder_id})
+            row_meta.append({"type": "weld", "welder_id": w.welder_id, "struck": st})
 
     # Only the weld table's own draw positions may feed the link rects, so it
     # gets its own class: the header tables are 16 columns wide too, and Table
@@ -643,7 +738,7 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     ]
     for i, meta in enumerate(row_meta):
         if meta and meta["type"] == "mat":
-            style_cmds.append(('BACKGROUND', (0,i), (-1,i), blue_bg))
+            style_cmds.append(('BACKGROUND', (0,i), (-1,i), struck_bg if meta.get("struck") else blue_bg))
             style_cmds.append(('SPAN', (1,i), (3,i)))
             style_cmds.append(('SPAN', (8,i), (12,i)))
             style_cmds.append(('SPAN', (13,i), (14,i)))
@@ -652,6 +747,8 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
         elif meta and meta["type"] == "branch":
             style_cmds.append(('SPAN', (0,i), (-1,i)))
             style_cmds.append(('BACKGROUND', (0,i), (-1,i), branch_bg(meta["key"])))
+        elif meta and meta["type"] == "note":
+            style_cmds.append(('SPAN', (0,i), (-1,i)))
     data_table.setStyle(TableStyle(style_cmds))
 
     # Build header elements

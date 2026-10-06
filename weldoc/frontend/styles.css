@@ -801,6 +801,7 @@ body.page-project-detail .col-filter-btn {
 tr.row-struck td{color:var(--text-muted);text-decoration:line-through;text-decoration-color:rgba(160,40,40,.55);background:rgba(0,0,0,.02);}
 tr.row-struck td.col-actions{text-decoration:none;}
 tr.row-struck a{pointer-events:none;color:inherit;}
+tr.row-struck a.doc-chip{pointer-events:auto;cursor:pointer;}
 .struck-badge{display:inline-block;padding:2px 8px;border-radius:10px;border:1px solid #E7B8B8;background:#FBEDED;color:#9B2C2C;font-size:0.72rem;font-weight:700;white-space:nowrap;cursor:pointer;text-decoration:none;}
 .archive-info-pop{position:absolute;z-index:1000;display:none;max-width:300px;padding:10px 12px;border-radius:8px;background:var(--surface);color:var(--text);border:1px solid rgba(0,0,0,.12);box-shadow:0 6px 20px rgba(0,0,0,.15);font-size:0.82rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;}
 .archive-info-pop.open{display:block;}

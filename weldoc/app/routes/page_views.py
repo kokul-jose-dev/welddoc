@@ -808,6 +808,38 @@ def get_material_usage_page():
         from app.routes.global_materials import _serialize as _ser_gm
         payload["globalMaterial"] = _ser_gm(gm)
 
+    # "Usage across projects": one row per project material (project + heat + certificate) of
+    # this material - also the ones added to a project but not used in any pipeline yet.
+    # Opened from one project material: just that one.
+    if pm_id:
+        pm_cond, pm_params = "proj.id = :pid", {"pid": pm_id}
+    elif gm:
+        pm_cond, pm_params = "proj.global_material_id = :gid", {"gid": gm.id}
+    else:
+        ids = sorted({r.project_material_id for r in rows if r.project_material_id})
+        pm_cond = ("proj.id IN (" + ",".join(str(int(i)) for i in ids) + ")") if ids else "1 = 0"
+        pm_params = {}
+    pm_rows = db.session.execute(db.text(f"""
+        SELECT proj.id, proj.project_id, proj.heat_no, proj.certificate, proj.waz_pdf_url,
+               pr.title AS project_title, pr.ist_project_no, pr.client_id, c.name AS client_name,
+               COUNT(plm.id) AS used_count, COUNT(DISTINCT plm.pipeline_id) AS pipeline_count
+        FROM weldoc_project_materials proj
+        LEFT JOIN weldoc_projects pr ON pr.id = proj.project_id
+        LEFT JOIN weldoc_clients c ON c.id = pr.client_id
+        LEFT JOIN weldoc_pipeline_materials plm ON plm.project_material_id = proj.id AND plm.archived = 0
+        WHERE proj.archived = 0 AND {pm_cond}
+        GROUP BY proj.id, proj.project_id, proj.heat_no, proj.certificate, proj.waz_pdf_url,
+                 pr.title, pr.ist_project_no, pr.client_id, c.name
+    """), pm_params).fetchall()
+    pm_rows = spec_rows(pm_rows)
+    payload["projectMaterials"] = sorted(({
+        "id": r.id, "projectId": r.project_id, "projectTitle": r.project_title or "",
+        "projectNo": r.ist_project_no or "", "clientId": r.client_id, "clientName": r.client_name or "",
+        "heatNo": r.heat_no or "", "certificate": r.certificate or "",
+        "hasWaz": bool(r.waz_pdf_url), "usedCount": int(r.used_count or 0),
+        "pipelineCount": int(r.pipeline_count or 0),
+    } for r in pm_rows), key=lambda x: (x["projectTitle"].lower(), x["heatNo"].lower(), x["certificate"]))
+
     if pm_id:
         # The rows above are the USES. A material used nowhere returns none of them, and
         # that is exactly the case the page has to be able to show, so its own details and

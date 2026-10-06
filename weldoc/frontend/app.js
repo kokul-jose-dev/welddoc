@@ -500,6 +500,20 @@ function takePipelineExtras(data) {
   DB.struckMaterials = normalizeMaterials(data.struckMaterials || []);
   DB.struckWelds = normalizeWelds(data.struckWelds || []);
   DB.pipelineLocked = Boolean(data.locked);
+  DB.lockedMaterialIds = new Set(data.lockedMaterialIds || []);
+}
+/* A weld with a welder or inspector is locked, and so are its two materials (and struck ones):
+   their letters, numbers and joint are fixed and archiving them strikes through. Everything
+   else in the pipeline stays free. The server decides (lockedMaterialIds); the welds on the
+   page are checked too, so a welder assigned a moment ago counts straight away. */
+function weldLocked(w) { return Boolean(w && (w.welderId || w.inspectorId || w.struck)); }
+function materialLocked(id) {
+  if (DB.lockedMaterialIds && DB.lockedMaterialIds.has(id)) return true;
+  const struck = (DB.struckWelds || []).filter(w => w.pipelineId === PAGE.pipelineId);
+  return [...pipelineWelds(PAGE.pipelineId), ...struck].some(w => weldLocked(w) && (w.materialIds || []).includes(id));
+}
+function jointLocked(aId, bId) {
+  return pipelineWelds(PAGE.pipelineId).some(w => weldLocked(w) && (w.materialIds || []).includes(aId) && (w.materialIds || []).includes(bId));
 }
 function struckMaterial(id) { return (DB.struckMaterials || []).find(m => m.id === id); }
 function welds() { return DB.welds.filter(w => !w.archived); }
@@ -855,9 +869,10 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true)
       include_welder_sign: includeWelder ? 'true' : 'false',
       include_inspector_sign: includeInspector ? 'true' : 'false'
     });
-    /* The final export is the weld list Excel (same as the welder document), now with the
-       recorded welding details and, if chosen, the signatures. The PDF export route is
-       kept on the server but no longer called. */
+    /* The final export is two files: the weld list Excel (same as the welder document, now
+       with the recorded welding details and, if chosen, the signatures), then the final PDF -
+       the same list with every WAZ certificate and welder certificate attached and linked,
+       the struck-through materials' WAZ included. */
     const resp = await fetch(`${API_BASE}/pipelines/${id}/export-final-excel?${params.toString()}`);
     if (!resp.ok) {
       const errData = await resp.json().catch(() => ({}));
@@ -867,6 +882,21 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true)
     const filename = downloadNameFrom(resp, `${pl.no}_final.xlsx`);
     saveBlobAs(blob, filename);
     const spStatus = resp.headers.get('X-SharePoint-Upload');
+
+    /* Second file: the PDF. It downloads every certificate, so it takes longer; the Excel is
+       already saved if this one fails. */
+    try {
+      const pdfResp = await fetch(`${API_BASE}/pipelines/${id}/export-final?${params.toString()}`);
+      if (!pdfResp.ok) throw new Error(pdfResp.statusText || String(pdfResp.status));
+      saveBlobAs(await pdfResp.blob(), downloadNameFrom(pdfResp, `${pl.no}_final.pdf`));
+      const pdfSp = pdfResp.headers.get('X-SharePoint-Upload');
+      if (pdfSp && pdfSp !== 'ok' && pdfSp !== 'none') {
+        alert(t('final_pdf_sp_failed', 'The final PDF was downloaded, but SharePoint did not accept it. Please export again later.'));
+      }
+    } catch (pdfErr) {
+      console.error('Final PDF export error:', pdfErr);
+      alert(t('final_pdf_failed', 'The Excel was exported, but the final PDF could not be created: ') + pdfErr.message);
+    }
 
     // Refresh pipeline state from server
     const fresh = await apiGet('/pipelines/' + id);
@@ -1735,7 +1765,7 @@ function mountModals() {
       </div>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" onclick="closeModal('modal-export-final')" data-i18n="cancel">Cancel</button>
-        <button type="submit" class="btn btn-success" data-i18n="export_excel">Export Excel</button>
+        <button type="submit" class="btn btn-success" data-i18n="export_excel_pdf">Export Excel + PDF</button>
       </div>
     </form>
   </div></div>
@@ -2214,7 +2244,7 @@ function attachFormHandlers() {
       for (let i = 0; i < uniqueConns.length; i++) {
         for (let j = i + 1; j < uniqueConns.length; j++) {
           const a = getMaterial(uniqueConns[i]), b = getMaterial(uniqueConns[j]);
-          if (a && b && (had.has(a.id) ? !had.has(b.id) : true) && (a.connections || []).includes(b.id)) {
+          if (a && b && (had.has(a.id) ? !had.has(b.id) : true) && (a.connections || []).includes(b.id) && jointLocked(a.id, b.id)) {
             err.textContent = t('conn_splice_locked', '{a} and {b} are welded to each other. A welder or inspector is assigned in this pipeline, so that weld cannot be removed by inserting a material between them. Archive the part you are replacing first, then connect the new material to its neighbours.')
               .replace('{a}', posLetter(a.position)).replace('{b}', posLetter(b.position));
             err.classList.add('show'); return;
@@ -4252,12 +4282,11 @@ function renderConnRows(preset) {
   const validIds = new Set(allMats.map(m => m.id));
   const list = (preset || []).filter(cid => validIds.has(cid));
   const editing = editingMaterialId !== null ? getMaterial(editingMaterialId) : null;
-  const locked = Boolean(editing && pipelineNumberingFrozen(editing.pipelineId));
-  const fixed = new Set(locked ? (editing.connections || []) : []);
+  /* A connection whose weld has a welder or inspector is fixed; every other one can change */
+  const fixed = new Set(editing ? (editing.connections || []).filter(cid => jointLocked(editing.id, cid)) : []);
   list.forEach(cid => addConnRow(cid, fixed.has(cid)));
-  /* After welding an existing material's connections are fixed - nothing can be added either */
   const addBtn = document.getElementById('add-conn-btn');
-  if (addBtn) addBtn.style.display = locked ? 'none' : '';
+  if (addBtn) addBtn.style.display = '';
   updateConnHint();
 }
 function updateConnHint() {
@@ -4775,8 +4804,7 @@ function openArchiveModal(type, id) {
   document.getElementById('archive-confirm-text').textContent = `${t('archive_confirm_text', 'Archive "{label}"? It will be hidden from the lists.').replace('{label}', label)}${warn}`;
   document.getElementById('archive-confirm-btn').textContent = `${t('archive', 'Archive')} ${nounText}`;
   /* After welding a material is struck through, not hidden - with a reason. */
-  const strike = (type === 'material' && pipelineNumberingFrozen(getMaterial(id).pipelineId))
-    || (type === 'weld' && pipelineNumberingFrozen(getWeld(id).pipelineId));
+  const strike = (type === 'material' && materialLocked(id)) || (type === 'weld' && weldLocked(getWeld(id)));
   showArchiveReason(strike, strike ? (type === 'weld' ? archiveWeldStrikeText(getWeld(id).weldNo) : archiveStrikeText(id)) : '');
   openModal('modal-archive');
   if (strike) document.getElementById('archive-reason').focus(); else document.getElementById('archive-cancel-btn').focus();
@@ -5795,7 +5823,7 @@ function renderMaterialsList() {
   if (lockNote) {
     lockNote.classList.toggle('open', orderFrozen);
     lockNote.textContent = orderFrozen
-      ? '🔒 ' + t('order_locked_note', 'A welder or inspector is assigned, so the weld numbers are fixed. Materials can no longer be reordered; adding one creates new welds without renumbering the existing ones.')
+      ? '🔒 ' + t('order_locked_note2', 'Welds with a welder or inspector are locked, together with their two materials: their letters, weld numbers and connection stay as they are, and archiving them strikes them through. All other materials can still be moved, connected and archived as before.')
       : '';
   }
   const rowIndex = new Map(rows.map((m, i) => [m.id, i]));
@@ -5813,7 +5841,7 @@ function renderMaterialsList() {
     if (m.startOfPlumbing && maxWelds > 1) adjusted = Math.max(1, adjusted - 1);
     if (m.endOfPlumbing && maxWelds > 1) adjusted = Math.max(1, adjusted - 1);
     if (m.startOfPlumbing && m.endOfPlumbing) adjusted = 0;
-    const canDrag = maxWelds < 3 && !orderFrozen;
+    const canDrag = maxWelds < 3 && !(orderFrozen && materialLocked(m.id));
     let extraDnCells = '';
     for (let i = 2; i <= maxDn; i++) {
       extraDnCells += `<td class="col-mono">${m[`dimension${i}`] ? escapeHtml(m[`dimension${i}`]) : '<span class="muted">—</span>'}</td>`;
@@ -5865,7 +5893,7 @@ function renderMaterialsList() {
       <td class="col-mono">${escapeHtml(m.surface) || '—'}</td>
       <td>${escapeHtml(m.certificate)}</td>
       <td class="col-mono">${escapeHtml(m.heatNo)}</td>
-      <td>—</td>
+      <td>${struckWazCell(m)}</td>
       <td class="col-actions">${struckBadge(m)}</td>
     </tr>` : `<tr>
       <td class="col-mono">${posLetter(m.position)}</td>
@@ -5898,7 +5926,7 @@ function struckMaterialRow(m, maxDn, maxDia, maxThk) {
       <td class="col-mono">${cell(m.surface)}</td>
       <td class="col-mono">${cell(m.materialCode)}</td><td>${cell(m.certificate)}</td>
       <td class="col-mono">${cell(m.heatNo)}</td>
-      <td>—</td><td>—</td>
+      <td>${struckWazCell(m)}</td><td>—</td>
       <td class="col-actions">${struckBadge(m)}</td>
     </tr>`;
 }
@@ -5920,6 +5948,23 @@ async function onMatDrop(e, targetMatId) {
   if (!dragged || !target || dragged.pipelineId !== target.pipelineId) return;
   const pipeId = dragged.pipelineId;
   const mats = pipelineMaterials(pipeId).filter(m => (m.piece || '').toLowerCase() !== 'welding wire');
+  if (pipelineNumberingFrozen(pipeId)) {
+    /* Locked welds in the pipeline: only free materials move, and never into a locked weld.
+       Positions are taken from the list order here; the server works out the letters. */
+    if (materialLocked(dragged.id)) return;
+    const inOrder = mats.slice().sort(byListOrder).filter(m => m.id !== dragged.id);
+    const at = inOrder.findIndex(m => m.id === target.id);
+    const before = inOrder[at - 1], after = inOrder[at];
+    const tIdx = mats.slice().sort(byListOrder).findIndex(m => m.id === target.id);
+    const dIdx = mats.slice().sort(byListOrder).findIndex(m => m.id === dragged.id);
+    const [p, n] = dIdx < tIdx ? [inOrder[at], inOrder[at + 1]] : [before, after];
+    if (p && n && (p.connections || []).includes(n.id) && jointLocked(p.id, n.id)) {
+      alert(t('drop_splits_locked', 'The weld between {a} and {b} has a welder or inspector, so no material can be moved in between.')
+        .replace('{a}', posLetter(p.position)).replace('{b}', posLetter(n.position)));
+      _dragMatId = null; return;
+    }
+    mats.slice().sort(byListOrder).forEach((m, i) => { m.position = i + 1; });
+  }
   /* Remember dragged material's old neighbors before removing connections */
   const oldConns = (dragged.connections || []).slice();
   const oldPos = dragged.position;
@@ -5996,9 +6041,13 @@ async function onMatDrop(e, targetMatId) {
       ensureWeldForPair(pipeId, dragged.id, next.id);
     }
   }
+  /* Show the new order straight away (the list is drawn in list order, sortOrder); the
+     server's answer replaces it with the real letters once it has saved. */
+  mats.forEach(m => { m.sortOrder = m.position; });
   saveDB();
   _dragMatId = null;
   rerenderPage();
+  showGlobalProgress();
   /* Sync reorder to backend and reload */
   try {
     const allMats = pipelineMaterials(pipeId);
@@ -6023,7 +6072,8 @@ async function onMatDrop(e, targetMatId) {
     console.error('Reorder API error:', e);
     /* The local list was reordered optimistically before the request. If the server
        refused, reload so the screen matches what is actually stored. */
-    if (e.status === 409) alert(t('reorder_locked_msg', 'Materials cannot be reordered: a welder or inspector is already assigned to a weld in this pipeline.'));
+    /* The server says why (e.g. a locked weld would be split) */
+    if (e.status === 409 && !e.cancelled) alert(e.message || t('reorder_locked_msg', 'Materials cannot be reordered: a welder or inspector is already assigned to a weld in this pipeline.'));
     try {
       const [freshMats, freshWelds] = await Promise.all([
         apiGet('/pipeline-materials?pipelineId=' + PAGE.pipelineId),
@@ -6034,6 +6084,8 @@ async function onMatDrop(e, targetMatId) {
       rebuildRelationships();
       rerenderPage();
     } catch (reloadErr) { console.error('Reload after failed reorder:', reloadErr); }
+  } finally {
+    hideGlobalProgress();
   }
 }
 /* Show welds for a material — if 1 weld, open edit directly; if multiple, open first seam detail */
@@ -6570,6 +6622,14 @@ function wazCellHtml(m) {
     + `<button class="btn-link btn-edit-inline" onclick="openEditWazModal(${m.id})" title="${escapeHtml(t('edit_waz', 'Edit WAZ'))}">✎</button>`;
 }
 
+/* A struck-through material keeps its WAZ number and package: shown read-only, still opens. */
+function struckWazCell(m) {
+  if (!m.wazNo) return '<span class="muted">—</span>';
+  if (!(m.wazPackageUrl || m.wazPdfUrl)) return `<span class="doc-chip doc-missing">${escapeHtml(m.wazNo)}</span>`;
+  const href = m.wazPackageUrl || `${API_BASE}/pipeline-materials/${m.id}/waz-package`;
+  return `<a class="doc-chip doc-weld" href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(t('view_document', 'View WAZ PDF'))}">${escapeHtml(m.wazNo)}</a>`;
+}
+
 function showWaz(matId) {
   const m = getMaterial(matId);
   if (!m) return;
@@ -7041,6 +7101,7 @@ async function initMaterialUsagePage() {
     DB.materials = normalizeMaterials(data.materials || []);
     MU_PROJECT_MATERIAL = data.projectMaterial || null;
     MU_GLOBAL_MATERIAL = data.globalMaterial || null;
+    MU_PROJECT_MATERIALS = data.projectMaterials || [];
   } catch (e) { console.error('API error:', e); }
   renderChrome('materials', `<a href="materials.html">${t('materials', 'Materials')}</a> / ${t('usage', 'Usage')}`); mountModals(); wireModalDismiss();
   renderMaterialUsagePage();
@@ -7050,6 +7111,61 @@ function getMaterialUsageParams() {
 }
 let muWazFilters = { wazNo: '', cert: '', heatNo: '', pipeline: '', project: '' };
 let muUsageFilters = { pipeline: '', project: '', client: '', pos: '', wazNo: '', cert: '', heatNo: '' };
+let muProjFilters = { project: '', client: '', heatNo: '', cert: '' };
+/* "Usage across projects": the project materials of this material, from the server - also
+   the ones added to a project but not used in a pipeline yet. */
+let MU_PROJECT_MATERIALS = [];
+
+function setMuProjFilter(key, val) {
+  muProjFilters[key] = val;
+  document.querySelectorAll('.col-filter.open').forEach(el => el.classList.remove('open'));
+  renderMaterialUsagePage();
+}
+
+function muProjColFilter(label, filterKey, options, curVal) {
+  const isActive = !!curVal;
+  let optsHtml = `<button class="cf-clear" onclick="setMuProjFilter('${filterKey}','')">${t('clear_filter', 'Clear filter')}</button>`;
+  optsHtml += options.map(o => `<div class="cf-opt ${curVal === o ? 'selected' : ''}" onclick="setMuProjFilter('${filterKey}','${escapeHtml(o).replace(/'/g, "\\'")}');">${escapeHtml(o)}</div>`).join('');
+  return `<th class="col-filter ${isActive ? 'active' : ''}" onclick="toggleColFilter(this,event)"><span class="col-filter-btn">${label}${isActive ? ' <span style=\"display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:var(--copper);color:#fff;font-size:0.6rem;font-weight:700;\">1</span>' : ''}</span><div class="col-filter-panel">${optsHtml}</div></th>`;
+}
+
+function renderMuProjectsTable() {
+  const rows = MU_PROJECT_MATERIALS;
+  const projLabel = r => r.projectTitle || r.projectNo || '';
+  const shown = rows.filter(r => {
+    if (muProjFilters.project && projLabel(r) !== muProjFilters.project) return false;
+    if (muProjFilters.client && r.clientName !== muProjFilters.client) return false;
+    if (muProjFilters.heatNo && r.heatNo !== muProjFilters.heatNo) return false;
+    if (muProjFilters.cert && r.certificate !== muProjFilters.cert) return false;
+    return true;
+  });
+  const thead = document.getElementById('mu-proj-thead');
+  if (thead) {
+    const opts = f => [...new Set(rows.map(f).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    thead.innerHTML = muProjColFilter(t('th_project', 'Project'), 'project', opts(projLabel), muProjFilters.project)
+      + muProjColFilter(t('th_client', 'Client'), 'client', opts(r => r.clientName), muProjFilters.client)
+      + muProjColFilter(t('th_heat_no', 'Heat / Melt No.'), 'heatNo', opts(r => r.heatNo), muProjFilters.heatNo)
+      + muProjColFilter(t('th_certificate', 'Certificate'), 'cert', opts(r => r.certificate), muProjFilters.cert)
+      + `<th>${t('th_pdf', 'PDF')}</th><th>${t('total_pipelines', 'Pipelines')}</th><th>${t('th_times_used', 'Times used')}</th>`;
+  }
+  const tbody = document.getElementById('mu-proj-tbody');
+  if (!tbody) return;
+  const dash = '<span class="muted">—</span>';
+  tbody.innerHTML = shown.length ? shown.map(r => {
+    const pdf = r.hasWaz
+      ? `<a class="doc-chip doc-iso" href="${API_BASE}/project-materials/${r.id}/global-waz" target="_blank" rel="noopener" title="${escapeHtml(t('open_global_waz', 'Open the WAZ certificate (global WAZ folder)'))}">PDF</a>`
+      : dash;
+    return `<tr>
+      <td>${r.projectId ? `<a class="cell-link" href="project-detail.html?id=${r.projectId}">${escapeHtml(projLabel(r))}</a>` : dash}</td>
+      <td>${r.clientId ? `<a class="cell-link" href="client-detail.html?id=${r.clientId}">${escapeHtml(r.clientName)}</a>` : dash}</td>
+      <td class="col-mono">${escapeHtml(r.heatNo) || dash}</td>
+      <td>${escapeHtml(r.certificate) || dash}</td>
+      <td>${pdf}</td>
+      <td class="col-mono">${r.pipelineCount}</td>
+      <td class="col-mono">${r.usedCount || `<span class="muted">${t('not_used_yet', 'not used yet')}</span>`}</td>
+    </tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="7">${t(rows.length ? 'no_materials_match_filters' : 'no_project_materials_for_material', rows.length ? 'No materials match these filters.' : 'This material has not been added to any project yet.')}</td></tr>`;
+}
 
 function setMuWazFilter(key, val) {
   muWazFilters[key] = val;
@@ -7217,6 +7333,8 @@ function renderMaterialUsagePage() {
       </tr>`;
     }).join('') : `<tr class="empty-row"><td colspan="5">${t('no_waz_documents_for_material', 'No WAZ documents match these filters.')}</td></tr>`;
   }
+
+  renderMuProjectsTable();
 
   /* filter usage table */
   const filteredUsage = matching.filter(m => {

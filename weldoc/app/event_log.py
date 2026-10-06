@@ -183,7 +183,15 @@ def _after_flush(sess, flush_context):
     for obj in sess.deleted:
         rows.append(_row(obj, "delete", _snapshot(obj)))
     if rows:
-        sess.connection().execute(event_log.insert(), rows)
+        _insert_rows(sess.connection(), rows)
+
+
+def _insert_rows(conn, rows):
+    """All entries in ONE multi-row INSERT (per 150 rows - SQL Server takes at most 2100
+    parameters per statement). A list passed to execute() would be sent row by row, and on a
+    remote database every statement is a round trip."""
+    for i in range(0, len(rows), 150):
+        conn.execute(event_log.insert().values(rows[i:i + 150]))
 
 
 def _keep_old_values():
@@ -215,14 +223,23 @@ def init_event_log(app):
 def log_event(entity_type, entity_id, action, changes=None, reason=None, pipeline_id=None, project_id=None):
     """An entry for something the automatic capture cannot see (raw SQL, login, export, ...).
     Written in the current transaction - committed with the change it describes."""
+    log_events([dict(entity_type=entity_type, entity_id=entity_id, action=action, changes=changes,
+                     reason=reason, pipeline_id=pipeline_id, project_id=project_id)])
+
+
+def log_events(entries):
+    """Several log_event() entries in one statement."""
+    if not entries:
+        return
     email, name = current_actor()
-    db.session.connection().execute(event_log.insert(), [{
-        "user_email": email, "user_name": name, "request_id": _request_id(),
-        "entity_type": entity_type, "entity_id": entity_id,
-        "pipeline_id": pipeline_id, "project_id": project_id, "action": action,
-        "changes": json.dumps(changes, ensure_ascii=False, default=str) if changes else None,
-        "reason": (reason or None) and str(reason)[:1000],
-    }])
+    rid = _request_id()
+    _insert_rows(db.session.connection(), [{
+        "user_email": email, "user_name": name, "request_id": rid,
+        "entity_type": e["entity_type"], "entity_id": e.get("entity_id"),
+        "pipeline_id": e.get("pipeline_id"), "project_id": e.get("project_id"), "action": e["action"],
+        "changes": json.dumps(e["changes"], ensure_ascii=False, default=str) if e.get("changes") else None,
+        "reason": (e.get("reason") or None) and str(e["reason"])[:1000],
+    } for e in entries])
 
 
 def can_read_log():

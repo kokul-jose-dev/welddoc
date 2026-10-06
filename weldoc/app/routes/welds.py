@@ -34,17 +34,17 @@ def create_or_update_weld():
                 "message": "This weld was archived after welding and is part of the record. "
                            "It cannot be edited or restored.",
             }), 409
-        # After a welder or inspector is on a weld of the pipeline, archiving a weld strikes it
-        # through (with a reason) instead of hiding it; its joint gets a new weld, new number.
+        # A weld with a welder or inspector is on the record: archiving it strikes it through
+        # (with a reason) instead of hiding it; its joint gets a new weld, new number.
         if data.get("archived") and not w.archived:
-            from app.routes.pipeline_materials import _numbering_frozen, _strike_weld
-            if _numbering_frozen(w.pipeline_id):
+            from app.routes.pipeline_materials import _strike_weld
+            if w.welder_id or w.inspector_id:
                 reason = (data.get("archiveReason") or "").strip()
                 if not reason:
                     return jsonify({
                         "error": "archive_reason_required",
-                        "message": "A welder or inspector is assigned in this pipeline: the weld is "
-                                   "struck through, not deleted. Please enter the reason.",
+                        "message": "This weld has a welder or inspector: it is struck through, "
+                                   "not deleted. Please enter the reason.",
                         "weldNos": [w.weld_no],
                     }), 409
                 _strike_weld(w, reason)
@@ -303,12 +303,11 @@ def _set_materials(w, data):
             PipelineMaterial.archived == False).all()}  # noqa: E712
         if a == b or len(mats) != 2:
             raise SpecValueError("A weld joins two different active materials of its own pipeline.")
-        from app.routes.pipeline_materials import _numbering_frozen
         if (w.id and w.material_a_id and w.material_b_id and {a, b} != {w.material_a_id, w.material_b_id}
-                and _numbering_frozen(w.pipeline_id)):
-            # After welding the joints are part of the record (see pipeline_materials).
-            raise SpecValueError("A welder or inspector is assigned in this pipeline: the materials "
-                                 "a weld joins cannot be changed any more.")
+                and (w.welder_id or w.inspector_id)):
+            # A weld with a welder or inspector is on the record (see pipeline_materials).
+            raise SpecValueError("This weld has a welder or inspector: the materials it joins "
+                                 "cannot be changed any more.")
         w.material_a_id, w.material_b_id = a, b
         w.between_a, w.between_b = mats[a].position, mats[b].position
         return

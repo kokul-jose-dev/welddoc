@@ -33,7 +33,7 @@ def get_pipeline_detail(pipeline_id):
     # change data: once a welder or inspector is assigned, the weld number is what is
     # written on the pipe and in the issued documents. Every path that actually changes
     # materials or connections still calls _sync_and_renumber_welds itself.
-    from app.routes.pipeline_materials import _sync_pipeline_waz_nos, _numbering_frozen
+    from app.routes.pipeline_materials import _sync_pipeline_waz_nos, _numbering_frozen, _locked_material_ids
     try:
         _sync_pipeline_waz_nos(pipeline_id)
     except Exception:
@@ -271,9 +271,11 @@ def get_pipeline_detail(pipeline_id):
         } for s in sib_rows],
         "materials": materials,
         "welds": welds,
-        # Once a welder or inspector is on a weld (also a struck one): letters, weld numbers
-        # and connections are fixed, and archiving strikes through (see pipeline_materials).
+        # A welder or inspector on a weld (also a struck one) locks that weld and its two
+        # materials: their letters, numbers and joint are fixed, archiving them strikes
+        # through. The rest of the pipeline stays free (see pipeline_materials).
         "locked": _numbering_frozen(pipeline_id),
+        "lockedMaterialIds": sorted(_locked_material_ids(pipeline_id)),
         "struckMaterials": struck_materials,
         "struckWelds": struck_welds,
         "projectMaterials": project_materials,
