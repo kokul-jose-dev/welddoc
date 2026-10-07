@@ -375,7 +375,7 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     from PIL import Image as PILImage
     from reportlab.platypus import Image as RLImage
 
-    LOGO_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'image.png')
+    LOGO_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'ist-logo-print.png')   # official IST logo
     page_size = landscape(A4)
     blue_bg = colors.HexColor("#B8CCE4")
 
@@ -770,7 +770,7 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
     elements = []
     if os.path.exists(LOGO_PATH):
         from reportlab.platypus import Image as RLImage
-        logo = RLImage(LOGO_PATH, width=35*mm, height=12*mm)
+        logo = RLImage(LOGO_PATH, width=35*mm, height=35*mm*246/1100)    # true proportions
     else:
         logo = ""
     row1 = [Paragraph("Hersteller / manufacturer: ISTinox AG", s9b)] + [""]*5 + [Paragraph("Schweissnahtpr\u00fcfliste", s14b)] + [""]*7 + [logo, ""]

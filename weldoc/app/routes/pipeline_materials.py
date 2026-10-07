@@ -548,6 +548,42 @@ def delete_pipeline_material(pm_id):
     return jsonify({"ok": True}), 200
 
 
+@pipeline_materials_bp.route("/<int:pm_id>/delete", methods=["POST"])
+def delete_pipeline_material_for_good(pm_id):
+    """Delete a wrong material from its pipe for good (Delete on the material usage page).
+
+    Only while it is free: no welder or inspector on its welds and not struck - otherwise it
+    is part of the welding record (archive it in the pipe, with a reason). It is taken out
+    the way an archive before welding does it (its neighbours joined, letters closed up),
+    then removed with its welds. The event log keeps what was deleted, by whom and when.
+    """
+    m = PipelineMaterial.query.get_or_404(pm_id)
+    if m.struck or _material_locked(m):
+        return jsonify({
+            "error": "material_locked",
+            "message": "A welder or inspector is assigned to a weld of this material, so it is part of "
+                       "the welding record and cannot be deleted. Archive it in the pipe (with a reason).",
+        }), 409
+    _purge_pipeline_material(m)
+    db.session.commit()
+    return jsonify({"ok": True}), 200
+
+
+def _purge_pipeline_material(m):
+    """Take m out of its pipe (as an archive before welding) and delete it with its welds."""
+    if not m.archived:
+        _archive_pipeline_material(m, "deleted")
+    for w in Weld.query.filter(db.or_(Weld.material_a_id == m.id, Weld.material_b_id == m.id)).all():
+        db.session.delete(w)
+    db.session.flush()
+    db.session.execute(db.text("""
+        DELETE FROM weldoc_pipeline_material_connections
+        WHERE pipeline_material_id = :mid OR connected_id = :mid
+    """), {"mid": m.id})
+    db.session.delete(m)
+    db.session.flush()
+
+
 @pipeline_materials_bp.route("/<int:pm_id>/restore", methods=["POST"])
 def restore_pipeline_material(pm_id):
     """Restore an archived pipeline material, upload new WAZ PDF, assign next sequential WAZ number, and regenerate package."""

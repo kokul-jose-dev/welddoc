@@ -149,7 +149,8 @@ def _signature_placer(include_welder_sign, include_inspector_sign):
 # Where each document goes in SharePoint, and which pipeline column holds its link.
 SP_DOCS = {
     "builder": {"subfolder": "02 Material & Schweissnahtliste", "suffix": "_welder.xlsx", "field": "doc_builder"},
-    "final":   {"subfolder": "Final",                "suffix": "_final.xlsx",  "field": "doc_final"},
+    # The final Excel sits next to the welder document (2026-10-07; was its own "Final" folder)
+    "final":   {"subfolder": "02 Material & Schweissnahtliste", "suffix": "_final.xlsx", "field": "doc_final"},
 }
 
 
@@ -180,15 +181,15 @@ def final_file_name(pl, ext, version=None):
 
 
 def next_final_version(pl, pr):
-    """The next free version number in the pipeline's Final folder (1 when there is none yet,
-    or no SharePoint folder to look in). Excel and PDF of one regenerate share the number."""
+    """The next free version number for the final Excel in its folder (1 when there is none
+    yet, or no SharePoint folder to look in)."""
     import re
     from app.sharepoint import list_pipeline_subfolder_files, _sanitize_name
     if not (pr and pr.sharepoint_drive_id and pr.sharepoint_folder_id):
         return 1
     pat = re.compile(re.escape(_sanitize_name(f"{pl.no}_final")) + r"_v(\d+)\.(xlsx|pdf)$", re.IGNORECASE)
     used = [int(m.group(1)) for f in list_pipeline_subfolder_files(
-        pr.sharepoint_drive_id, pr.sharepoint_folder_id, pl.no, "Final")
+        pr.sharepoint_drive_id, pr.sharepoint_folder_id, pl.no, SP_DOCS["final"]["subfolder"])
         for m in [pat.match(f.get("name", ""))] if m]
     return max(used, default=0) + 1
 
@@ -224,11 +225,13 @@ def export_final_excel(pipeline_id):
     from flask import request
     include_welder_sign = request.args.get("include_welder_sign", "true").lower() in ("true", "1", "yes")
     include_inspector_sign = request.args.get("include_inspector_sign", "true").lower() in ("true", "1", "yes")
+    customer_remarks = request.args.get("customer_remarks", "false").lower() in ("true", "1", "yes")
 
     pl, pr, file_bytes = build_weld_list_workbook(
         pipeline_id,
         include_welder_sign=include_welder_sign,
         include_inspector_sign=include_inspector_sign,
+        customer_remarks=customer_remarks,
     )
     # "Regenerate" after the export: a new version next to the earlier ones (never overwritten)
     regenerate = request.args.get("regenerate", "false").lower() in ("true", "1", "yes")
@@ -239,7 +242,8 @@ def export_final_excel(pipeline_id):
     from app.event_log import log_event
     log_event("document", None, "regenerate" if regenerate else "export",
               {"document": [None, "final documentation" + (f" v{version}" if version else "")], "sharepoint": [None, sp_status],
-               "welder_signatures": [None, include_welder_sign], "inspector_signatures": [None, include_inspector_sign]},
+               "welder_signatures": [None, include_welder_sign], "inspector_signatures": [None, include_inspector_sign],
+               "customer_remarks": [None, customer_remarks]},
               pipeline_id=pl.id, project_id=pl.project_id)
     db.session.commit()
     resp = _xlsx_response(file_bytes, name, sp_status)
@@ -278,7 +282,8 @@ def retry_sharepoint_upload(pipeline_id, doc):
     return jsonify({"status": "failed", "message": "SharePoint did not accept the file. Please try again later."}), 502
 
 
-def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_inspector_sign=False):
+def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_inspector_sign=False,
+                             customer_remarks=False):
     """Build the weld inspection list workbook. Returns (pipeline, project, xlsx bytes)."""
     place_signatures = _signature_placer(include_welder_sign, include_inspector_sign)
     pl = Pipeline.query.get_or_404(pipeline_id)
@@ -501,15 +506,17 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
         ws.merge_cells(f"G{top+0}:O{top+1}"); ws[f"G{top+0}"]="Schweissnahtprüfliste"; ws[f"G{top+0}"].font=Font(bold=True,size=18); ws[f"G{top+0}"].alignment=Alignment(horizontal="center",vertical="center")
         ws.merge_cells(f"P{top+0}:Q{top+1}"); ws[f"P{top+0}"]=""; ws[f"P{top+0}"].alignment=wc  # Company logo
         bdr(top+0,1,top+1,17)
-        logo_path = os.path.join(os.path.dirname(__file__), '..', '..', 'image.png')
+        # Official IST logo (istinox.ch), rendered large for print from frontend/ist-logo.svg
+        logo_path = os.path.join(os.path.dirname(__file__), '..', '..', 'ist-logo-print.png')
         if os.path.exists(logo_path):
             from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
             from openpyxl.drawing.xdr import XDRPositiveSize2D
             from openpyxl.utils.units import pixels_to_EMU
 
             img = XlImage(logo_path)
+            # The same width as before, height from the logo's own proportions
+            img.height = round(130 * img.height / max(img.width, 1))
             img.width = 130
-            img.height = 45
             # Centred in the merged P:Q block. add_image() pins a picture to the top-left
             # corner of a cell, so without an offset the logo hangs in the upper left of that
             # block instead of sitting in the middle of it.
@@ -624,6 +631,8 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
             f = cell.font
             cell.font = Font(size=f.size or 10, bold=f.bold, italic=f.italic, strike=True, color="7F7F7F")
 
+    struck_weld_rows = []       # rows of struck welds on the current page (crossed out fully)
+
     def _write_rows(rows, row):
         for item_type, data, extra in rows:
             if item_type == "note":
@@ -687,10 +696,12 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
                 ws.cell(row,12,_result_mark(getattr(w, 'endoscopy', None))).font=df; ws.cell(row,12).alignment=wc
                 ws.cell(row,17,w.remarks or "").font=df; ws.cell(row,17).alignment=wr
                 bdr(row,1,row,17); ws.row_dimensions[row].height = 24
-                if place_signatures:
+                # A struck weld gets no signatures and every empty cell crossed out (below)
+                if place_signatures and not getattr(w, "struck", False):
                     place_signatures(ws, row, w)
                 if getattr(w, "struck", False):
                     _strike_row(row)
+                    struck_weld_rows.append(row)
                 row+=1
         return row
 
@@ -743,7 +754,14 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
         write_header_block(1, page_idx, len(pages))
         first_data_row = 1 + PAGE_ROWS
         row = _write_rows(page_rows, first_data_row)
-        _cross_out_empty_cells(ws, first_data_row, row - 1, SIGNATURE_COLS, thin)
+        # "Customer remarks needed" (final export): the empty Bemerkung / Remarks cells stay
+        # open for the customer to write in, like the signature boxes
+        _cross_out_empty_cells(ws, first_data_row, row - 1,
+                               SIGNATURE_COLS | ({17} if customer_remarks else set()), thin)
+        # Struck welds: nothing is left open - the signature boxes and remarks are crossed too
+        for sr in struck_weld_rows:
+            _cross_out_empty_cells(ws, sr, sr, set(), thin)
+        struck_weld_rows.clear()
 
         # Footer legend (four groups, matching the IST reference form). Smaller than the
         # table: it explains the abbreviations, it should not compete with the data.

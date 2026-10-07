@@ -586,7 +586,12 @@ function daysUntil(iso) {
   return Math.round((target - today) / 86400000);
 }
 function certStatus(cert) { if (!cert.validUntil) return 'valid'; const n = daysUntil(cert.validUntil); if (n < 0) return 'expired'; if (n <= 30) return 'expiring'; return 'valid'; }
-function personCertRank(pid) { const s = personCerts(pid).map(certStatus); if (s.includes('valid')) return 'valid'; if (s.includes('expiring')) return 'expiring'; return 'expired'; }
+/* Whether the welder may weld: decided by the verification due date (the confirmation every
+   6 months), not by "certificate valid until" (2026-10-07). Without a verification date the
+   certificate date is used. Drives everything on welds: welder name colours, the marks when
+   choosing a welder, the "expired welder" warning. */
+function verificationStatus(cert) { if (!cert.renewalDue) return certStatus(cert); const n = daysUntil(cert.renewalDue); if (n < 0) return 'expired'; if (n <= 30) return 'expiring'; return 'valid'; }
+function personCertRank(pid) { const s = personCerts(pid).map(verificationStatus); if (s.includes('valid')) return 'valid'; if (s.includes('expiring')) return 'expiring'; return 'expired'; }
 function personNameClass(pid, pipeStatus) { if (pipeStatus === 3) return ''; const r = personCertRank(pid); return r === 'expired' ? 'expired' : r === 'expiring' ? 'warn' : ''; }
 function tile(num, label, cls) { return `<div class="stat-tile ${cls || ''}"><div class="stat-num">${num}</div><div class="stat-label">${typeof t === 'function' ? t(label, label) : label}</div></div>`; }
 const ARCHIVE_SVG = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
@@ -641,7 +646,7 @@ const STATUS_LABELS = new Proxy(_RAW_STATUS_LABELS, {
 });
 const STATUS_SEQUENCE = ['not-started', 'ongoing', 'completed'];
 function statusPill(s) { return `<span class="pill pill-${s}"><span class="dot"></span>${PIPE_STATUS[s]}</span>`; }
-function certStatusPill(cert) { const s = certStatus(cert); const label = s === 'valid' ? (typeof t === 'function' ? t('cert_valid', 'Valid') : 'Valid') : s === 'expiring' ? (typeof t === 'function' ? t('cert_expiring', 'Expiring') : 'Expiring') : (typeof t === 'function' ? t('cert_expired', 'Expired') : 'Expired'); return `<span class="cpill cpill-${s}">${label}</span>`; }
+function certStatusPill(cert, statusFn) { const s = (statusFn || certStatus)(cert); const label = s === 'valid' ? (typeof t === 'function' ? t('cert_valid', 'Valid') : 'Valid') : s === 'expiring' ? (typeof t === 'function' ? t('cert_expiring', 'Expiring') : 'Expiring') : (typeof t === 'function' ? t('cert_expired', 'Expired') : 'Expired'); return `<span class="cpill cpill-${s}">${label}</span>`; }
 
 /* person cell: first name + "+N" badge, colour-coded (unless pipeline completed) */
 function personCellHtml(ids, pipeStatus, popupCall) {
@@ -859,18 +864,20 @@ function openExportFinalModal(id, regenerate) {
     title.textContent = _exportRegenerate ? t('regenerate_final_doc', 'Regenerate final document') : t('export_final_doc', 'Export final document');
   }
   const sub = document.querySelector('#modal-export-final .modal > p');
-  if (sub) sub.setAttribute('data-i18n', _exportRegenerate ? 'regenerate_final_sub' : 'export_final_modal_sub');
+  if (sub) sub.setAttribute('data-i18n', _exportRegenerate ? 'regenerate_final_sub2' : 'export_final_modal_sub');
   if (sub) sub.textContent = _exportRegenerate
-    ? t('regenerate_final_sub', 'Creates the Excel and the PDF again with the current data. They are saved in SharePoint as a new version (…_final_v1, v2 …); the earlier files stay.')
+    ? t('regenerate_final_sub2', 'Creates the final Excel again with the current data. It is saved in SharePoint as a new version (…_final_v1, v2 …) next to the welder document; the earlier files stay.')
     : t('export_final_modal_sub', 'Choose which signatures should be included in the exported document.');
   const cbWelder = document.getElementById('input-exp-welder-sign');
   const cbInsp = document.getElementById('input-exp-inspector-sign');
   if (cbWelder) cbWelder.checked = true;
   if (cbInsp) cbInsp.checked = true;
+  const cbRemarks = document.getElementById('input-exp-customer-remarks');
+  if (cbRemarks) cbRemarks.checked = false;
   openModal('modal-export-final');
 }
 
-async function exportFinalDoc(id, includeWelder = true, includeInspector = true, regenerate = false) {
+async function exportFinalDoc(id, includeWelder = true, includeInspector = true, regenerate = false, customerRemarks = false) {
   const pl = getPipeline(id);
   if (!pl || pl.status < 4 || _exportingFinalPipelines.has(id)) return;
   _exportingFinalPipelines.add(id);
@@ -880,7 +887,8 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true,
   try {
     const params = new URLSearchParams({
       include_welder_sign: includeWelder ? 'true' : 'false',
-      include_inspector_sign: includeInspector ? 'true' : 'false'
+      include_inspector_sign: includeInspector ? 'true' : 'false',
+      customer_remarks: customerRemarks ? 'true' : 'false'      /* empty Remarks cells not crossed out */
     });
     /* Regenerate: the server picks the next version for the Excel; the PDF takes the same one */
     const excelParams = new URLSearchParams(params);
@@ -901,20 +909,8 @@ async function exportFinalDoc(id, includeWelder = true, includeInspector = true,
     const version = resp.headers.get('X-Final-Version');
     if (version) params.set('version', version);
 
-    /* Second file: the PDF. It downloads every certificate, so it takes longer; the Excel is
-       already saved if this one fails. */
-    try {
-      const pdfResp = await fetch(`${API_BASE}/pipelines/${id}/export-final?${params.toString()}`);
-      if (!pdfResp.ok) throw new Error(pdfResp.statusText || String(pdfResp.status));
-      saveBlobAs(await pdfResp.blob(), downloadNameFrom(pdfResp, `${pl.no}_final.pdf`));
-      const pdfSp = pdfResp.headers.get('X-SharePoint-Upload');
-      if (pdfSp && pdfSp !== 'ok' && pdfSp !== 'none') {
-        alert(t('final_pdf_sp_failed', 'The final PDF was downloaded, but SharePoint did not accept it. Please export again later.'));
-      }
-    } catch (pdfErr) {
-      console.error('Final PDF export error:', pdfErr);
-      alert(t('final_pdf_failed', 'The Excel was exported, but the final PDF could not be created: ') + pdfErr.message);
-    }
+    /* Excel only (2026-10-07): the final PDF is no longer made on export or regenerate - its
+       route (/export-final) is kept on the server, unused. */
 
     // Refresh pipeline state from server
     const fresh = await apiGet('/pipelines/' + id);
@@ -945,7 +941,7 @@ function pipelineHasUnassignedInspector(pl) {
   if (!wlds.length) return !(pl.inspectorIds || []).length;
   return wlds.some(w => !w.inspectorId && !w.inspector);
 }
-function pipelineExpiredWelder(pl) { return (pl.welderIds || []).some(wid => personCerts(wid).length === 0 || personCerts(wid).every(c => certStatus(c) === 'expired')); }
+function pipelineExpiredWelder(pl) { return (pl.welderIds || []).some(wid => personCerts(wid).length === 0 || personCerts(wid).every(c => verificationStatus(c) === 'expired')); }
 function pipelinesPendingCert() { return pipelines().filter(pl => (pl.welderIds || []).length > 0 && pipelineExpiredWelder(pl)); }
 function pipelinesUnassignedWelder() { return pipelines().filter(pipelineHasUnassignedWelder); }
 function pipelinesUnassignedInspector() { return pipelines().filter(pipelineHasUnassignedInspector); }
@@ -1456,7 +1452,7 @@ function renderChrome(activeNav, breadcrumbHtml) {
     <div class="accent-bar"></div>
     <header class="topbar">
       <a class="brand" href="home.html">
-        <span class="brand-logo"><img src="ist-logo.png" alt="IST Inox System Tech"></span>
+        <span class="brand-logo"><img src="ist-logo-print.png" alt="IST Inox System Tech"></span>
         <span class="brand-text"><span class="brand-name">WELDDOC</span><span class="brand-tagline" data-i18n="brand_tagline">${t('brand_tagline', 'Pharma Piping Documentation')}</span></span>
       </a>
       <div class="topbar-divider"></div>
@@ -1781,10 +1777,14 @@ function mountModals() {
           <input type="checkbox" id="input-exp-inspector-sign" checked style="width:16px;height:16px;accent-color:var(--copper,#C85A17);cursor:pointer;">
           <span data-i18n="include_inspector_signature">Include inspector signature</span>
         </label>
+        <label style="display:flex;align-items:center;gap:10px;font-size:0.9rem;cursor:pointer;">
+          <input type="checkbox" id="input-exp-customer-remarks" style="width:16px;height:16px;accent-color:var(--copper,#C85A17);cursor:pointer;">
+          <span data-i18n="customer_remarks_needed">Customer remarks needed (Remarks column left open)</span>
+        </label>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" onclick="closeModal('modal-export-final')" data-i18n="cancel">Cancel</button>
-        <button type="submit" class="btn btn-success" data-i18n="export_excel_pdf">Export Excel + PDF</button>
+        <button type="submit" class="btn btn-success" data-i18n="export_excel">Export Excel</button>
       </div>
     </form>
   </div></div>
@@ -2206,8 +2206,9 @@ function attachFormHandlers() {
     const includeInspector = document.getElementById('input-exp-inspector-sign')?.checked ?? true;
     const pipeId = _exportingPipelineId;
     const regenerate = _exportRegenerate;
+    const customerRemarks = document.getElementById('input-exp-customer-remarks')?.checked ?? false;
     closeModal('modal-export-final');
-    await exportFinalDoc(pipeId, includeWelder, includeInspector, regenerate);
+    await exportFinalDoc(pipeId, includeWelder, includeInspector, regenerate, customerRemarks);
   });
   document.getElementById('weld-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -5698,7 +5699,7 @@ function renderWorkflowBar(pl) {
     /* After the export: build the Excel and the PDF again, saved as a new version */
     const regen = isExporting
       ? `<button class="btn btn-ghost btn-sm is-loading" disabled style="display:inline-flex;align-items:center;gap:6px;cursor:wait;"><span class="doc-spinner"></span> <span>${t('regenerating', 'Regenerating…')}</span></button>`
-      : `<button class="btn btn-ghost btn-sm" onclick="openExportFinalModal(${pl.id}, true)" title="${escapeHtml(t('regenerate_final_hint', 'Create the Excel and the PDF again; saved in SharePoint as a new version'))}">&#8635; ${t('regenerate', 'Regenerate')}</button>`;
+      : `<button class="btn btn-ghost btn-sm" onclick="openExportFinalModal(${pl.id}, true)" title="${escapeHtml(t('regenerate_final_hint2', 'Create the final Excel again; saved in SharePoint as a new version'))}">&#8635; ${t('regenerate', 'Regenerate')}</button>`;
     action = `${done} ${regen}`;
   }
   html += `<span style="flex:1"></span>${action}</div>`;
@@ -7156,6 +7157,27 @@ function muProjColFilter(label, filterKey, options, curVal) {
   return `<th class="col-filter ${isActive ? 'active' : ''}" onclick="toggleColFilter(this,event)"><span class="col-filter-btn">${label}${isActive ? ' <span style=\"display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:var(--copper);color:#fff;font-size:0.6rem;font-weight:700;\">1</span>' : ''}</span><div class="col-filter-panel">${optsHtml}</div></th>`;
 }
 
+/* Delete on the material usage page (only here): a wrong material for good - in a pipe while
+   no welder or inspector is on its welds, in a project once no pipe uses it. */
+function muDeleteBtn(kind, id, blockedWhy) {
+  const label = t('delete', 'Delete');
+  if (blockedWhy) return `<button type="button" class="btn-link btn-delete-mu" disabled title="${escapeHtml(blockedWhy)}">${label}</button>`;
+  return `<button type="button" class="btn-link btn-delete-mu" onclick="muDelete('${kind}', ${id})">${label}</button>`;
+}
+async function muDelete(kind, id) {
+  const q = kind === 'pipe'
+    ? t('mu_delete_pipe_confirm', 'Delete this material from the pipe for good? Its welds are deleted with it and its two neighbours are joined to each other. This cannot be undone.')
+    : t('mu_delete_project_confirm', 'Delete this material from the project for good? This cannot be undone.');
+  if (!confirm(q)) return;
+  try {
+    await apiPost(kind === 'pipe' ? `/pipeline-materials/${id}/delete` : `/project-materials/${id}/delete`, {});
+  } catch (e) {
+    alert(e.message || t('delete_failed', 'Could not delete.'));
+    return;
+  }
+  await initMaterialUsagePage();
+}
+
 function renderMuProjectsTable() {
   const rows = MU_PROJECT_MATERIALS;
   const projLabel = r => r.projectTitle || r.projectNo || '';
@@ -7173,7 +7195,7 @@ function renderMuProjectsTable() {
       + muProjColFilter(t('th_client', 'Client'), 'client', opts(r => r.clientName), muProjFilters.client)
       + muProjColFilter(t('th_heat_no', 'Heat / Melt No.'), 'heatNo', opts(r => r.heatNo), muProjFilters.heatNo)
       + muProjColFilter(t('th_certificate', 'Certificate'), 'cert', opts(r => r.certificate), muProjFilters.cert)
-      + `<th>${t('th_pdf', 'PDF')}</th><th>${t('total_pipelines', 'Pipelines')}</th><th>${t('th_times_used', 'Times used')}</th>`;
+      + `<th>${t('th_pdf', 'PDF')}</th><th>${t('total_pipelines', 'Pipelines')}</th><th>${t('th_times_used', 'Times used')}</th><th></th>`;
   }
   const tbody = document.getElementById('mu-proj-tbody');
   if (!tbody) return;
@@ -7190,8 +7212,10 @@ function renderMuProjectsTable() {
       <td>${pdf}</td>
       <td class="col-mono">${r.pipelineCount}</td>
       <td class="col-mono">${r.usedCount || `<span class="muted">${t('not_used_yet', 'not used yet')}</span>`}</td>
+      <td class="col-actions">${muDeleteBtn('project', r.id, r.usedCount || r.struckCount
+        ? t('mu_delete_project_blocked', 'Used in a pipe - delete it there first (below)') : '')}</td>
     </tr>`;
-  }).join('') : `<tr class="empty-row"><td colspan="7">${t(rows.length ? 'no_materials_match_filters' : 'no_project_materials_for_material', rows.length ? 'No materials match these filters.' : 'This material has not been added to any project yet.')}</td></tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="8">${t(rows.length ? 'no_materials_match_filters' : 'no_project_materials_for_material', rows.length ? 'No materials match these filters.' : 'This material has not been added to any project yet.')}</td></tr>`;
 }
 
 function setMuWazFilter(key, val) {
@@ -7413,7 +7437,8 @@ function renderMaterialUsagePage() {
       <td>${m.wazNo ? `<button class="doc-chip doc-weld" onclick="showWaz(${m.id})" title="View WAZ PDF">${escapeHtml(m.wazNo)}</button>` : '<span class="muted">—</span>'}</td>
       <td>${escapeHtml(m.certificate) || '<span class="muted">—</span>'}</td>
       <td class="col-mono">${escapeHtml(m.heatNo) || '<span class="muted">—</span>'}</td>
-      <td class="col-actions"><a class="btn-link" href="material-detail.html?id=${m.id}">Detail</a></td>
+      <td class="col-actions"><a class="btn-link" href="material-detail.html?id=${m.id}">Detail</a>${muDeleteBtn('pipe', m.id, m.locked
+        ? t('mu_delete_pipe_blocked', 'A welder or inspector is assigned to a weld of it - part of the welding record, it cannot be deleted') : '')}</td>
     </tr>`;
   }).join('') : '<tr class="empty-row"><td colspan="8">' + t('no_materials_match_filters', 'No materials match these filters.') + '</td></tr>';
 }
@@ -7489,7 +7514,7 @@ function certRow(cert, includeWelder) {
   return `<tr>${wc}
     <td class="col-mono">${escapeHtml(cert.certNo)}</td><td class="col-mono">${escapeHtml(cert.process)}</td><td>${escapeHtml(cert.standard)}</td>
     <td><div class="valid-cell"><span>${cert.validUntil ? formatDate(cert.validUntil) : '—'}</span>${cert.validUntil ? certStatusPill(cert) : ''}</div></td>
-    <td>${cert.renewalDue ? formatDate(cert.renewalDue) : '—'}</td>
+    <td><div class="valid-cell"><span>${cert.renewalDue ? formatDate(cert.renewalDue) : '—'}</span>${cert.renewalDue ? certStatusPill(cert, verificationStatus) : ''}</div></td>
     <td>${cert.pdfUrl ? `<a class="doc-chip doc-iso" href="${escapeHtml(cert.pdfUrl)}" target="_blank" rel="noopener">PDF</a>` : '<span class="muted">—</span>'}</td>
     <td>${signHtml}</td>
     <td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="openCertEditModal(${cert.id})" data-i18n="edit">${t('edit', 'Edit')}</button><button class="btn btn-ghost btn-sm" onclick="openRenewModal(${cert.id})" data-i18n="renew">${t('renew', 'Renew')}</button></td></tr>`;
@@ -7639,12 +7664,16 @@ function renderWelderProfile() {
 }
 
 /* ================================================================ SHARED: pipelines table for dashboards ================================================================ */
-function homePipelineTable(list, emptyMsg) {
+function homePipelineTable(list, emptyMsg, opts = {}) {
   const rows = list.map(pl => {
     const pr = getProject(pl.projectId), cli = pr ? getClient(pr.clientId) : null;
+    /* On the project's own page the project is plain text - a link would open the same page */
+    const projCell = !pr ? '<span class="muted">—</span>'
+      : opts.projectLink === false ? escapeHtml(pr.title)
+      : `<a class="cell-link" href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a>`;
     return `<tr>
       <td><a class="pipe-no" href="pipeline-detail.html?id=${pl.id}">${escapeHtml(pl.no)}</a></td>
-      <td>${pr ? `<a class="cell-link" href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a>` : '<span class="muted">—</span>'}</td>
+      <td>${projCell}</td>
       <td>${cli ? escapeHtml(cli.name) : '<span class="muted">—</span>'}</td>
       <td>${statusPill(pl.status)}</td>
       <td>${docCell(pl)}</td>
@@ -8618,7 +8647,7 @@ function renderProjectDetail() {
   const pls = projectPipelines(pr.id); const by = s => pls.filter(p => p.status === s).length;
   document.getElementById('project-stats').innerHTML = tile(pls.length, t('total_pipelines', 'Pipelines'), '') + tile(pls.filter(p => p.status < 5).length, t('in_progress', 'In progress'), 't-copper') + tile(by(5), t('exported', 'Exported'), 't-success');
   document.getElementById('project-toolbar').innerHTML = `<h2>${t('pipelines', 'Pipelines')}</h2><div style="display:flex;gap:8px;"><a class="btn btn-ghost btn-sm" href="archive.html?tab=pipelines"><svg viewBox="0 0 24 24" width="14" height="14" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> ${t('archive', 'Archive')}</a><button class="btn btn-primary btn-sm" onclick="openPipelineModal()">${t('new_pipeline', '+ New pipeline')}</button></div>`;
-  document.getElementById('project-pipelines').innerHTML = homePipelineTable(pls, t('no_pipelines_in_project', 'No pipelines in this project yet.'));
+  document.getElementById('project-pipelines').innerHTML = homePipelineTable(pls, t('no_pipelines_in_project', 'No pipelines in this project yet.'), { projectLink: false });
   renderProjectMaterialsTable();
 }
 

@@ -769,7 +769,22 @@ def get_material_usage_page():
             "endOfPlumbing": bool(r.end_of_plumbing), "archived": bool(r.archived),
             "projectMaterialId": r.project_material_id,
             "globalMaterialId": r.global_material_id,
+            "locked": False,              # set below
         })
+
+    # Locked (Delete greyed out): a weld of it has a welder or inspector, or was struck
+    ids = [m["id"] for m in materials_list]
+    locked_ids = set()
+    for i in range(0, len(ids), 900):
+        part = ",".join(str(int(x)) for x in ids[i:i + 900])
+        for a, b in db.session.execute(db.text(f"""
+                SELECT material_a_id, material_b_id FROM weldoc_welds
+                WHERE (material_a_id IN ({part}) OR material_b_id IN ({part}))
+                  AND (struck = 1 OR (archived = 0 AND (welder_id IS NOT NULL OR inspector_id IS NOT NULL)))
+                """)).fetchall():
+            locked_ids.update(x for x in (a, b) if x)
+    for m in materials_list:
+        m["locked"] = m["id"] in locked_ids
 
     # The global material this page is about, for "Add to project". Resolved from the
     # explicit id when the link carries one, otherwise from the project material, the
@@ -822,7 +837,9 @@ def get_material_usage_page():
     pm_rows = db.session.execute(db.text(f"""
         SELECT proj.id, proj.project_id, proj.heat_no, proj.certificate, proj.waz_pdf_url,
                pr.title AS project_title, pr.ist_project_no, pr.client_id, c.name AS client_name,
-               COUNT(plm.id) AS used_count, COUNT(DISTINCT plm.pipeline_id) AS pipeline_count
+               COUNT(plm.id) AS used_count, COUNT(DISTINCT plm.pipeline_id) AS pipeline_count,
+               (SELECT COUNT(*) FROM weldoc_pipeline_materials s
+                WHERE s.project_material_id = proj.id AND s.struck = 1) AS struck_count
         FROM weldoc_project_materials proj
         LEFT JOIN weldoc_projects pr ON pr.id = proj.project_id
         LEFT JOIN weldoc_clients c ON c.id = pr.client_id
@@ -838,6 +855,7 @@ def get_material_usage_page():
         "heatNo": r.heat_no or "", "certificate": r.certificate or "",
         "hasWaz": bool(r.waz_pdf_url), "usedCount": int(r.used_count or 0),
         "pipelineCount": int(r.pipeline_count or 0),
+        "struckCount": int(r.struck_count or 0),
     } for r in pm_rows), key=lambda x: (x["projectTitle"].lower(), x["heatNo"].lower(), x["certificate"]))
 
     if pm_id:

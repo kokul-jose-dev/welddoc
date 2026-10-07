@@ -383,6 +383,41 @@ def archive_project_material(pm_id):
     return jsonify(_serialize(m)), 200
 
 
+@project_materials_bp.route("/<int:pm_id>/delete", methods=["POST"])
+def delete_project_material(pm_id):
+    """Delete a wrong material from its project for good (Delete on the material usage page).
+
+    Only when no pipe uses it any more (delete it there first). Rows left over from archiving
+    it in a pipe before welding go with it; a struck-through one (after welding) is part of the
+    welding record and blocks the delete. Afterwards the material can be deleted from Global.
+    """
+    from app.models.pipeline_material import PipelineMaterial
+    from app.routes.pipeline_materials import _purge_pipeline_material
+    from app.global_waz import waz_file_name, after_removed
+
+    m = ProjectMaterial.query.get_or_404(pm_id)
+    refs = PipelineMaterial.query.filter_by(project_material_id=pm_id).all()
+    blocking = [r for r in refs if not r.archived or r.struck]
+    if blocking:
+        uses = _pipelines_using(pm_id)
+        names = sorted({u["pipelineNo"] for u in uses if u["pipelineNo"]})
+        return jsonify({
+            "error": "material_in_use",
+            "usedCount": len(blocking),
+            "pipelines": names,
+            "message": "This material cannot be deleted: it is still used in "
+                       f"{len(blocking)} place(s) in pipe(s) {', '.join(names) or '(struck through after welding)'}.",
+        }), 409
+    name = waz_file_name(m) if m.waz_pdf_url else None
+    _delete_project_waz_file(m)         # its WAZ PDF in the project folder (unless shared)
+    for r in refs:                      # archived leftovers in pipes
+        _purge_pipeline_material(r)
+    db.session.delete(m)
+    db.session.commit()
+    after_removed(name)                 # and its global WAZ copy, when nothing else uses that file
+    return jsonify({"ok": True}), 200
+
+
 @project_materials_bp.route("/<int:pm_id>/upload-waz", methods=["POST"])
 def upload_waz(pm_id):
     """Upload a WAZ PDF document to SharePoint for a project material."""
@@ -443,14 +478,12 @@ def upload_waz(pm_id):
         return jsonify({"error": "Failed to upload to SharePoint"}), 500
 
 
-@project_materials_bp.route("/<int:pm_id>/delete-waz", methods=["POST"])
-def delete_waz(pm_id):
-    """Delete WAZ document from SharePoint and clear the URL."""
+def _delete_project_waz_file(m):
+    """Delete m's WAZ PDF from the project's WAZ folder in SharePoint - unless another project
+    material still points at the same file. Best effort: a failure is logged, never raised."""
     from app.sharepoint import _get_app_token, _ssl_context, _sanitize_name, GRAPH_BASE
     import urllib.parse
     import json
-
-    m = ProjectMaterial.query.get_or_404(pm_id)
 
     # Try to delete from SharePoint using the project's saved folder - unless another project
     # material still points at the same file (a restore or a copy can share it)
@@ -484,6 +517,14 @@ def delete_waz(pm_id):
                 current_app.logger.info(f"SharePoint: Deleted WAZ document '{file_name}'")
         except Exception as e:
             current_app.logger.error(f"SharePoint delete failed: {e}")
+
+
+
+@project_materials_bp.route("/<int:pm_id>/delete-waz", methods=["POST"])
+def delete_waz(pm_id):
+    """Delete WAZ document from SharePoint and clear the URL."""
+    m = ProjectMaterial.query.get_or_404(pm_id)
+    _delete_project_waz_file(m)
 
     from app.global_waz import waz_file_name, after_removed
     removed_name = waz_file_name(m) if m.waz_pdf_url else None

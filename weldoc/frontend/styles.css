@@ -1,10 +1,10 @@
 :root {
   --ink:#1A2B3C; --blueprint:#3E6690; --blueprint-light:#8FB4D9; --blueprint-soft:rgba(62,102,144,0.14);
   /* Accent (buttons, active tab, focus): IST red (2026-10-06, was orange #A85D2C). */
-  --copper:#AE071E; --copper-hover:#8A0518; --copper-soft:rgba(174,7,30,0.08); --copper-ink:#8A0518;
+  --copper:#A6192E; --copper-hover:#861425; --copper-soft:rgba(166,25,46,0.08); --copper-ink:#861425;
   /* Warnings and status indications keep the orange. */
   --warn:#A85D2C; --warn-soft:rgba(168,93,44,0.12); --warn-ink:#7A431F;
-  --ist-red:#AE071E;
+  --ist-red:#A6192E;   /* official IST red (istinox.ch logo) */
   --bg:#EEF1F3; --surface:#FFFFFF; --border:#D9DFE5; --text:#202A33; --text-muted:#64748B;
   --danger:#A83232; --danger-hover:#8A2828; --danger-soft:rgba(168,50,50,0.10);
   --success:#2F7D52; --success-soft:rgba(47,125,82,0.12);
@@ -22,8 +22,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .accent-bar{position:fixed;top:0;left:0;right:0;height:4px;background:var(--ink);z-index:60;}
 .topbar{position:fixed;top:4px;left:0;right:0;height:var(--topbar-h);background:var(--ist-red);color:#fff;padding:0 24px;display:flex;align-items:center;gap:20px;z-index:55;}
 .brand{display:flex;align-items:center;gap:10px;text-decoration:none;}
-.brand-logo{display:inline-flex;align-items:center;background:#fff;border-radius:4px;padding:3px 6px;flex-shrink:0;}
-.brand-logo img{height:26px;width:auto;display:block;}
+/* IST logo - the same image as in the documents (ist-logo-print.png, official logo from
+   istinox.ch) on its white background */
+.brand-logo{display:inline-flex;align-items:center;flex-shrink:0;background:#fff;border-radius:3px;padding:3px 6px;}
+.brand-logo img{height:28px;width:auto;display:block;}
 .brand-text{display:flex;flex-direction:column;line-height:1.15;}
 .brand-name{font-family:var(--mono);font-weight:700;font-size:0.95rem;letter-spacing:0.12em;color:#fff;}
 .brand-tagline{font-size:0.62rem;letter-spacing:0.1em;color:rgba(255,255,255,0.78);text-transform:uppercase;}
@@ -143,6 +145,8 @@ tbody tr.clickable-row{cursor:pointer;}
 @keyframes doc-spin{to{transform:rotate(360deg);}}
 .doc-iso{color:var(--blueprint);} .doc-iso:hover{background:var(--blueprint-soft);border-color:var(--blueprint-light);}
 .doc-weld{color:var(--copper-ink);} .doc-weld:hover{background:var(--copper-soft);border-color:#C9D2DB;}
+/* Delete on the material usage page */
+.btn-delete-mu{color:var(--danger);margin-left:10px;} .btn-delete-mu:disabled{color:#B8C0C8;cursor:not-allowed;text-decoration:none;}
 /* Documents column: the welder document chip and the "+" to upload the ISO are grey */
 .doc-builder{color:#4B5563;} .doc-builder:hover{background:#F1F3F5;border-color:#C9D2DB;}
 .btn-doc-add{background:#6B7280;color:#fff;} .btn-doc-add:hover{background:#4B5563;}
@@ -278,7 +282,7 @@ tr.row-selected>td{background:var(--copper-soft,rgba(176,106,52,0.08));}
 .workflow-step{display:flex;align-items:center;gap:8px;font-size:0.82rem;color:var(--text-muted);}
 .workflow-step .step-dot{width:20px;height:20px;border-radius:50%;background:#E4E9ED;color:#8695A3;display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0;}
 .workflow-step.done .step-dot{background:var(--success);color:#fff;}
-.workflow-step.current .step-dot{background:var(--copper);color:#fff;}
+.workflow-step.current .step-dot{background:#6B7280;color:#fff;}
 .workflow-step.done{color:var(--text);}
 .workflow-arrow{color:#C2CAD3;}
 .mark-done-bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:16px;padding:14px 18px;background:#F5F7F9;border:1px solid var(--border);border-radius:var(--radius);}

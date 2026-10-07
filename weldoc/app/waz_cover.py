@@ -7,7 +7,8 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import HexColor
 
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "image.png")
+# Official IST logo (istinox.ch), rendered large for print from frontend/ist-logo.svg
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "ist-logo-print.png")
 GREY = HexColor("#666666")
 BLACK = HexColor("#000000")
 
