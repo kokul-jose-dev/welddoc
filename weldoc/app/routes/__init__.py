@@ -28,7 +28,11 @@ def register_routes(app):
     app.register_blueprint(users_bp, url_prefix="/api/users")
     app.register_blueprint(builder_doc_bp, url_prefix="/api/pipelines")
     app.register_blueprint(export_bp, url_prefix="/api/pipelines")
-    app.register_blueprint(event_log_bp, url_prefix="/api/event-log")
+    # Served as /api/history: ad blockers and privacy filters block addresses with "event-log"
+    # in them, so the event log page stayed empty for users with such an extension (2026-10-07).
+    # The old address still answers, for a browser tab opened before the change.
+    app.register_blueprint(event_log_bp, url_prefix="/api/history")
+    app.register_blueprint(event_log_bp, url_prefix="/api/event-log", name="event_log_old")
     app.register_blueprint(welders_bp, url_prefix="/api/welders")
     app.register_blueprint(wps_processes_bp, url_prefix="/api/wps-processes")
     app.register_blueprint(dropdown_values_bp, url_prefix="/api/dropdown-hidden")

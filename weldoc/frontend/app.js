@@ -1673,7 +1673,8 @@ async function elLoad(append) {
   const list = document.getElementById('el-list');
   let data;
   try {
-    const r = await fetch(`${API_BASE}/event-log?${elQuery({ limit: 200, offset: EL_STATE.offset })}`);
+    /* /history, not /event-log: ad blockers block addresses with "event-log" in them */
+    const r = await fetch(`${API_BASE}/history?${elQuery({ limit: 200, offset: EL_STATE.offset })}`);
     if (r.status === 403) {
       list.innerHTML = `<div class="el-empty">${t('el_sign_in', 'Please sign in to see the event log.')}</div>`;
       ['el-filters', 'el-export', 'el-more', 'el-refresh'].forEach(id => { const x = document.getElementById(id); if (x) x.style.display = 'none'; });
@@ -1714,7 +1715,7 @@ async function initEventLogPage() {
   ['el-cat', 'el-from', 'el-to'].forEach(id => document.getElementById(id).addEventListener('change', reload));
   document.getElementById('el-more').addEventListener('click', () => elLoad(true));
   document.getElementById('el-refresh').addEventListener('click', () => elLoad(false));
-  document.getElementById('el-export').addEventListener('click', () => { location.href = `${API_BASE}/event-log/export?${elQuery()}`; });
+  document.getElementById('el-export').addEventListener('click', () => { location.href = `${API_BASE}/history/export?${elQuery()}`; });
   if (typeof translatePage === 'function') translatePage();
   elLoad(false);
 }
