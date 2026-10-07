@@ -145,6 +145,10 @@ tbody tr.clickable-row{cursor:pointer;}
 @keyframes doc-spin{to{transform:rotate(360deg);}}
 .doc-iso{color:var(--blueprint);} .doc-iso:hover{background:var(--blueprint-soft);border-color:var(--blueprint-light);}
 .doc-weld{color:var(--copper-ink);} .doc-weld:hover{background:var(--copper-soft);border-color:#C9D2DB;}
+/* Pager under a paged table (Materials list) */
+.pager{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin:12px 0 4px;font-size:0.85rem;color:var(--text-muted);flex-wrap:wrap;}
+.pager-size select{margin-left:6px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface);}
+.pager .btn[disabled]{opacity:0.45;cursor:not-allowed;}
 /* Delete on the material usage page */
 .btn-delete-mu{color:var(--danger);margin-left:10px;} .btn-delete-mu:disabled{color:#B8C0C8;cursor:not-allowed;text-decoration:none;}
 /* Documents column: the welder document chip and the "+" to upload the ISO are grey */

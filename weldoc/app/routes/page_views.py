@@ -555,6 +555,203 @@ def get_materials_page():
     })
 
 
+MAT_PAGE_SIZE = 100
+
+# Column filters of the Materials list: (query key, model column, row field)
+_MAT_COLS = [("piece", "category", "piece"), ("dn1", "dn1", "dimension")] + [
+    (f"dn{i}", f"dn{i}", f"dimension{i}") for i in range(2, 7)] + [
+    ("dien", "dien_no", "dienNo"), ("diameter", "diameter", "diameter"), ("diameter2", "diameter2", "diameter2"),
+    ("diameter3", "diameter3", "diameter3"), ("thickness", "thickness", "thickness"),
+    ("thickness2", "thickness2", "thickness2"), ("thickness3", "thickness3", "thickness3"),
+    ("code", "material_code", "materialCode")]
+
+
+def _mat_list_query(with_columns=True):
+    """The filtered Materials list as a query, filtered in the database.
+
+    Values arrive in display form ("DN 15", "2.0 mm"); comparing through the model's columns
+    turns them into what is stored. Returns (query, project ids in scope or None)."""
+    from sqlalchemy import exists, and_
+    from app.models.global_material import GlobalMaterial as GM
+    from app.models.project_material import ProjectMaterial as PM
+    from app.models.pipeline_material import PipelineMaterial as PLM
+    from app.models.project import Project
+    a = request.args
+    project_id, client_id = a.get("projectId", type=int), a.get("clientId", type=int)
+    pids = None
+    if project_id:
+        pids = [project_id]
+    elif client_id:
+        pids = [p.id for p in Project.query.filter_by(client_id=client_id, archived=False).all()] or [-1]
+
+    q = GM.query.filter(GM.archived == False)  # noqa: E712
+    if pids is not None:
+        q = q.filter(exists().where(and_(PM.global_material_id == GM.id, PM.archived == False,  # noqa: E712
+                                         PM.project_id.in_(pids))))
+    if with_columns:
+        for key, col, _f in _MAT_COLS:
+            if a.get(key):
+                q = q.filter(getattr(GM, col) == a.get(key))
+        if a.get("heat"):
+            cond = [PM.global_material_id == GM.id, PM.heat_no == a.get("heat"), PM.archived == False,  # noqa: E712
+                    PLM.project_material_id == PM.id, PLM.archived == False]  # noqa: E712
+            if pids is not None:
+                cond.append(PM.project_id.in_(pids))
+            q = q.filter(exists().where(and_(*cond)))
+    return q, pids
+
+
+def _uses_sql(pids):
+    return "" if pids is None else " AND pl.project_id IN (" + ",".join(str(int(x)) for x in pids) + ")"
+
+
+@page_views_bp.route("/materials-list", methods=["GET"])
+def get_materials_list_page():
+    """The Materials list, 100 rows at a time - the database returns only those rows
+    (ORDER BY ... OFFSET ... FETCH). Heat chips and counts are worked out for those 100 only.
+    The totals for the tiles and the dropdown choices come from /materials-list/summary,
+    which the page loads in the background.
+
+    Query: page, clientId, projectId, piece, dn1..dn6, dien, diameter, diameter2, diameter3,
+    thickness, thickness2, thickness3, code, heat - all optional.
+    """
+    from sqlalchemy import func, case
+    from app.models.global_material import GlobalMaterial as GM
+    q, pids = _mat_list_query()
+    total = q.order_by(None).count()
+    pages = max(1, -(-total // MAT_PAGE_SIZE))
+    page = min(max(request.args.get("page", 1, type=int), 1), pages)
+
+    # How many DN / diameter / thickness columns the filtered list needs (same on every page)
+    has = lambda col: func.max(case((col.isnot(None), 1), else_=0))
+    flags = q.order_by(None).with_entities(*[has(getattr(GM, f"dn{i}")) for i in range(2, 7)],
+                                           has(GM.diameter2), has(GM.diameter3),
+                                           has(GM.thickness2), has(GM.thickness3)).one()
+    flags = [bool(x) for x in flags]
+    max_dn = max([1] + [i + 2 for i, f in enumerate(flags[:5]) if f])
+    max_dia = 3 if flags[6] else 2 if flags[5] else 1
+    max_thk = 3 if flags[8] else 2 if flags[7] else 1
+
+    gms = q.order_by(GM.category, GM.item_description, GM.id).offset((page - 1) * MAT_PAGE_SIZE).limit(MAT_PAGE_SIZE).all()
+    ids = [g.id for g in gms]
+    counts, uses = {}, {}
+    if ids:
+        id_list = ",".join(str(int(i)) for i in ids)
+        for r in db.session.execute(db.text(f"""
+                SELECT global_material_id, COUNT(*) AS ref_count,
+                       SUM(CASE WHEN archived = 1 THEN 1 ELSE 0 END) AS archived_ref_count,
+                       COUNT(DISTINCT project_id) AS project_count
+                FROM weldoc_project_materials WHERE global_material_id IN ({id_list})
+                GROUP BY global_material_id""")).fetchall():
+            counts[r.global_material_id] = r
+        for r in db.session.execute(db.text(f"""
+                SELECT prm.global_material_id, prm.id AS pm_id, prm.heat_no, prm.waz_pdf_url, pl.project_id
+                FROM weldoc_pipeline_materials pm
+                JOIN weldoc_project_materials prm ON prm.id = pm.project_material_id
+                JOIN weldoc_pipelines pl ON pl.id = pm.pipeline_id
+                WHERE pm.archived = 0 AND pl.archived = 0 AND prm.global_material_id IN ({id_list})""")).fetchall():
+            uses.setdefault(r.global_material_id, []).append(r)
+        all_uses = {}       # every active pipeline use (Delete button), not only those in scope
+        for r in db.session.execute(db.text(f"""
+                SELECT prm.global_material_id, COUNT(*) AS n
+                FROM weldoc_pipeline_materials pm JOIN weldoc_project_materials prm ON prm.id = pm.project_material_id
+                WHERE pm.archived = 0 AND prm.global_material_id IN ({id_list})
+                GROUP BY prm.global_material_id""")).fetchall():
+            all_uses[r.global_material_id] = r.n
+    else:
+        all_uses = {}
+    in_scope = (lambda u: True) if pids is None else (lambda u: u.project_id in pids)
+
+    def row_of(g):
+        mine = [u for u in uses.get(g.id, []) if in_scope(u)]
+        heats = {}
+        for u in mine:
+            h = (u.heat_no or "").strip()
+            if h:
+                e = heats.setdefault(h, {"heatNo": h, "pmId": None})
+                if not e["pmId"] and u.waz_pdf_url:
+                    e["pmId"] = u.pm_id
+        c = counts.get(g.id)
+        return {
+            "id": g.id, "piece": g.category or "", "itemDescription": g.item_description or g.category or "",
+            **{("dimension" if i == 1 else f"dimension{i}"): getattr(g, f"dn{i}") or "" for i in range(1, 7)},
+            "dienNo": g.dien_no or "", "surface": g.surface or "", "materialCode": g.material_code or "",
+            "diameter": g.diameter or "", "diameter2": g.diameter2 or "", "diameter3": g.diameter3 or "",
+            "thickness": g.thickness or "", "thickness2": g.thickness2 or "", "thickness3": g.thickness3 or "",
+            "heatEntries": sorted(heats.values(), key=lambda e: _natural(e["heatNo"])),
+            "totalCount": len(mine),
+            "refCount": c.ref_count if c else 0, "archivedRefCount": (c.archived_ref_count or 0) if c else 0,
+            "projectCount": (c.project_count or 0) if c else 0, "pipelineUseCount": all_uses.get(g.id, 0),
+        }
+
+    return jsonify({
+        "rows": [row_of(g) for g in gms],
+        "total": total, "page": page, "pages": pages, "size": MAT_PAGE_SIZE,
+        "maxDn": max_dn, "maxDia": max_dia, "maxThk": max_thk,
+    })
+
+
+@page_views_bp.route("/materials-list/summary", methods=["GET"])
+def get_materials_list_summary():
+    """What the Materials list needs around its rows, loaded by the page in the background:
+    the tile totals for the filtered list, the choices for every column filter (from the
+    client / project scope), the client and project lists, and the certificates in use."""
+    from app.models.global_material import GlobalMaterial as GM
+    q, pids = _mat_list_query()
+    ids = [i for (i,) in q.order_by(None).with_entities(GM.id).all()]     # the filtered list: ids only
+    scope_sql = _uses_sql(pids)
+    total = len(ids)
+    used, heat_set, referenced = 0, set(), set()
+    for i in range(0, len(ids), 900):
+        part = ",".join(str(int(x)) for x in ids[i:i + 900])
+        for r in db.session.execute(db.text(f"""
+                SELECT LTRIM(RTRIM(prm.heat_no)) AS heat, COUNT(*) AS n
+                FROM weldoc_pipeline_materials pm
+                JOIN weldoc_project_materials prm ON prm.id = pm.project_material_id
+                JOIN weldoc_pipelines pl ON pl.id = pm.pipeline_id
+                WHERE pm.archived = 0 AND pl.archived = 0{scope_sql} AND prm.global_material_id IN ({part})
+                GROUP BY LTRIM(RTRIM(prm.heat_no))""")).fetchall():
+            used += r.n
+            if r.heat:
+                heat_set.add(r.heat)
+        referenced.update(x for (x,) in db.session.execute(db.text(
+            f"SELECT DISTINCT global_material_id FROM weldoc_project_materials WHERE global_material_id IN ({part})")).fetchall())
+    unused = total - len(referenced)
+
+    # Dropdown choices: from the scope (client / project), not narrowed by the column filters
+    scope_q, _ = _mat_list_query(with_columns=False)
+    opts = {k: set() for k, _c, _f in _MAT_COLS}
+    for g in scope_q.with_entities(*[getattr(GM, c) for _k, c, _f in _MAT_COLS]).all():
+        for (k, _c, _f), v in zip(_MAT_COLS, g):
+            if v not in (None, ""):
+                opts[k].add(v)
+    heats = [r[0] for r in db.session.execute(db.text(f"""
+        SELECT DISTINCT LTRIM(RTRIM(prm.heat_no))
+        FROM weldoc_pipeline_materials pm
+        JOIN weldoc_project_materials prm ON prm.id = pm.project_material_id
+        JOIN weldoc_pipelines pl ON pl.id = pm.pipeline_id
+        WHERE pm.archived = 0 AND pl.archived = 0 AND prm.heat_no IS NOT NULL{scope_sql}""")).fetchall() if r[0]]
+    clients = db.session.execute(db.text("SELECT id, name FROM weldoc_clients WHERE archived = 0 ORDER BY name")).fetchall()
+    projects = db.session.execute(db.text(
+        "SELECT id, client_id, title, ist_project_no FROM weldoc_projects WHERE archived = 0 ORDER BY id DESC")).fetchall()
+    certs = spec_rows(db.session.execute(db.text(
+        "SELECT DISTINCT certificate FROM weldoc_project_materials WHERE certificate IS NOT NULL")).fetchall())
+    return jsonify({
+        "stats": {"unique": total, "totalUsed": used, "heatNumbers": len(heat_set), "unused": unused},
+        "options": {**{k: sorted(v, key=_natural) for k, v in opts.items()}, "heat": sorted(set(heats), key=_natural)},
+        "clients": [{"id": c.id, "name": c.name or ""} for c in clients],
+        "projects": [{"id": p.id, "clientId": p.client_id, "title": p.title or "", "istProjectNo": p.ist_project_no or ""}
+                     for p in projects],
+        "certificates": sorted({str(c.certificate) for c in certs if c.certificate}, key=_natural),
+    })
+
+
+def _natural(v):
+    """Sort key: numbers by value ("DN 8" before "DN 15"), the rest as text."""
+    import re
+    return [int(x) if x.isdigit() else x.lower() for x in re.split(r"(\d+)", str(v or ""))]
+
+
 @page_views_bp.route("/archive", methods=["GET"])
 def get_archive_page():
     """Single fast SQL round-trip for the Archive page."""

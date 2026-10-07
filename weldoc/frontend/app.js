@@ -7802,7 +7802,7 @@ function renderWazPage() {
 }
 
 /* ================================================================ MATERIALS PAGE (all pipelines) ================================================================ */
-let matFilters = { clientId: '', projectId: '', piece: '', dn: '', dien: '', diameter: '', thickness: '', code: '', heat: '' };
+let matFilters = { clientId: '', projectId: '', piece: '', dn: '', dn2: '', dn3: '', dn4: '', dn5: '', dn6: '', dien: '', diameter: '', diameter2: '', diameter3: '', thickness: '', thickness2: '', thickness3: '', code: '', heat: '' };
 function updateMaterialsCrumb() {
   return t('materials', 'Materials');
 }
@@ -7813,19 +7813,13 @@ async function initMaterialsPage() {
   if (projectParam) matFilters.projectId = projectParam;
   PAGE.clientId = null;
   PAGE.projectId = null;
-  renderChrome('materials', t('materials', 'Materials')); mountModals(); wireModalDismiss(); buildMatClientProjectFilters(); renderMaterialsPage();
-
+  renderChrome('materials', t('materials', 'Materials')); mountModals(); wireModalDismiss(); buildMatClientProjectFilters();
+  MAT_PAGE.page = 1;
+  renderMaterialsPage();                       /* the table: one page from the server */
+  /* The whole catalogue (specifications only) for the edit / add-to-project dialogs */
   try {
-    const data = await apiGet('/page/materials');
-    DB.clients = data.clients || [];
-    DB.projects = normalizeProjects(data.projects || []);
-    DB.pipelines = data.pipelines || [];
-    DB.materials = normalizeMaterials(data.materials || []);
-    DB.globalMaterials = data.globalMaterials || [];
+    DB.globalMaterials = await apiGet('/global-materials') || [];
     DB.globalMaterialCount = DB.globalMaterials.length;
-    renderChrome('materials', t('materials', 'Materials'));
-    buildMatClientProjectFilters();
-    renderMaterialsPage();
   } catch (e) { console.error('API error:', e); }
 }
 function buildMatClientProjectFilters() {
@@ -7864,6 +7858,7 @@ function toggleColFilter(th, e) {
 }
 function setMatFilter(key, val) {
   matFilters[key] = val;
+  MAT_PAGE.page = 1;
   document.querySelectorAll('.col-filter.open').forEach(el => el.classList.remove('open'));
   renderMaterialsPage();
 }
@@ -7882,6 +7877,7 @@ function onMaterialsFilterChange() {
   if (prjEl) {
     matFilters.projectId = prjEl.value;
   }
+  MAT_PAGE.page = 1;
   buildMatClientProjectFilters();
   renderChrome('materials', t('materials', 'Materials'));
   renderMaterialsPage();
@@ -7913,12 +7909,8 @@ function gmDeleteBtn(g) {
 }
 async function reloadMaterialsPageData() {
   try {
-    const data = await apiGet('/page/materials');
-    if (data && data.materials) DB.materials = normalizeMaterials(data.materials);
-    if (data && data.globalMaterials) {
-      DB.globalMaterials = data.globalMaterials;
-      DB.globalMaterialCount = DB.globalMaterials.length;
-    }
+    DB.globalMaterials = await apiGet('/global-materials') || [];
+    DB.globalMaterialCount = DB.globalMaterials.length;
   } catch (e) { console.error('API error:', e); }
 }
 async function deleteGlobalMaterial(gmId) {
@@ -8043,7 +8035,7 @@ async function openAddToProjectModal(gm, onDone, presetProjectId) {
   const heats = [...new Set(_atpExisting.map(x => (x.heatNo || '').trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const ownCerts = _atpExisting.map(x => (x.certificate || '').trim()).filter(Boolean);
-  const usedCerts = (DB.materials || []).map(m => (m.certificate || '').trim()).filter(Boolean);
+  const usedCerts = DB.knownCertificates || (DB.materials || []).map(m => (m.certificate || '').trim()).filter(Boolean);
   const certs = [...new Set([...ownCerts, ...usedCerts])].sort();
   buildSelectOther('atp-heat', 'atp-heat-new', heats, '');
   buildSelectOther('atp-cert', 'atp-cert-new', certs, '');
@@ -8140,130 +8132,74 @@ async function submitAddToProject(e) {
     setButtonLoading(btn, false);
   }
 }
-function renderMaterialsPage() {
-  // 1. Pipeline uses in scope of the Client / Project filters - they supply the heat
-  //    chips and the "Total used" count
-  const scopedMats = materials().filter(m => {
-    const pl = getPipeline(m.pipelineId);
-    if (matFilters.projectId && (!pl || pl.projectId !== Number(matFilters.projectId))) return false;
-    if (matFilters.clientId) {
-      if (!pl) return false;
-      const pr = getProject(pl.projectId);
-      if (!pr || pr.clientId !== Number(matFilters.clientId)) return false;
-    }
-    return true;
-  });
-  const usesByGm = new Map();
-  scopedMats.forEach(m => {
-    if (!m.globalMaterialId) return;
-    if (!usesByGm.has(m.globalMaterialId)) usesByGm.set(m.globalMaterialId, []);
-    usesByGm.get(m.globalMaterialId).push(m);
-  });
-
-  // 2. One row per active global material. Built from the global list rather than from
-  //    the pipeline rows, so a material that is only in a project, or not used at all,
-  //    is listed too - those are the ones that can be deleted.
-  const inScope = gm => {
-    if (!matFilters.projectId && !matFilters.clientId) return true;
-    if (usesByGm.has(gm.id)) return true;
-    const pids = gm.projectIds || [];
-    if (matFilters.projectId) return pids.includes(Number(matFilters.projectId));
-    return pids.some(pid => {
-      const pr = getProject(pid);
-      return pr && pr.clientId === Number(matFilters.clientId);
-    });
-  };
-  const allGroups = (DB.globalMaterials || []).filter(gm => !gm.archived && inScope(gm)).map(gm => {
-    const uses = usesByGm.get(gm.id) || [];
-    const heatEntries = [];
-    uses.forEach(m => {
-      const known = m.heatNo && heatEntries.find(h => h.heatNo === m.heatNo);
-      if (m.heatNo && !known) {
-        heatEntries.push({ heatNo: m.heatNo, matId: m.id, pmId: m.wazPdfUrl ? m.projectMaterialId : null, wazPdfUrl: m.wazPdfUrl || m.wazPackageUrl || '' });
-      } else if (known && !known.pmId && m.wazPdfUrl) {
-        known.pmId = m.projectMaterialId;     /* another use of this heat has the certificate */
-      }
-    });
-    return {
-      id: gm.id,
-      piece: gm.category || '',
-      itemDescription: gm.itemDescription || gm.category || '',
-      dimension: gm.dn1 || '',
-      dimension2: gm.dn2 || '',
-      dimension3: gm.dn3 || '',
-      dimension4: gm.dn4 || '',
-      dimension5: gm.dn5 || '',
-      dimension6: gm.dn6 || '',
-      dienNo: gm.dienNo || '',
-      diameter: gm.diameter || '',
-      diameter2: gm.diameter2 || '',
-      diameter3: gm.diameter3 || '',
-      thickness: gm.thickness || '',
-      thickness2: gm.thickness2 || '',
-      thickness3: gm.thickness3 || '',
-      surface: gm.surface || '',
-      materialCode: gm.materialCode || '',
-      heatEntries,
-      totalCount: uses.length,
-      refCount: gm.refCount,
-      archivedRefCount: gm.archivedRefCount || 0,
-      projectCount: gm.projectCount || 0,
-      pipelineUseCount: gm.pipelineUseCount || 0
-    };
-  });
-  // Sort Heat entries for each material group
-  allGroups.forEach(g => {
-    g.heatEntries.sort((a, b) => {
-      return a.heatNo.localeCompare(b.heatNo, undefined, { numeric: true, sensitivity: 'base' });
-    });
-  });
-
-  // 3. Apply column-level filters (Category, DN, DIN EN, Diameter, Thickness, Code, Heat)
-  const filteredGroups = allGroups.filter(g => {
-    if (matFilters.piece && g.piece !== matFilters.piece) return false;
-    if (matFilters.dn && g.dimension !== matFilters.dn) return false;
-    if (matFilters.dien && (g.dienNo || '') !== matFilters.dien) return false;
-    if (matFilters.diameter && (g.diameter || '') !== matFilters.diameter) return false;
-    if (matFilters.thickness && (g.thickness || '') !== matFilters.thickness) return false;
-    if (matFilters.code && g.materialCode !== matFilters.code) return false;
-    if (matFilters.heat && !g.heatEntries.some(h => h.heatNo === matFilters.heat)) return false;
-    return true;
-  });
-
-  // 4. Stats
-  const totalUsages = filteredGroups.reduce((acc, g) => acc + g.totalCount, 0);
-  const totalHeatSet = new Set();
-  filteredGroups.forEach(g => g.heatEntries.forEach(h => totalHeatSet.add(h.heatNo)));
+/* The Materials list, 100 rows at a time (2026-10-07). The database returns only the rows of
+   the page, so the table appears at once; the tiles and the dropdown choices follow in the
+   background (/materials-list/summary), and the next page is fetched ahead so "Next" is
+   instant. Pages are kept only while browsing with Previous / Next - any other redraw
+   (a filter, an edit, a delete) asks the server again. */
+const MAT_PAGE = { page: 1, seq: 0, cache: new Map(), summaryKey: null, summary: null, last: null };
+const MAT_COL_KEYS = ['piece', 'dn1', 'dn2', 'dn3', 'dn4', 'dn5', 'dn6', 'dien', 'diameter', 'diameter2', 'diameter3', 'thickness', 'thickness2', 'thickness3', 'code', 'heat'];
+function matQuery(page) {
+  const q = new URLSearchParams();
+  if (page) q.set('page', page);
+  if (matFilters.clientId) q.set('clientId', matFilters.clientId);
+  if (matFilters.projectId) q.set('projectId', matFilters.projectId);
+  MAT_COL_KEYS.forEach(k => { const key = k === 'dn1' ? 'dn' : k; if (matFilters[key]) q.set(k, matFilters[key]); });
+  return q.toString();
+}
+function setMatPage(page) { MAT_PAGE.page = Math.max(1, page); renderMaterialsPage({ browse: true }); }
+async function fetchMatPage(page) {
+  const key = matQuery(page);
+  if (!MAT_PAGE.cache.has(key)) MAT_PAGE.cache.set(key, apiGet('/page/materials-list?' + key).catch(e => { MAT_PAGE.cache.delete(key); throw e; }));
+  return MAT_PAGE.cache.get(key);
+}
+async function renderMaterialsPage(opts = {}) {
+  if (!opts.browse) MAT_PAGE.cache.clear();               /* fresh data unless just turning pages */
+  const seq = ++MAT_PAGE.seq;
+  let data;
+  try { data = await fetchMatPage(MAT_PAGE.page); } catch (e) { console.error('API error:', e); return; }
+  if (seq !== MAT_PAGE.seq || !data) return;               /* a newer request is on its way */
+  MAT_PAGE.page = data.page;
+  MAT_PAGE.last = data;
+  drawMaterialsPage(data);
+  /* in the background: the tiles + dropdown choices (once per filter), then the next page */
+  const sKey = matQuery(0);
+  if (MAT_PAGE.summaryKey !== sKey || !opts.browse) {
+    MAT_PAGE.summaryKey = sKey;
+    apiGet('/page/materials-list/summary?' + sKey).then(sm => {
+      if (MAT_PAGE.summaryKey !== sKey || !sm) return;
+      MAT_PAGE.summary = sm;
+      DB.clients = sm.clients || []; DB.projects = normalizeProjects(sm.projects || []); DB.knownCertificates = sm.certificates || [];
+      buildMatClientProjectFilters();
+      if (MAT_PAGE.last) drawMaterialsPage(MAT_PAGE.last);
+    }).catch(e => console.error('API error:', e));
+  }
+  if (data.page < data.pages) fetchMatPage(data.page + 1).catch(() => { });
+}
+function drawMaterialsPage(data) {
+  const rows = data.rows || [];
+  const sm = MAT_PAGE.summaryKey === matQuery(0) ? MAT_PAGE.summary : null;
+  const st = (sm && sm.stats) || null;
+  const num = v => (st ? v : '…');
   document.getElementById('materials-stats').innerHTML =
-    tile(filteredGroups.length, t('unique_materials', 'Unique materials'), '') +
-    tile(totalUsages, t('total_used', 'Total used'), 't-neutral') +
-    tile(totalHeatSet.size, t('heat_numbers', 'Heat numbers'), 't-success') +
-    tile(filteredGroups.filter(g => g.refCount === 0).length, t('unused_materials', 'Unused'), 't-neutral');
+    tile(num(st && st.unique), t('unique_materials', 'Unique materials'), '') +
+    tile(num(st && st.totalUsed), t('total_used', 'Total used'), 't-neutral') +
+    tile(num(st && st.heatNumbers), t('heat_numbers', 'Heat numbers'), 't-success') +
+    tile(num(st && st.unused), t('unused_materials', 'Unused'), 't-neutral');
 
-  // 5. Max DN, Diameter, Thickness for multi-port pieces. An extra column is only shown
-  // when a listed material actually has a value for it, so the table fits the screen.
-  let maxDn = 1, maxDia = 1, maxThk = 1;
-  filteredGroups.forEach(g => {
-    for (let i = 2; i <= 6; i++) { if (g[`dimension${i}`]) maxDn = Math.max(maxDn, i); }
-    for (let i = 2; i <= 3; i++) { if (g[`diameter${i}`]) maxDia = Math.max(maxDia, i); }
-    for (let i = 2; i <= 3; i++) { if (g[`thickness${i}`]) maxThk = Math.max(maxThk, i); }
-  });
-
-  // 6. Render table rows
+  const maxDn = data.maxDn || 1, maxDia = data.maxDia || 1, maxThk = data.maxThk || 1;
   const tbody = document.getElementById('materials-page-tbody');
-  tbody.innerHTML = filteredGroups.length ? filteredGroups.map((g, idx) => {
+  tbody.innerHTML = rows.length ? rows.map(g => {
     let extraDnCells = '';
     for (let i = 2; i <= maxDn; i++) extraDnCells += `<td class="col-mono">${g[`dimension${i}`] ? escapeHtml(g[`dimension${i}`]) : '<span class="muted">—</span>'}</td>`;
     let extraDiaCells = '';
     for (let i = 2; i <= maxDia; i++) extraDiaCells += `<td class="col-mono">${g[`diameter${i}`] ? fmtDia(g[`diameter${i}`]) : '<span class="muted">—</span>'}</td>`;
     let extraThkCells = '';
     for (let i = 2; i <= maxThk; i++) extraThkCells += `<td class="col-mono">${escapeHtml(g[`thickness${i}`]) || '<span class="muted">—</span>'}</td>`;
-
-    // Every heat number is shown, three per line: the row grows taller as heat numbers are added.
-    const heatChips = g.heatEntries.length
+    /* Every heat number is shown, three per line: the row grows taller as heat numbers are added. */
+    const heatChips = (g.heatEntries || []).length
       ? `<div class="waz-chip-grid">${g.heatEntries.map(heatChipHtml).join('')}</div>`
       : '<span class="muted">—</span>';
-
     return `<tr>
       <td>${escapeHtml(g.piece)}</td>
       <td class="td-mat-desc"><a class="cell-link text-truncate-desc" href="material-usage.html?gm=${g.id}&piece=${encodeURIComponent(g.piece)}&desc=${encodeURIComponent(g.itemDescription)}&dn=${encodeURIComponent(g.dimension)}&dien=${encodeURIComponent(g.dienNo || '')}&dia=${encodeURIComponent(g.diameter || '')}&thk=${encodeURIComponent(g.thickness || '')}&code=${encodeURIComponent(g.materialCode)}" title="${escapeHtml(g.itemDescription)}">${escapeHtml(g.itemDescription)}</a></td>
@@ -8278,31 +8214,36 @@ function renderMaterialsPage() {
     </tr>`;
   }).join('') : `<tr class="empty-row"><td colspan="${10 + (maxDn - 1) + (maxDia - 1) + (maxThk - 1)}">${t('no_materials_match', 'No materials match these filters.')}</td></tr>`;
 
-  // 7. Update column filter headers
-  const allPieces = [...new Set(allGroups.map(g => g.piece).filter(Boolean))].sort();
-  const allDnOpts = [...new Set(allGroups.map(g => g.dimension).filter(Boolean))].sort();
-  const allDienOpts = [...new Set(allGroups.map(g => g.dienNo).filter(Boolean))].sort();
-  const allDiaOpts = [...new Set(allGroups.map(g => g.diameter).filter(Boolean))].sort();
-  const allThkOpts = [...new Set(allGroups.map(g => g.thickness).filter(Boolean))].sort();
-  const allCodeOpts = [...new Set(allGroups.map(g => g.materialCode).filter(Boolean))].sort();
-  const allHeatOpts = [...new Set(allGroups.flatMap(g => g.heatEntries.map(h => h.heatNo)).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-
+  /* Column filters - on every DN, diameter and thickness column too (choices from the summary) */
+  const o = (sm && sm.options) || {};
   const thead = document.getElementById('mat-thead');
   if (thead) {
-    let hdr = colFilterTh(t('th_category', 'Category'), 'piece', allPieces, matFilters.piece);
+    let hdr = colFilterTh(t('th_category', 'Category'), 'piece', o.piece || [], matFilters.piece);
     hdr += `<th>${t('th_item_description', 'Item description')}</th>`;
-    hdr += colFilterTh(maxDn > 1 ? 'DN 1' : 'DN', 'dn', allDnOpts, matFilters.dn);
-    for (let i = 2; i <= maxDn; i++) hdr += `<th>DN ${i}</th>`;
-    hdr += colFilterTh(t('th_din_en_no', 'DIN EN No.'), 'dien', allDienOpts, matFilters.dien);
-    hdr += colFilterTh(maxDia > 1 ? `${t('th_diameter', 'Diameter')} 1` : t('th_diameter', 'Diameter'), 'diameter', allDiaOpts, matFilters.diameter);
-    for (let i = 2; i <= maxDia; i++) hdr += `<th>${t('th_diameter', 'Diameter')} ${i}</th>`;
-    hdr += colFilterTh(maxThk > 1 ? `${t('th_thickness', 'Thickness')} 1` : t('th_thickness', 'Thickness'), 'thickness', allThkOpts, matFilters.thickness);
-    for (let i = 2; i <= maxThk; i++) hdr += `<th>${t('th_thickness', 'Thickness')} ${i}</th>`;
+    hdr += colFilterTh(maxDn > 1 ? 'DN 1' : 'DN', 'dn', o.dn1 || [], matFilters.dn);
+    for (let i = 2; i <= maxDn; i++) hdr += colFilterTh(`DN ${i}`, `dn${i}`, o[`dn${i}`] || [], matFilters[`dn${i}`]);
+    hdr += colFilterTh(t('th_din_en_no', 'DIN EN No.'), 'dien', o.dien || [], matFilters.dien);
+    hdr += colFilterTh(maxDia > 1 ? `${t('th_diameter', 'Diameter')} 1` : t('th_diameter', 'Diameter'), 'diameter', o.diameter || [], matFilters.diameter);
+    for (let i = 2; i <= maxDia; i++) hdr += colFilterTh(`${t('th_diameter', 'Diameter')} ${i}`, `diameter${i}`, o[`diameter${i}`] || [], matFilters[`diameter${i}`]);
+    hdr += colFilterTh(maxThk > 1 ? `${t('th_thickness', 'Thickness')} 1` : t('th_thickness', 'Thickness'), 'thickness', o.thickness || [], matFilters.thickness);
+    for (let i = 2; i <= maxThk; i++) hdr += colFilterTh(`${t('th_thickness', 'Thickness')} ${i}`, `thickness${i}`, o[`thickness${i}`] || [], matFilters[`thickness${i}`]);
     hdr += `<th>${t('th_surface', 'Surface')}</th>`;
-    hdr += colFilterTh(t('th_material', 'Material'), 'code', allCodeOpts, matFilters.code);
-    hdr += colFilterTh(t('th_heat_no', 'Heat No.'), 'heat', allHeatOpts, matFilters.heat);
+    hdr += colFilterTh(t('th_material', 'Material'), 'code', o.code || [], matFilters.code);
+    hdr += colFilterTh(t('th_heat_no', 'Heat No.'), 'heat', o.heat || [], matFilters.heat);
     hdr += `<th></th>`;
     thead.innerHTML = hdr;
+  }
+
+  /* Pager: 100 rows per page, previous / next */
+  const pager = document.getElementById('mat-pager');
+  if (pager) {
+    const from = data.total ? (data.page - 1) * data.size + 1 : 0, to = Math.min(data.page * data.size, data.total);
+    pager.innerHTML = data.pages > 1 || data.total > 0 ? `<div class="pager">
+      <span class="pager-info">${from}–${to} ${t('of', 'of')} ${data.total}</span>
+      <button class="btn btn-ghost btn-sm" ${data.page <= 1 ? 'disabled' : ''} onclick="setMatPage(${data.page - 1})">‹ ${t('previous', 'Previous')}</button>
+      <span class="pager-info">${t('page', 'Page')} ${data.page} / ${data.pages}</span>
+      <button class="btn btn-ghost btn-sm" ${data.page >= data.pages ? 'disabled' : ''} onclick="setMatPage(${data.page + 1})">${t('next', 'Next')} ›</button>
+    </div>` : '';
   }
 }
 /* Edit from materials page — separate simple modal (no connections/position) */
