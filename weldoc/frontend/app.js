@@ -451,6 +451,22 @@ function initDB() {
 /* ---- role / current-user (mockup auth) ---- */
 function getRole() { try { return localStorage.getItem(ROLE_KEY) || 'office'; } catch (e) { return 'office'; } }
 function setRole(r) { try { localStorage.setItem(ROLE_KEY, r); } catch (e) { } }
+/* The welder the signed-in Microsoft account is (matched by name on the server). Only he may
+   change his signature; in the welder login his "My work" page is his own. */
+function myWelderId() { const a = getCached('auth_user') || {}; return a.welderId || null; }
+/* Ask the server again who the signed-in account is - a welder may have been renamed since
+   the sign-in info was cached, which changes whether this account is that welder. */
+async function refreshMyWelderId() {
+  try {
+    const r = await fetch('/auth/me');
+    const u = r.ok ? await r.json() : null;
+    if (u && u.logged_in) { setCached('auth_user', u, 3600000); return u.welderId || null; }
+  } catch (e) { }
+  return myWelderId();
+}
+function applySignedInWelder(u) {
+  if (u && u.welderId && getRole() === 'vendor' && getCurrentUserId() !== u.welderId) setCurrentUserId(u.welderId);
+}
 function getCurrentUserId() { try { return Number(localStorage.getItem(CURRENT_USER_KEY)) || 1; } catch (e) { return 1; } }
 function setCurrentUserId(id) { try { localStorage.setItem(CURRENT_USER_KEY, String(id)); } catch (e) { } }
 
@@ -1432,16 +1448,19 @@ function renderChrome(activeNav, breadcrumbHtml) {
   const cachedAuth = getCached('auth_user') || {};
   let userDisplay = getUserName(cachedAuth, roleName);
 
-  // Check auth session in background if not cached
-  if (!cachedAuth.name && !cachedAuth.email) {
+  // Check auth session in background if not cached (also when the welder match is not known yet)
+  if ((!cachedAuth.name && !cachedAuth.email) || cachedAuth.welderId === undefined) {
     fetch('/auth/me').then(r => r.ok ? r.json() : null).then(u => {
       if (u && u.logged_in) {
         setCached('auth_user', u, 3600000);
         const nameEl = document.getElementById('topbar-username');
         if (nameEl) nameEl.textContent = getUserName(u, roleName);
         showLoginEmail(u.email);
+        applySignedInWelder(u);
       }
     }).catch(() => { });
+  } else {
+    applySignedInWelder(cachedAuth);
   }
 
   const activeClient = PAGE.clientId ? String(PAGE.clientId) : getSharedClientFilter();
@@ -1795,17 +1814,19 @@ function mountModals() {
     <form id="welder-form" onsubmit="submitWelderModal(event); return false;" novalidate><div class="form-grid">
       <label class="field"><span class="lbl" data-i18n="welder_name">Welder name <span class="req">*</span></span><input type="text" id="input-w-name" required></label>
       <label class="field"><span class="lbl" data-i18n="welder_no">Welder number <span class="req">*</span></span><input type="text" id="input-w-no" required></label>
+      <label class="field wide"><span class="lbl"><span data-i18n="welder_email">E-mail (Microsoft sign-in)</span> <span class="req">*</span></span><input type="email" id="input-w-email" required autocomplete="off">
+        <span class="field-hint" data-i18n="welder_email_hint">The e-mail this welder signs in with. Only this account can add or change his signature.</span></label>
       <div class="field wide">
         <span class="lbl" data-i18n="upload_signature">Signature (→ SharePoint)</span>
-        <div class="field-hint" style="margin-bottom:8px;" data-i18n="signature_hint">PNG format with a transparent or white background. The width must be three times the height (recommended 300 × 100 px, maximum 1500 × 500 px).</div>
+        <div class="field-hint" style="margin-bottom:8px;" data-i18n="signature_hint">PNG or JPG, at least 100 × 100 px, on a white or transparent background. After choosing it you move and zoom it into a frame that is exactly the signature box of the document.</div>
         <div id="w-signature-current" style="margin-bottom:6px;"></div>
         <div id="input-w-signature-wrap">
-          <input type="file" id="input-w-signature" accept="image/png,.png" onchange="onWelderSignatureChange(event)">
+          <input type="file" id="input-w-signature" accept="image/png,image/jpeg,.png,.jpg,.jpeg" onchange="onWelderSignatureChange(event)">
         </div>
         <div id="w-signature-preview-wrap" style="display:none;margin-top:8px;padding:10px;background:#F8FAFC;border:1px solid var(--border);border-radius:4px;">
           <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
             <div style="background:#fff;border:1px dashed #CBD5E1;border-radius:4px;padding:6px;display:inline-flex;align-items:center;justify-content:center;min-width:140px;min-height:48px;">
-              <img id="w-signature-preview-img" style="max-height:55px;max-width:180px;object-fit:contain;" alt="Signature preview">
+              <img id="w-signature-preview-img" style="width:122px;height:96px;object-fit:fill;border:1px solid #94A3B8;" alt="Signature preview">
             </div>
             <div style="display:flex;gap:8px;align-items:center;font-size:0.8rem;color:var(--text-muted);">
               <span data-i18n="signature_resolution">Resolution:</span>
@@ -1905,6 +1926,21 @@ function mountModals() {
     <label class="field"><span class="lbl" data-i18n="renewal_attachment">Renewal attachment (→ SharePoint) <span class="req">*</span></span><input type="file" id="renew-file" accept="application/pdf"></label>
     <div class="field-hint" data-i18n="renew_cert_hint">The uploaded PDF is stored in SharePoint; all fields are required.</div>
     <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('modal-renew')" data-i18n="cancel">Cancel</button><button id="renew-confirm-btn" class="btn btn-primary" onclick="confirmRenew()" data-i18n="confirm_renewal">Confirm renewal</button></div>
+  </div></div>
+
+  <div class="modal-overlay" id="modal-sig-crop"><div class="modal" style="max-width:520px;">
+    <button class="modal-close" onclick="cancelSigCrop()">&times;</button>
+    <h2 data-i18n="sig_crop_title">Adjust your signature</h2>
+    <p class="field-hint" style="margin:0 0 12px;" data-i18n="sig_crop_hint">Zoom with the slider or the mouse wheel. What is inside the frame is exactly what the signature box in the document shows.</p>
+    <div id="sig-crop-stage" class="sig-crop-stage"><img id="sig-crop-img" alt=""><div id="sig-crop-frame" class="sig-crop-frame"></div></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+      <span style="font-size:0.8rem;color:var(--text-muted);" data-i18n="sig_crop_zoom">Zoom</span>
+      <input type="range" id="sig-crop-zoom" min="0" max="1000" value="0" style="flex:1;" oninput="onSigCropZoom(this.value)">
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" onclick="cancelSigCrop()" data-i18n="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="applySigCrop()" data-i18n="sig_crop_use">Use this</button>
+    </div>
   </div></div>
 
   <div class="modal-overlay" id="modal-cert-edit"><div class="modal modal-small">
@@ -2808,9 +2844,9 @@ let _welderSignatureFile = null;
 let _welderSignatureRemoved = false;
 
 /* Signature spec — must stay in sync with SIG_* in app/routes/welders.py.
-   The PDF prints the signature into a fixed 3:1 cell, so off-ratio images are
-   rejected here (and again server-side) rather than being squashed. */
-const SIG_SPEC = { aspect: 3, tol: 0.10, minW: 300, minH: 100, maxW: 1500, maxH: 500 };
+   Any shape, PNG, at least 100 × 100 px; the server shrinks bigger pictures to fit inside
+   100 × 100. The documents print it in a near-square cell, so a square picture fills it best. */
+const SIG_SPEC = { minW: 100, minH: 100 };
 
 function validateSignatureImage(w, h) {
   const S = SIG_SPEC;
@@ -2819,27 +2855,24 @@ function validateSignatureImage(w, h) {
     return t('sig_err_small', 'Image is below the minimum size')
       + ` (${w} × ${h} px). ` + t('sig_err_min', 'The minimum is')
       + ` ${S.minW} × ${S.minH} px.`;
-  if (w > S.maxW || h > S.maxH)
-    return t('sig_err_large', 'Image exceeds the maximum size')
-      + ` (${w} × ${h} px). ` + t('sig_err_max', 'The maximum is')
-      + ` ${S.maxW} × ${S.maxH} px.`;
-  const ratio = w / h, lo = S.aspect * (1 - S.tol), hi = S.aspect * (1 + S.tol);
-  if (ratio < lo || ratio > hi)
-    return t('sig_err_ratio', 'Incorrect proportions')
-      + ` (${w} × ${h} px). `
-      + t('sig_err_ratio_hint', 'The width must be three times the height: for this height the width should be')
-      + ` ${Math.round(h * S.aspect)} px (${Math.round(h * lo)}–${Math.round(h * hi)} px `
-      + t('sig_err_accepted', 'accepted') + `).`;
   return null;
 }
 
+/* Signature crop screen (2026-10-08): the frame has the exact shape of the signature cell in
+   the Excel (56 x 48 px - column I/K width 8, weld row 36 pt). The welder zooms his picture
+   (centred) until it sits right, and the part inside the frame is saved. In the Excel it then
+   fills the cell edge to edge. */
+const SIG_CELL = { w: 56, h: 48 };                     /* keep in sync with builder_doc.py */
+const SIG_FRAME = { w: SIG_CELL.w * 5, h: SIG_CELL.h * 5 };  /* the frame on screen: the cell, 5x */
+const SIG_OUT = { w: SIG_CELL.w * 4, h: SIG_CELL.h * 4 };    /* the saved picture: the cell, 4x (server shrinks to fit 100 x 100) */
+let _sigCrop = null;
+
 function onWelderSignatureChange(e) {
   const file = e.target.files[0];
+  e.target.value = '';                       /* nothing stays chosen unless the crop is used */
   if (!file) return;
-  const isPng = file.type === 'image/png' || /\.png$/i.test(file.name);
-  if (!isPng) {
-    alert(t('sig_err_png', 'Signature must be a PNG file.'));
-    e.target.value = '';
+  if (!/^image\/(png|jpeg)$/.test(file.type) && !/\.(png|jpe?g)$/i.test(file.name)) {
+    alert(t('sig_err_png', 'The signature must be a PNG or JPG picture.'));
     return;
   }
   const reader = new FileReader();
@@ -2847,28 +2880,83 @@ function onWelderSignatureChange(e) {
     const img = new Image();
     img.onload = () => {
       const err = validateSignatureImage(img.naturalWidth, img.naturalHeight);
-      if (err) {
-        alert(err);
-        e.target.value = '';
-        _welderSignatureFile = null;
-        return;
-      }
-      _welderSignatureFile = file;
-      _welderSignatureRemoved = false;
-      document.getElementById('w-signature-preview-img').src = ev.target.result;
-      document.getElementById('w-signature-res-text').textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
-      document.getElementById('w-signature-preview-wrap').style.display = 'block';
-      const wrap = document.getElementById('input-w-signature-wrap');
-      if (wrap) wrap.style.display = 'none';
+      if (err) { alert(err); return; }
+      openSigCrop(img, ev.target.result);
     };
-    img.onerror = () => {
-      alert(t('sig_err_unreadable', 'Could not read the image dimensions.'));
-      e.target.value = '';
-      _welderSignatureFile = null;
-    };
+    img.onerror = () => alert(t('sig_err_unreadable', 'This file could not be read as an image.'));
     img.src = ev.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+function openSigCrop(img, src) {
+  const stage = document.getElementById('sig-crop-stage');
+  const frame = document.getElementById('sig-crop-frame');
+  const SW = SIG_FRAME.w + 120, SH = SIG_FRAME.h + 80;
+  stage.style.width = SW + 'px'; stage.style.height = SH + 'px';
+  const fx = (SW - SIG_FRAME.w) / 2, fy = (SH - SIG_FRAME.h) / 2;
+  Object.assign(frame.style, { left: fx + 'px', top: fy + 'px', width: SIG_FRAME.w + 'px', height: SIG_FRAME.h + 'px' });
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  const fit = Math.min(SIG_FRAME.w / iw, SIG_FRAME.h / ih);      /* whole picture inside the frame */
+  const cover = Math.max(SIG_FRAME.w / iw, SIG_FRAME.h / ih);    /* picture covers the frame */
+  _sigCrop = { img, iw, ih, fx, fy, min: fit, max: cover * 6, s: cover };
+  document.getElementById('sig-crop-img').src = src;
+  document.getElementById('sig-crop-zoom').value = String(sigZoomToSlider(cover));
+  if (!stage._wired) {
+    /* zoom only (2026-10-08): mouse wheel or slider; the picture always stays centred in the frame */
+    stage.addEventListener('wheel', e => {
+      if (!_sigCrop) return;
+      e.preventDefault();
+      zoomSigCrop(_sigCrop.s * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+    }, { passive: false });
+    stage._wired = true;
+  }
+  drawSigCrop();
+  openModal('modal-sig-crop');
+}
+function sigZoomToSlider(s) { const c = _sigCrop; return Math.round(1000 * Math.log(s / c.min) / Math.log(c.max / c.min || 2)); }
+function sigSliderToZoom(v) { const c = _sigCrop; return c.min * Math.pow(c.max / c.min || 2, v / 1000); }
+/* the picture's top-left corner: centred on the frame */
+function sigCropPos() {
+  const c = _sigCrop;
+  return { x: c.fx + (SIG_FRAME.w - c.iw * c.s) / 2, y: c.fy + (SIG_FRAME.h - c.ih * c.s) / 2 };
+}
+function drawSigCrop() {
+  const c = _sigCrop; if (!c) return;
+  const { x, y } = sigCropPos();
+  Object.assign(document.getElementById('sig-crop-img').style, { left: x + 'px', top: y + 'px', width: c.iw * c.s + 'px', height: c.ih * c.s + 'px' });
+}
+function zoomSigCrop(newS) {
+  const c = _sigCrop; c.s = Math.max(c.min, Math.min(c.max, newS));
+  document.getElementById('sig-crop-zoom').value = String(sigZoomToSlider(c.s));
+  drawSigCrop();
+}
+function onSigCropZoom(v) { if (_sigCrop) zoomSigCrop(sigSliderToZoom(Number(v))); }
+function cancelSigCrop() { _sigCrop = null; closeModal('modal-sig-crop'); }
+/* The part inside the frame, as a PNG of the cell's shape (transparent where the picture does not reach) */
+function sigCropCanvas() {
+  const c = _sigCrop, k = SIG_OUT.w / SIG_FRAME.w;
+  const cv = document.createElement('canvas'); cv.width = SIG_OUT.w; cv.height = SIG_OUT.h;
+  const ctx = cv.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  const { x, y } = sigCropPos();
+  ctx.drawImage(c.img, (x - c.fx) * k, (y - c.fy) * k, c.iw * c.s * k, c.ih * c.s * k);
+  return cv;
+}
+function applySigCrop() {
+  if (!_sigCrop) return;
+  const cv = sigCropCanvas();
+  cv.toBlob(blob => {
+    if (!blob) { alert(t('sig_err_unreadable', 'This file could not be read as an image.')); return; }
+    _welderSignatureFile = new File([blob], 'signature.png', { type: 'image/png' });
+    _welderSignatureRemoved = false;
+    document.getElementById('w-signature-preview-img').src = cv.toDataURL('image/png');
+    document.getElementById('w-signature-res-text').textContent = `${SIG_OUT.w} × ${SIG_OUT.h} px`;
+    document.getElementById('w-signature-preview-wrap').style.display = 'block';
+    const wrap = document.getElementById('input-w-signature-wrap');
+    if (wrap) wrap.style.display = 'none';
+    cancelSigCrop();
+  }, 'image/png');
 }
 
 function removeWelderSignature() {
@@ -2938,6 +3026,17 @@ async function submitWelderModal(e) {
     document.getElementById('input-w-no').focus();
     return;
   }
+  const email = val('input-w-email').trim();
+  if (!email) {
+    alert(t('welder_email_required', 'E-mail is required.'));
+    document.getElementById('input-w-email').focus();
+    return;
+  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    alert(t('welder_email_invalid', 'Please enter a valid e-mail address.'));
+    document.getElementById('input-w-email').focus();
+    return;
+  }
   const certs = getWelderCertRows();
   if (certs._validationError) {
     alert(certs._validationError);
@@ -2948,7 +3047,7 @@ async function submitWelderModal(e) {
     return;
   }
   setButtonLoading(submitBtn, true, t('saving', 'Saving…'));
-  const data = { name, no };
+  const data = { name, no, email };
   try {
     const welderPayload = editingWelderId !== null ? { id: editingWelderId, ...data } : data;
     if (_welderSignatureRemoved) welderPayload.signatureUrl = '';
@@ -3011,7 +3110,11 @@ async function submitWelderModal(e) {
     rerenderPage();
   } catch (ex) {
     console.error('Error saving welder:', ex);
-    alert('Error saving welder: ' + ex.message);
+    const code = ex.body && ex.body.error;
+    if (code === 'welder_email_taken' || code === 'welder_email_invalid') {
+      alert(code === 'welder_email_invalid' ? t('welder_email_invalid', 'Please enter a valid e-mail address.') : ex.message);
+      const el = document.getElementById('input-w-email'); if (el) el.focus();
+    } else alert('Error saving welder: ' + ex.message);
   } finally {
     setButtonLoading(submitBtn, false);
   }
@@ -3043,6 +3146,7 @@ async function openWelderModal(id = null, returnToWeld = false) {
     document.getElementById('modal-welder-title').textContent = t('edit_welder', 'Edit welder');
     setV('input-w-name', p.name);
     setV('input-w-no', p.no);
+    setV('input-w-email', p.email || '');
     if (p && p.signatureUrl) {
       if (sigWrap) sigWrap.style.display = 'none';
       const sigImgUrl = p.signatureUrl.includes('?') ? p.signatureUrl : `${p.signatureUrl}?_v=${Date.now()}`;
@@ -3054,6 +3158,15 @@ async function openWelderModal(id = null, returnToWeld = false) {
     }
   }
   else { document.getElementById('modal-welder-title').textContent = t('new_welder', 'New welder'); /* auto-show 1 required cert row */ showWelderCertSection(); }
+  /* Only the welder himself, signed in with his own account, may add or change his signature */
+  const meId = editingWelderId === null ? null : await refreshMyWelderId();
+  if (editingWelderId === null || editingWelderId !== meId) {
+    if (sigWrap) sigWrap.style.display = 'none';
+    if (curDiv) {
+      curDiv.querySelectorAll('button').forEach(b => b.remove());
+      curDiv.insertAdjacentHTML('beforeend', `<div class="muted" style="font-size:0.8rem;margin-top:4px;">${t('signature_owner_only', 'Only the welder himself can add or change his signature, signed in with his own account.')}</div>`);
+    }
+  }
   openModal('modal-welder'); document.getElementById('input-w-name').focus();
 }
 function defaultCertValidUntil() {
@@ -4612,6 +4725,7 @@ async function confirmRenew() {
 }
 
 let editingCertId = null;
+let certAddPersonId = null;   /* set while the certificate dialog adds a new certificate */
 let certEditRemovePdf = false;
 
 function renderCertEditPdfPreview(pdfUrl) {
@@ -4663,12 +4777,20 @@ function onCertEditFileChange() {
   }
 }
 
-function openCertEditModal(certId) {
-  editingCertId = certId;
+/* "+ Add certificate" on the welder profile: the edit dialog, empty, for a new certificate.
+   A welder may hold several valid certificates at the same time. */
+function openCertAddModal(personId) {
+  openCertEditModal(null, { personId, certNo: '', process: '', standard: '', validUntil: '', renewalDue: '', pdfUrl: '' });
+}
+function openCertEditModal(certId, blank) {
+  editingCertId = blank ? null : certId;
+  certAddPersonId = blank ? blank.personId : null;
   certEditRemovePdf = false;
-  const c = DB.certificates.find(x => x.id === certId);
+  const c = blank || DB.certificates.find(x => x.id === certId);
   if (!c) return;
   const p = getPerson(c.personId);
+  const titleEl = document.getElementById('modal-cert-edit-title');
+  if (titleEl) titleEl.textContent = blank ? t('add_certificate_title', 'Add certificate') : t('edit_certificate', 'Edit certificate');
 
   const infoEl = document.getElementById('cert-edit-welder-info');
   if (infoEl) {
@@ -4745,8 +4867,14 @@ function updateCertEditProcField(wpsVal, prefillProc) {
 
 async function submitCertEdit(event) {
   if (event) event.preventDefault();
-  const c = DB.certificates.find(x => x.id === editingCertId);
+  const adding = editingCertId === null && certAddPersonId !== null;
+  const c = adding ? { personId: certAddPersonId, certNo: '', process: '', pdfUrl: '' } : DB.certificates.find(x => x.id === editingCertId);
   if (!c) return;
+  if (adding) {
+    const s = document.getElementById('cert-edit-wps-sel'), n = document.getElementById('cert-edit-wps-new');
+    const wps = s ? (s.value === '__other__' ? (n ? n.value.trim() : '') : s.value) : '';
+    if (!wps) { alert(t('wps_no_required', 'WPS No. is required.')); return; }
+  }
 
   const btn = document.getElementById('cert-edit-submit-btn');
   setButtonLoading(btn, true, t('saving', 'Saving…'));
@@ -4776,6 +4904,11 @@ async function submitCertEdit(event) {
   const file = fileInput && fileInput.files ? fileInput.files[0] : null;
 
   try {
+    if (adding) {
+      /* create it first, then the PDF upload and the save below work as for an edit */
+      const created = await apiPost(`/welders/${c.personId}/certificates`, { certNo: wpsVal, process: procVal, standard: stdVal, validUntil: validVal, renewalDue: renewalVal });
+      c.id = created.id;
+    }
     let pdfUrl = certEditRemovePdf ? '' : (c.pdfUrl || '');
     if (file) {
       const fd = new FormData();
@@ -4799,6 +4932,7 @@ async function submitCertEdit(event) {
 
     const updated = await apiPost(`/welders/certificates/${c.id}`, payload);
     Object.assign(c, updated);
+    certAddPersonId = null;
     saveDB();
     await loadWeldersFromApi();
     closeModal('modal-cert-edit');
@@ -7459,8 +7593,7 @@ function openMuEdit() {
 }
 
 /* ================================================================ WELDERS PAGE ================================================================ */
-let welderFilters = { welder: '', process: '', status: '' };
-let welderTab = 'active';
+let welderFilters = { welder: '', status: '' };
 async function loadWpsProcessesFromApi() {
   try {
     const list = await apiGet('/wps-processes');
@@ -7477,7 +7610,7 @@ async function loadWeldersFromApi() {
       apiGet('/wps-processes').catch(() => [])
     ]);
     if (wpsList && wpsList.length) DB.wpsProcesses = wpsList;
-    DB.people = welders.map(w => ({ id: w.id, name: w.name, no: w.no, signatureUrl: w.signatureUrl || '', procs: w.procs, archived: w.archived }));
+    DB.people = welders.map(w => ({ id: w.id, name: w.name, no: w.no, email: w.email || '', signatureUrl: w.signatureUrl || '', procs: w.procs, archived: w.archived }));
     DB.certificates = [];
     welders.forEach(w => {
       (w.certificates || []).forEach(c => {
@@ -7487,14 +7620,11 @@ async function loadWeldersFromApi() {
   } catch (e) { console.error('Failed to load welders:', e); }
 }
 async function initWeldersPage() { PAGE.name = 'welders'; initDB(); await loadWeldersFromApi(); renderChrome('welders', t('welders', 'Welders')); mountModals(); wireModalDismiss(); renderWeldersPage(); }
-function buildWelderFilters() { /* filters are in column headers */ }
 function setWelderFilter(key, val) {
   welderFilters[key] = val;
   document.querySelectorAll('.col-filter.open').forEach(el => el.classList.remove('open'));
   renderWeldersPage();
 }
-function onWelderFilterChange() { renderWeldersPage(); }
-function clearWelderFilters() { welderFilters = { welder: '', process: '', status: '' }; renderWeldersPage(); }
 function welderColFilter(label, filterKey, options, curVal) {
   const isActive = !!curVal;
   const badge = isActive ? '1' : '';
@@ -7520,98 +7650,52 @@ function certRow(cert, includeWelder) {
     <td>${signHtml}</td>
     <td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="openCertEditModal(${cert.id})" data-i18n="edit">${t('edit', 'Edit')}</button><button class="btn btn-ghost btn-sm" onclick="openRenewModal(${cert.id})" data-i18n="renew">${t('renew', 'Renew')}</button></td></tr>`;
 }
-function archivedCertRow(cert) {
-  const p = getPerson(cert.personId);
-  const signHtml = p && p.signatureUrl
-    ? `<a class="doc-chip doc-iso" href="javascript:void(0)" onclick="showImageRaw('${escapeHtml(p ? p.name : '')} - Signatur','${escapeHtml(p.signatureUrl)}','Welder No. ${escapeHtml(p ? p.no : '')}')">${t('sign', 'Sign')}</a>`
-    : '<span class="muted">—</span>';
-  return `<tr>
-    <td class="col-mono">${escapeHtml(p ? p.no : '')}</td>
-    <td class="col-name"><a class="cell-link" href="welder-profile.html?id=${p ? p.id : ''}">${escapeHtml(p ? p.name : '')}</a></td>
-    <td class="col-mono">${escapeHtml(cert.certNo)}</td>
-    <td class="col-mono">${escapeHtml(cert.process)}</td>
-    <td>${escapeHtml(cert.standard)}</td>
-    <td>${formatDate(cert.validUntil)}</td>
-    <td>${cert.pdfUrl ? `<a class="doc-chip doc-iso" href="${escapeHtml(cert.pdfUrl)}" target="_blank" rel="noopener">PDF</a>` : '<span class="muted">—</span>'}</td>
-    <td>${signHtml}</td>
-  </tr>`;
-}
-function switchWelderTab(tab) {
-  welderTab = tab;
-  document.getElementById('wtab-active').classList.toggle('active', tab === 'active');
-  document.getElementById('wtab-archived').classList.toggle('active', tab === 'archived');
-  document.getElementById('welders-active-section').style.display = tab === 'active' ? '' : 'none';
-  document.getElementById('welders-archived-section').style.display = tab === 'archived' ? '' : 'none';
-  if (tab === 'archived') renderArchivedCerts();
+/* Welders register: one row per welder (2026-10-08) - number, name, e-mail, signature and his
+   active certificates as chips, like the heat numbers in the global material list. A welder
+   may hold several valid certificates at once. Each chip is coloured by its verification-due
+   status (valid / expiring / expired) and opens the certificate PDF. */
+function certChipHtml(c) {
+  const s = verificationStatus(c);
+  const tip = [c.process, c.standard,
+    c.validUntil ? t('th_valid_until', 'Certificate Valid Until') + ': ' + formatDate(c.validUntil) : '',
+    c.renewalDue ? t('th_renewal_due', 'Verification Due') + ': ' + formatDate(c.renewalDue) : ''].filter(Boolean).join(' · ');
+  return c.pdfUrl
+    ? `<a class="doc-chip cert-chip cert-${s}" href="${escapeHtml(c.pdfUrl)}" target="_blank" rel="noopener" title="${escapeHtml(tip)}">${escapeHtml(c.certNo)}</a>`
+    : `<span class="doc-chip cert-chip cert-${s} chip-no-doc" title="${escapeHtml(tip + ' · ' + t('no_cert_pdf', 'No PDF uploaded'))}">${escapeHtml(c.certNo)}</span>`;
 }
 function renderWeldersPage() {
-  const archivedCerts = DB.certificates.filter(c => c.archived);
-  const expiring = certificates().filter(c => certStatus(c) === 'expiring').length, expired = certificates().filter(c => certStatus(c) === 'expired').length;
-  document.getElementById('welders-stats').innerHTML = tile(people().length, t('total_welders', 'Welders / personnel'), '') + tile(certificates().length, t('active_certs', 'Active certs'), 't-neutral') + tile(expiring, t('expiring_30d', 'Expiring ≤30 days'), 't-copper') + tile(expired, t('expired', 'Expired'), 't-danger') + tile(archivedCerts.length, t('archived', 'Archived'), 't-neutral');
-  let rows = certificates().slice().sort((a, b) => { const pa = getPerson(a.personId), pb = getPerson(b.personId); return String(pa.no).localeCompare(String(pb.no), undefined, { numeric: true }) || a.certNo.localeCompare(b.certNo); });
-  if (welderFilters.welder) rows = rows.filter(c => c.personId === Number(welderFilters.welder));
-  if (welderFilters.process) rows = rows.filter(c => c.process === welderFilters.process);
-  if (welderFilters.status) rows = rows.filter(c => certStatus(c) === welderFilters.status);
-  /* build column filter thead */
+  const expiring = certificates().filter(c => verificationStatus(c) === 'expiring').length, expired = certificates().filter(c => verificationStatus(c) === 'expired').length;
+  document.getElementById('welders-stats').innerHTML = tile(people().length, t('total_welders', 'Welders / personnel'), '') + tile(certificates().length, t('active_certs', 'Active certs'), 't-neutral') + tile(expiring, t('expiring_30d', 'Expiring ≤30 days'), 't-copper') + tile(expired, t('expired', 'Expired'), 't-danger');
+  /* archived certificates are shown per welder on his profile page, not here */
+  const certsOf = id => certificates().filter(c => c.personId === id).sort((a, b) => String(a.certNo).localeCompare(String(b.certNo), undefined, { numeric: true }));
+  let rows = people().slice().sort((a, b) => String(a.no).localeCompare(String(b.no), undefined, { numeric: true }) || String(a.name).localeCompare(String(b.name)));
+  if (welderFilters.welder) rows = rows.filter(p => p.id === Number(welderFilters.welder));
+  if (welderFilters.status) rows = rows.filter(p => certsOf(p.id).some(c => verificationStatus(c) === welderFilters.status));
   const thead = document.getElementById('welders-thead');
   if (thead) {
     const welderOpts = people().map(p => ({ value: String(p.id), label: p.name + ' · ' + p.no }));
-    const procOpts = [...new Set(certificates().map(c => c.process).filter(Boolean))].sort();
-    const statusOpts = [{ value: 'valid', label: t('cert_valid', 'Valid') }, { value: 'expiring', label: t('expiring_30d', 'Expiring') }, { value: 'expired', label: t('expired', 'Expired') }];
-    let hdr = `<th>${t('th_no', 'No.')}</th>`;
-    hdr += welderColFilter(t('th_welder_name', 'Welder name'), 'welder', welderOpts, welderFilters.welder);
-    hdr += `<th>${t('th_cert_no', 'Certificate No.')}</th>`;
-    hdr += welderColFilter(t('th_process', 'Process'), 'process', procOpts, welderFilters.process);
-    hdr += `<th>${t('th_standard', 'Standard')}</th>`;
-    hdr += welderColFilter(t('th_valid_until', 'Certificate Valid Until'), 'status', statusOpts, welderFilters.status);
-    hdr += `<th>${t('th_renewal_due', 'Verification Due')}</th><th>${t('th_pdf', 'PDF')}</th><th>${t('th_signature', 'Sign')}</th><th></th>`;
-    thead.innerHTML = hdr;
+    const statusOpts = [{ value: 'valid', label: t('cert_valid', 'Valid') }, { value: 'expiring', label: t('cert_expiring', 'Expiring') }, { value: 'expired', label: t('cert_expired', 'Expired') }];
+    thead.innerHTML = `<th>${t('th_no', 'No.')}</th>`
+      + welderColFilter(t('th_welder_name', 'Welder name'), 'welder', welderOpts, welderFilters.welder)
+      + `<th>${t('th_email', 'E-mail')}</th><th>${t('th_signature', 'Signature')}</th>`
+      + welderColFilter(t('th_certificates', 'Certificates'), 'status', statusOpts, welderFilters.status)
+      + '<th></th>';
   }
   const tbody = document.getElementById('welders-tbody');
-  tbody.innerHTML = rows.length ? rows.map(c => certRow(c, true)).join('') : `<tr class="empty-row"><td colspan="9">${certificates().length === 0 ? t('no_certs_yet', 'No certificates yet.') : t('no_certs_match', 'No certificates match your filters.')}</td></tr>`;
-  if (welderTab === 'archived') renderArchivedCerts();
+  tbody.innerHTML = rows.length ? rows.map(p => {
+    const certs = certsOf(p.id);
+    const sign = p.signatureUrl
+      ? `<a class="doc-chip doc-iso" href="javascript:void(0)" onclick="showImageRaw('${escapeHtml(p.name)} - Signatur','${escapeHtml(p.signatureUrl)}','Welder No. ${escapeHtml(p.no)}')">${t('sign', 'Sign')}</a>`
+      : '<span class="muted">—</span>';
+    return `<tr>
+      <td class="col-mono">${escapeHtml(p.no)}</td>
+      <td class="col-name"><a class="cell-link" href="welder-profile.html?id=${p.id}">${escapeHtml(p.name)}</a></td>
+      <td>${p.email ? escapeHtml(p.email) : '<span class="muted">—</span>'}</td>
+      <td>${sign}</td>
+      <td>${certs.length ? `<div class="waz-chip-grid">${certs.map(certChipHtml).join('')}</div>` : '<span class="muted">—</span>'}</td>
+      <td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="openWelderModal(${p.id})">${t('edit', 'Edit')}</button></td></tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="6">${people().length === 0 ? t('no_welders_yet', 'No welders yet.') : t('no_welders_match', 'No welders match your filters.')}</td></tr>`;
 }
-let archivedCertFilters = { welder: '', process: '' };
-function setArchivedCertFilter(key, val) {
-  archivedCertFilters[key] = val;
-  document.querySelectorAll('.col-filter.open').forEach(el => el.classList.remove('open'));
-  renderArchivedCerts();
-}
-function archivedColFilter(label, filterKey, options, curVal) {
-  const isActive = !!curVal;
-  const badge = isActive ? '1' : '';
-  let optsHtml = `<button class="cf-clear" onclick="setArchivedCertFilter('${filterKey}','')">${t('clear_filter', 'Clear filter')}</button>`;
-  optsHtml += options.map(o => {
-    const v = typeof o === 'object' ? o.value : o;
-    const l = typeof o === 'object' ? o.label : o;
-    return `<div class="cf-opt ${curVal === v ? 'selected' : ''}" onclick="setArchivedCertFilter('${filterKey}','${escapeHtml(v).replace(/'/g, "\\'")}')">${escapeHtml(l)}</div>`;
-  }).join('');
-  return `<th class="col-filter ${isActive ? 'active' : ''}" onclick="toggleColFilter(this,event)"><span class="col-filter-btn">${label}${badge ? ' <span style="display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:var(--copper);color:#fff;font-size:0.6rem;font-weight:700;">' + badge + '</span>' : ''}</span><div class="col-filter-panel">${optsHtml}</div></th>`;
-}
-function renderArchivedCerts() {
-  let archived = DB.certificates.filter(c => c.archived).sort((a, b) => { const pa = getPerson(a.personId), pb = getPerson(b.personId); return String(pa.no).localeCompare(String(pb.no), undefined, { numeric: true }) || a.certNo.localeCompare(b.certNo); });
-  if (archivedCertFilters.welder) archived = archived.filter(c => c.personId === Number(archivedCertFilters.welder));
-  if (archivedCertFilters.process) archived = archived.filter(c => c.process === archivedCertFilters.process);
-  /* build thead with column filters */
-  const thead = document.getElementById('welders-archived-thead');
-  if (thead) {
-    const allArchived = DB.certificates.filter(c => c.archived);
-    const welderOpts = [...new Map(allArchived.map(c => { const p = getPerson(c.personId); return [String(c.personId), { value: String(c.personId), label: p.name + ' · ' + p.no }]; })).values()];
-    const procOpts = [...new Set(allArchived.map(c => c.process).filter(Boolean))].sort();
-    let hdr = `<th>${t('th_no', 'No.')}</th>`;
-    hdr += archivedColFilter(t('th_welder_name', 'Welder name'), 'welder', welderOpts, archivedCertFilters.welder);
-    hdr += `<th>${t('th_cert_no', 'Certificate No.')}</th>`;
-    hdr += archivedColFilter(t('th_process', 'Process'), 'process', procOpts, archivedCertFilters.process);
-    hdr += `<th>${t('th_standard', 'Standard')}</th><th>${t('th_valid_until', 'Certificate Valid Until')}</th><th>${t('th_pdf', 'PDF')}</th><th>${t('th_signature', 'Sign')}</th>`;
-    thead.innerHTML = hdr;
-  }
-  const tbody = document.getElementById('welders-archived-tbody');
-  tbody.innerHTML = archived.length ? archived.map(c => archivedCertRow(c)).join('') : `<tr class="empty-row"><td colspan="7">${t('no_certs_archived', 'No archived certificates.')}</td></tr>`;
-}
-function restoreCert(id) {
-  /* no-op */
-}
-
 /* ================================================================ WELDER PROFILE PAGE ================================================================ */
 async function initWelderProfilePage() {
   PAGE.name = 'welder-profile'; initDB(); PAGE.welderId = Number(qp('id'));
@@ -7646,11 +7730,11 @@ function renderWelderProfile() {
   document.getElementById('profile-stats').innerHTML = tile(certs.length, t('total_certs', 'Certificates'), '') + tile(expiring, t('expiring_1_month', 'Expiring ≤1 month'), 't-copper') + tile(asWelder, t('active_pipelines_welder', 'Active pipelines (welder)'), 't-neutral') + tile(asInspector, t('active_pipelines_inspector', 'Active pipelines (inspector)'), 't-neutral') + tile(archivedCerts.length, t('archived', 'Archived'), 't-neutral') + tile(activeProjects.size, t('active_projects', 'Active projects'), 't-success');
   const tbody = document.getElementById('profile-certs-tbody');
   tbody.innerHTML = certs.length ? certs.map(c => certRow(c, false)).join('') : `<tr class="empty-row"><td colspan="7">${t('no_certs_file', 'No certificates on file.')}</td></tr>`;
-  const arcSec = document.getElementById('profile-archived-section');
   const arcTbody = document.getElementById('profile-archived-certs-tbody');
-  if (arcSec && arcTbody) {
+  const setCount = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = `(${n})`; };
+  setCount('ptab-active-count', certs.length); setCount('ptab-archived-count', archivedCerts.length);
+  if (arcTbody) {
     if (archivedCerts.length) {
-      arcSec.style.display = '';
       arcTbody.innerHTML = archivedCerts.map(c => `<tr>
         <td class="col-mono">${escapeHtml(c.certNo)}</td><td class="col-mono">${escapeHtml(c.process)}</td><td>${escapeHtml(c.standard)}</td>
         <td>${c.validUntil ? formatDate(c.validUntil) : '—'}</td>
@@ -7658,10 +7742,17 @@ function renderWelderProfile() {
         <td>${c.pdfUrl ? `<a class="doc-chip doc-iso" href="${escapeHtml(c.pdfUrl)}" target="_blank" rel="noopener">PDF</a>` : '<span class="muted">—</span>'}</td>
       </tr>`).join('');
     } else {
-      arcSec.style.display = 'none';
+      arcTbody.innerHTML = `<tr class="empty-row"><td colspan="7">${t('no_certs_archived', 'No archived certificates.')}</td></tr>`;
     }
   }
-  document.getElementById('profile-edit-btn').onclick = () => openWelderModal(p.id);
+  document.getElementById('profile-add-cert-btn').onclick = () => openCertAddModal(p.id);
+}
+/* Certificates / Archived certificates tabs on the welder profile, like the welders register had */
+function switchProfileCertTab(tab) {
+  document.getElementById('ptab-active').classList.toggle('active', tab === 'active');
+  document.getElementById('ptab-archived').classList.toggle('active', tab === 'archived');
+  document.getElementById('profile-active-section').style.display = tab === 'active' ? '' : 'none';
+  document.getElementById('profile-archived-section').style.display = tab === 'archived' ? '' : 'none';
 }
 
 /* ================================================================ SHARED: pipelines table for dashboards ================================================================ */

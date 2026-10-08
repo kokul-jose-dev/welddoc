@@ -5,18 +5,17 @@ from app.models.welder import Welder, Certificate
 welders_bp = Blueprint("welders", __name__)
 
 # --- Signature image spec -----------------------------------------------------
-# The PDF prints the signature into a fixed landscape cell, so an off-ratio image
-# either gets crushed or leaves the cell half empty. Uploads must therefore match
-# the 3:1 shape the cell is built for.
-SIG_ASPECT = 3.0            # width : height
-SIG_ASPECT_TOL = 0.10       # ±10%
-SIG_MIN_W, SIG_MIN_H = 300, 100
-SIG_MAX_W, SIG_MAX_H = 1500, 500
+# The documents print the signature into a near-square cell (2026-10-08), so any shape is
+# accepted - a square picture fills it best. The picture must be at least 100 x 100 px;
+# a bigger one is shrunk on upload to fit inside 100 x 100, keeping its shape. That is
+# still more than the printed cell needs (about 42 x 42 px), so nothing is lost.
+SIG_MIN_W, SIG_MIN_H = 100, 100
+SIG_BOX = 100               # stored pictures fit inside SIG_BOX x SIG_BOX
 SIG_FORMATS = ("PNG",)
 
 
 def _validate_signature(file_content):
-    """Return (ok, error_message, (w, h)). Enforces the format/resolution spec."""
+    """Return (ok, error_message, (w, h)). Enforces the format/minimum-size spec."""
     try:
         from PIL import Image
         import io as _io
@@ -30,24 +29,77 @@ def _validate_signature(file_content):
     if fmt not in SIG_FORMATS:
         return False, (f"The signature must be a PNG file "
                        f"(this file is {fmt or 'of an unrecognised format'})."), (w, h)
-    if h == 0:
-        return False, "This image has no height.", (w, h)
     if w < SIG_MIN_W or h < SIG_MIN_H:
         return False, (f"Image is below the minimum size ({w} × {h} px). "
                        f"The minimum is {SIG_MIN_W} × {SIG_MIN_H} px."), (w, h)
-    if w > SIG_MAX_W or h > SIG_MAX_H:
-        return False, (f"Image exceeds the maximum size ({w} × {h} px). "
-                       f"The maximum is {SIG_MAX_W} × {SIG_MAX_H} px."), (w, h)
-
-    aspect = w / float(h)
-    lo = SIG_ASPECT * (1 - SIG_ASPECT_TOL)
-    hi = SIG_ASPECT * (1 + SIG_ASPECT_TOL)
-    if not (lo <= aspect <= hi):
-        return False, (f"Incorrect proportions ({w} × {h} px). The width must be "
-                       f"three times the height: for a height of {h} px, the width "
-                       f"should be {int(h * SIG_ASPECT)} px "
-                       f"({int(h * lo)}–{int(h * hi)} px accepted)."), (w, h)
     return True, None, (w, h)
+
+
+def _shrink_signature(file_content):
+    """The PNG shrunk to fit inside SIG_BOX x SIG_BOX (shape kept, transparency kept).
+    Returns (png_bytes, (w, h)); a picture already that small is returned unchanged."""
+    from PIL import Image
+    import io as _io
+    img = Image.open(_io.BytesIO(file_content))
+    w, h = img.size
+    if w <= SIG_BOX and h <= SIG_BOX:
+        return file_content, (w, h)
+    scale = min(SIG_BOX / w, SIG_BOX / h)
+    nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
+    if img.mode not in ("RGB", "RGBA", "L", "LA"):
+        img = img.convert("RGBA")
+    out = _io.BytesIO()
+    img.resize((nw, nh), Image.LANCZOS).save(out, "PNG", optimize=True)
+    return out.getvalue(), (nw, nh)
+
+
+# --- Whose signature is it? -------------------------------------------------------------------
+# A signature may be uploaded, replaced or removed only by the welder it belongs to, signed in
+# with his own Microsoft account - not by other welders, not by the office (2026-10-07). The
+# account is matched by E-MAIL only (2026-10-08): the sign-in e-mail must equal the e-mail
+# entered on the welder (case ignored). No guessing by name.
+
+def _norm_email(text):
+    return (text or "").strip().lower()
+
+
+def welder_for_user(user):
+    """The active welder the signed-in account belongs to, or None."""
+    email = _norm_email((user or {}).get("email"))
+    if not email:
+        return None
+    hits = Welder.query.filter(Welder.archived == False,  # noqa: E712
+                               db.func.lower(Welder.email) == email).all()
+    return hits[0] if len(hits) == 1 else None
+
+
+def _email_problem(email, own_id=None):
+    """None when the e-mail can be saved on a welder, else the 400 answer."""
+    import re
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email or ""):
+        return jsonify({"error": "welder_email_invalid",
+                        "message": "Please enter a valid e-mail address."}), 400
+    q = Welder.query.filter(Welder.archived == False,  # noqa: E712
+                            db.func.lower(Welder.email) == email.lower())
+    if own_id:
+        q = q.filter(Welder.id != own_id)
+    other = q.first()
+    if other:
+        return jsonify({"error": "welder_email_taken",
+                        "message": f"This e-mail is already used by welder {other.name} ({other.no or other.id})."}), 400
+    return None
+
+
+def _signature_refusal(w):
+    """None when the signed-in account is this welder, else the 403 answer."""
+    from flask import session
+    me = welder_for_user(session.get("user"))
+    if me is not None and me.id == w.id:
+        return None
+    return jsonify({
+        "error": "signature_owner_only",
+        "message": f"Only {w.name} can change this signature, signed in with his own account.",
+    }), 403
 
 
 @welders_bp.route("", methods=["GET"])
@@ -70,6 +122,16 @@ def create_or_update_welder():
         w = Welder.query.get_or_404(data["id"])
         w.name = data.get("name", w.name)
         w.no = data.get("no", w.no)
+        if "email" in data:
+            email = (data.get("email") or "").strip()
+            problem = _email_problem(email, own_id=w.id)
+            if problem:
+                return problem
+            w.email = email
+        if "signatureUrl" in data and (data["signatureUrl"] or "") != (w.signature_url or ""):
+            refused = _signature_refusal(w)
+            if refused:
+                return refused
         if "signatureUrl" in data:
             new_sig = data["signatureUrl"] or ""
             if not new_sig and w.signature_url:
@@ -80,7 +142,12 @@ def create_or_update_welder():
         if "archived" in data:
             w.archived = data["archived"]
     else:
-        w = Welder(name=data["name"], no=data.get("no", ""), signature_url=data.get("signatureUrl", ""))
+        email = (data.get("email") or "").strip()
+        problem = _email_problem(email)
+        if problem:
+            return problem
+        w = Welder(name=data["name"], no=data.get("no", ""), email=email,
+                   signature_url="")   # only he adds it
         db.session.add(w)
     db.session.commit()
     return jsonify(_serialize_welder(w)), 200
@@ -89,6 +156,9 @@ def create_or_update_welder():
 @welders_bp.route("/<int:wid>/upload-signature", methods=["POST"])
 def upload_welder_signature_route(wid):
     w = Welder.query.get_or_404(wid)
+    refused = _signature_refusal(w)
+    if refused:
+        return refused
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
     file = request.files["file"]
@@ -103,16 +173,17 @@ def upload_welder_signature_route(wid):
             "error": err,
             "spec": {
                 "format": "PNG",
-                "aspect": "3:1 (±10%)",
                 "minSize": f"{SIG_MIN_W}x{SIG_MIN_H}",
-                "maxSize": f"{SIG_MAX_W}x{SIG_MAX_H}",
-                "recommended": "300x100",
+                "recommended": "square, e.g. 300x300",
             },
             "received": f"{size[0]}x{size[1]}" if size else None,
         }), 400
 
     import time
     from app.sharepoint import upload_welder_signature, delete_welder_signature_file
+
+    uploaded_size = size
+    file_content, size = _shrink_signature(file_content)
 
     # Delete existing signature file from SharePoint if replacing
     if w.signature_url:
@@ -128,12 +199,16 @@ def upload_welder_signature_route(wid):
 
     w.signature_url = web_url
     db.session.commit()
-    return jsonify({"signatureUrl": web_url, "size": f"{size[0]}x{size[1]}"}), 200
+    return jsonify({"signatureUrl": web_url, "size": f"{size[0]}x{size[1]}",
+                    "uploadedSize": f"{uploaded_size[0]}x{uploaded_size[1]}"}), 200
 
 
 @welders_bp.route("/<int:wid>/signature", methods=["DELETE"])
 def delete_welder_signature_route(wid):
     w = Welder.query.get_or_404(wid)
+    refused = _signature_refusal(w)
+    if refused:
+        return refused
     if w.signature_url:
         from app.sharepoint import delete_welder_signature_file
         delete_welder_signature_file(w.signature_url)
@@ -280,6 +355,7 @@ def _serialize_welder(w):
         "name": w.name,
         "no": w.no or "",
         "signatureUrl": w.signature_url or "",
+        "email": w.email or "",
         "procs": " / ".join(procs),
         "archived": w.archived,
         "certificates": certs,

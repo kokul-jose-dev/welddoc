@@ -3,6 +3,7 @@
   /* Accent (buttons, active tab, focus): IST red (2026-10-06, was orange #A85D2C). */
   --copper:#A6192E; --copper-hover:#861425; --copper-soft:rgba(166,25,46,0.08); --copper-ink:#861425;
   /* Warnings and status indications keep the orange. */
+  --amber:#E89A1C; --amber-soft:#FFF2DC; --amber-ink:#9A5800;
   --warn:#A85D2C; --warn-soft:rgba(168,93,44,0.12); --warn-ink:#7A431F;
   --ist-red:#A6192E;   /* official IST red (istinox.ch logo) */
   --bg:#EEF1F3; --surface:#FFFFFF; --border:#D9DFE5; --text:#202A33; --text-muted:#64748B;
@@ -131,7 +132,17 @@ tbody tr.clickable-row{cursor:pointer;}
 .pill-5{background:var(--success-soft);color:var(--success);} .pill-5 .dot{background:var(--success);}
 
 .cpill{display:inline-flex;align-items:center;gap:5px;font-size:0.7rem;font-weight:700;padding:2px 8px;border-radius:12px;white-space:nowrap;text-transform:uppercase;letter-spacing:0.03em;}
-.cpill-valid{background:var(--success-soft);color:var(--success);} .cpill-expiring{background:var(--warn-soft);color:var(--warn-ink);} .cpill-expired{background:var(--danger-soft);color:var(--danger);}
+/* signature crop screen: the frame is the Excel signature cell, everything outside is dimmed */
+.sig-crop-stage{position:relative;overflow:hidden;margin:0 auto;max-width:100%;background:#E2E8F0 repeating-conic-gradient(#EEF2F6 0 25%, #E2E8F0 0 50%) 0 0/16px 16px;border-radius:6px;user-select:none;}
+.sig-crop-stage img{position:absolute;max-width:none;pointer-events:none;-webkit-user-drag:none;}
+.sig-crop-frame{position:absolute;box-shadow:0 0 0 9999px rgba(15,23,42,0.55);outline:2px solid #fff;pointer-events:none;}
+/* certificate chips on the welders register, coloured by verification-due status */
+.cert-chip.cert-valid{background:var(--success-soft);color:var(--success);border-color:var(--success);}
+.cert-chip.cert-expiring{background:var(--amber-soft);color:var(--amber-ink);border-color:var(--amber);}
+/* no PDF: keep the colour readable, mark it with a dashed border instead of fading it */
+.doc-chip.cert-chip.chip-no-doc{opacity:1;border-style:dashed;}
+.cert-chip.cert-expired{background:var(--danger-soft);color:var(--danger);border-color:var(--danger);}
+.cpill-valid{background:var(--success-soft);color:var(--success);} .cpill-expiring{background:var(--amber-soft);color:var(--amber-ink);} .cpill-expired{background:var(--danger-soft);color:var(--danger);}
 .valid-cell{display:flex;flex-direction:column;gap:4px;}
 
 .docs{display:flex;gap:5px;align-items:center;}

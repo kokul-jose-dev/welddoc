@@ -119,13 +119,30 @@ def _signature_placer(include_welder_sign, include_inspector_sign):
         if not entry:
             return
         content, w_px, h_px = entry
-        # Fit inside the cell with a small margin, keeping the aspect ratio, and centre it.
-        cell_w = round(ws.column_dimensions[get_column_letter(col)].width * 7) + 5
+        # Excel shows a column of stored width W as W x 7 px (the stored width already holds the
+        # padding): width 8 -> 56 px. Adding the padding again made pictures 5 px too wide.
+        cell_w = round(ws.column_dimensions[get_column_letter(col)].width * 7)
         cell_h = (ws.row_dimensions[row].height or 15) * 4 / 3
-        max_w, max_h = cell_w - 6, cell_h - 6
-        scale = min(max_w / max(w_px, 1), max_h / max(h_px, 1))
-        img_w, img_h = max(1, int(w_px * scale)), max(1, int(h_px * scale))
         img = XlImage(io.BytesIO(content))   # a fresh stream per image - openpyxl reads it on save
+        if abs((w_px / max(h_px, 1)) / (cell_w / cell_h) - 1) <= 0.10:
+            # Cut to the cell's shape in the crop screen on upload (2026-10-08): it covers the
+            # whole cell, edge to edge - exactly what the welder saw inside the frame. It is
+            # anchored to the cell's corners rather than given a size in pixels, because the
+            # cell's real size changes with Windows display scaling and with printing (at 150 %
+            # a width-8 column is 88 px against a 72 px row). Excel then always stretches it
+            # to the cell: no gap, never over the border.
+            from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor
+            img.anchor = TwoCellAnchor(editAs="twoCell",
+                                       _from=AnchorMarker(col=col - 1, colOff=0, row=row - 1, rowOff=0),
+                                       to=AnchorMarker(col=col, colOff=0, row=row, rowOff=0))
+            ws.add_image(img)
+            return
+        else:
+            # An older picture of another shape: fit inside the cell with a small margin,
+            # keeping its proportions, centred (it is never stretched).
+            max_w, max_h = cell_w - 6, cell_h - 6
+            scale = min(max_w / max(w_px, 1), max_h / max(h_px, 1))
+            img_w, img_h = max(1, int(w_px * scale)), max(1, int(h_px * scale))
         img.width, img.height = img_w, img_h
         img.anchor = OneCellAnchor(
             _from=AnchorMarker(col=col - 1, colOff=pixels_to_EMU(int((cell_w - img_w) // 2)),
@@ -286,6 +303,10 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
                              customer_remarks=False):
     """Build the weld inspection list workbook. Returns (pipeline, project, xlsx bytes)."""
     place_signatures = _signature_placer(include_welder_sign, include_inspector_sign)
+    # With signatures the weld rows are 36 pt (48 px) high, so the signature cells (I, K:
+    # 56 px wide) are near-square; a picture cut in the crop screen fills them edge to edge.
+    # Without signatures they stay 24 pt (2026-10-08).
+    WELD_ROW_H = 36 if place_signatures else 24
     pl = Pipeline.query.get_or_404(pipeline_id)
     pr = Project.query.get(pl.project_id) if pl.project_id else None
     cli = Client.query.get(pr.client_id) if pr and pr.client_id else None
@@ -695,7 +716,7 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
                 ws.cell(row,10,_result_mark(getattr(w, 'visual', None))).font=df; ws.cell(row,10).alignment=wc
                 ws.cell(row,12,_result_mark(getattr(w, 'endoscopy', None))).font=df; ws.cell(row,12).alignment=wc
                 ws.cell(row,17,w.remarks or "").font=df; ws.cell(row,17).alignment=wr
-                bdr(row,1,row,17); ws.row_dimensions[row].height = 24
+                bdr(row,1,row,17); ws.row_dimensions[row].height = WELD_ROW_H
                 # A struck weld gets no signatures and every empty cell crossed out (below)
                 if place_signatures and not getattr(w, "struck", False):
                     place_signatures(ws, row, w)
@@ -710,7 +731,7 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
     # tab that cell is one cell and would read the same on every printed page.
     # The budget is conservative on purpose - a tab that ends a little early just looks
     # normal, whereas overfilling one pushes rows onto a second printed page of that tab.
-    ROW_HEIGHT = {"material": 26, "weld": 24, "branch": 18, "note": 16}
+    ROW_HEIGHT = {"material": 26, "weld": WELD_ROW_H, "branch": 18, "note": 16}
     PAGE_BUDGET = 400          # points of data rows per tab, after the header block
     pages, cur, used = [], [], 0
     for item in combined_rows:

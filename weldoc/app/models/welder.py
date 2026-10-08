@@ -9,6 +9,8 @@ class Welder(db.Model):
     name = db.Column(db.String(200), nullable=False)
     no = db.Column(db.String(50))
     signature_url = db.Column(db.String(500), nullable=True)
+    # The welder's Microsoft sign-in e-mail: the account that may manage his signature
+    email = db.Column(db.String(200), nullable=True)
     archived = db.Column(db.Boolean, default=False)
 
     certificates = db.relationship("Certificate", back_populates="welder", lazy="joined")

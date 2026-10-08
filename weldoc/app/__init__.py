@@ -72,6 +72,7 @@ def create_app():
             # Auto-migrate any missing columns on existing tables
             migrations = [
                 "ALTER TABLE weldoc_welders ADD signature_url NVARCHAR(500) NULL",
+                "ALTER TABLE weldoc_welders ADD email NVARCHAR(200) NULL",
                 "ALTER TABLE weldoc_pipeline_materials ADD waz_package_url NVARCHAR(500) NULL",
                 "ALTER TABLE weldoc_pipelines ADD welding_start NVARCHAR(20) NULL",
                 "ALTER TABLE weldoc_pipelines ADD welding_end NVARCHAR(20) NULL",
