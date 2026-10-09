@@ -184,6 +184,16 @@ def export_events():
     wb = Workbook()
     ws = wb.active
     ws.title = "Event log"
+    import re
+    from app.dates import fmt_date, fmt_datetime
+
+    def _val(v):
+        # a changed date field (stored "2026-09-19") reads like every other date in the documents
+        if v is None:
+            return ""
+        s = str(v)
+        return fmt_date(s) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s) else s
+
     head = ["#", "When (UTC)", "User", "Login", "Action", "What", "Pipeline", "Field", "Old value", "New value", "Reason", "Request"]
     ws.append(head)
     for c in ws[1]:
@@ -191,12 +201,12 @@ def export_events():
     for r in rows:
         e = _serialize(r, labels)
         what = f"{e['entityType']} {e['entityLabel'] or e['entityId'] or ''}".strip()
-        base = [e["id"], (e["at"] or "").replace("T", " ")[:19], e["userName"], e["userEmail"], e["action"], what,
+        base = [e["id"], fmt_datetime(e["at"]), e["userName"], e["userEmail"], e["action"], what,
                 e["pipelineNo"] or ""]
         items = list(e["changes"].items()) or [("", [None, None])]
         for field, pair in items:
             old, new = (pair + [None, None])[:2] if isinstance(pair, list) else (None, pair)
-            ws.append(base + [field, "" if old is None else str(old), "" if new is None else str(new), e["reason"], e["requestId"] or ""])
+            ws.append(base + [field, _val(old), _val(new), e["reason"], e["requestId"] or ""])
     for col, w in zip("ABCDEFGHIJKL", (8, 20, 22, 30, 10, 26, 22, 20, 30, 30, 30, 38)):
         ws.column_dimensions[col].width = w
     buf = io.BytesIO()

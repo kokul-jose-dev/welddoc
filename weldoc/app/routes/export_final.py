@@ -535,7 +535,7 @@ def _generate_table_pdf(pl, pr, cli, materials, welds, include_welder_sign=True,
 
     def _note(obj, is_dict):
         get = (lambda k: obj.get(k)) if is_dict else (lambda k: getattr(obj, k, None))
-        when = get("archived_at").strftime("%d-%b-%Y") if get("archived_at") else ""
+        when = fmt_date(get("archived_at")) if get("archived_at") else ""
         # No symbol in front: Helvetica (the PDF font) has no glyph for it and prints a box
         parts = [f"Archiviert / archived {when}".strip(), get("archived_by") or "",
                  f"Grund / reason: {get('archive_reason') or ''}"]

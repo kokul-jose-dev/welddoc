@@ -28,7 +28,8 @@ def generate_waz_cover_page(data):
     c.setFillColor(GREY)
     rx = margin_r
     ry = h - 18 * mm
-    for line in ["IST-Inox AG", "Rötzmattweg 66", "CH-4600 Olten", "Tel +41 62 207 07 07", "www.istinox.ch"]:
+    for line in ["ISTinox AG", "Schorenstrasse 54", "3645 Thun-Gwatt", "Switzerland",
+                 "Tel +41 33 334 26 00", "ist@istinox.ch", "www.istinox.ch"]:
         c.drawRightString(rx, ry, line)
         ry -= 3.2 * mm
 

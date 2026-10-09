@@ -456,7 +456,7 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
         return None
 
     def _note(row_obj):
-        when = row_obj.archived_at.strftime("%d-%b-%Y") if getattr(row_obj, "archived_at", None) else ""
+        when = fmt_date(row_obj.archived_at) if getattr(row_obj, "archived_at", None) else ""
         who = getattr(row_obj, "archived_by", None) or ""
         why = getattr(row_obj, "archive_reason", None) or ""
         return ("note", f"\u2298 Archiviert / archived {when} \u00b7 {who} \u00b7 Grund / reason: {why}".replace(" \u00b7  \u00b7", " \u00b7"), None)
@@ -768,7 +768,8 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
         ws = wb.active if page_idx == 1 else wb.create_sheet()
         ws.title = f"Blatt {page_idx}"
 
-        for c, w in {"A":7,"B":16,"C":16,"D":8,"E":8,"F":12,"G":15,"H":10,"I":8,"J":8,
+        # H (weld date) is 12 wide so "19. Sep. 2026" fits on one line
+        for c, w in {"A":7,"B":16,"C":16,"D":8,"E":8,"F":12,"G":15,"H":12,"I":8,"J":8,
                      "K":8,"L":8,"M":8,"N":8,"O":24,"P":24,"Q":20}.items():
             ws.column_dimensions[c].width = w
 

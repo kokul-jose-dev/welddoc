@@ -578,7 +578,17 @@ function posLetter(n) {
   return String(n);
 }
 function fmtDia(v) { if (!v) return ''; const s = String(v).trim(); return 'Ø ' + s + (s.toLowerCase().includes('mm') ? '' : ' mm'); }
-/* Documents and UI both print dates as DD.MM.YYYY (see app/dates.py). */
+/* The UI shows dates as "08. Oct. 2026" - month in letters, in the page language (2026-10-09).
+   Stored dates stay numeric (YYYY-MM-DD); documents keep DD.MM.YYYY (see app/dates.py). */
+const MONTHS_SHORT = {
+  de: ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'],
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+};
+function uiDate(y, m, d) {
+  const lang = typeof getLang === 'function' ? getLang() : 'de';
+  const names = MONTHS_SHORT[lang] || MONTHS_SHORT.en;
+  return `${String(d).padStart(2, '0')}. ${names[m - 1]}. ${y}`;
+}
 function formatDate(iso) {
   if (!iso) return '—';
   const s = String(iso).trim(); if (!s) return '—';
@@ -590,8 +600,8 @@ function formatDate(iso) {
     mt = base.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
     if (mt) { d = +mt[1]; m = +mt[2]; y = +mt[3]; }
   }
-  if (!y || !m || !d) return s;
-  return `${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${y}`;
+  if (!y || !m || !d || m > 12) return s;
+  return uiDate(y, m, d);
 }
 function daysUntil(iso) {
   if (!iso) return 9999;
@@ -1594,10 +1604,7 @@ function elVal(v) {
   if (/^https?:\/\//.test(s)) return t('el_file', 'file');
   return s;
 }
-function elDay(d) {
-  const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()];
-  return `${String(d.getDate()).padStart(2, '0')}-${m}-${d.getFullYear()}`;
-}
+function elDay(d) { return uiDate(d.getFullYear(), d.getMonth() + 1, d.getDate()); }
 function elWhen(iso, full) {
   if (!iso) return '—';
   const d = new Date(/Z$|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');      /* stored in UTC */
