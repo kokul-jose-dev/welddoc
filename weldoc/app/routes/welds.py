@@ -230,6 +230,30 @@ def _load_font(size):
         return ImageFont.load_default()
 
 
+@welds_bp.route("/<int:weld_id>/media/<kind>", methods=["DELETE"])
+def delete_weld_media(weld_id, kind):
+    """Remove the endoscopy video or image of a weld: the file is deleted from SharePoint and
+    the link cleared (2026-10-12). A struck weld keeps its files as evidence."""
+    field = {"video": "endoscopy_video_url", "image": "endoscopy_image_url"}.get(kind)
+    if not field:
+        return jsonify({"error": "unknown_media", "message": "Only 'video' or 'image' can be removed."}), 400
+    w = Weld.query.get_or_404(weld_id)
+    if w.archived:
+        return jsonify({"error": "weld_struck",
+                        "message": "This weld is struck out - its files are kept as evidence."}), 409
+    url = (getattr(w, field) or "").strip()
+    if url:
+        from app.sharepoint import delete_sharepoint_file
+        # the link is only cleared once SharePoint has let go of the file (a file already gone
+        # counts as deleted), so no file is left behind without a link to it
+        if not delete_sharepoint_file(url):
+            return jsonify({"error": "sharepoint_delete_failed",
+                            "message": "SharePoint did not delete the file. Please try again later."}), 502
+        setattr(w, field, "")
+        db.session.commit()
+    return jsonify(_serialize(w)), 200
+
+
 @welds_bp.route("/<int:weld_id>/upload-files", methods=["POST"])
 def upload_weld_files(weld_id):
     """Upload endo video and/or image to SharePoint in pipeline 03 Bilddokumentation folder."""

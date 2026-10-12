@@ -416,6 +416,9 @@ const TRANSLATIONS = {
     project_has_pipelines_warn: "Dieses Projekt hat {n} Rohrleitung(en).",
     archive_confirm_text: "\"{label}\" archivieren? Das Element wird aus den Listen ausgeblendet.",
     view_video: "Video ansehen",
+    remove_endo_video_confirm: "Endoskopie-Video entfernen? Die Datei wird aus SharePoint gelöscht.",
+    remove_endo_image_confirm: "Endoskopie-Bild entfernen? Die Datei wird aus SharePoint gelöscht.",
+    remove_failed: "Die Datei konnte nicht entfernt werden:",
     view_image: "Bild ansehen",
 
     // Stats & Tiles
@@ -1261,6 +1264,9 @@ const TRANSLATIONS = {
     project_has_pipelines_warn: "This project has {n} pipeline(s).",
     archive_confirm_text: "Archive \"{label}\"? It will be hidden from the lists.",
     view_video: "View video",
+    remove_endo_video_confirm: "Remove the endoscopy video? The file is deleted from SharePoint.",
+    remove_endo_image_confirm: "Remove the endoscopy image? The file is deleted from SharePoint.",
+    remove_failed: "Could not remove the file:",
     view_image: "View image",
 
     // Stats & Tiles

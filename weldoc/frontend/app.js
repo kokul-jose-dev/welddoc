@@ -3121,6 +3121,9 @@ async function submitWelderModal(e) {
     if (code === 'welder_email_taken' || code === 'welder_email_invalid') {
       alert(code === 'welder_email_invalid' ? t('welder_email_invalid', 'Please enter a valid e-mail address.') : ex.message);
       const el = document.getElementById('input-w-email'); if (el) el.focus();
+    } else if (code === 'welder_no_taken') {
+      alert(ex.message);
+      const el = document.getElementById('input-w-no'); if (el) el.focus();
     } else alert('Error saving welder: ' + ex.message);
   } finally {
     setButtonLoading(submitBtn, false);
@@ -3350,6 +3353,38 @@ function buildWeldMaterialChecklist(selectedIds, locked) {
     ? t('joined_materials_locked_hint', 'The joined materials cannot be changed after the weld is created. Edit the connections on the materials instead.')
     : t('select_joined_materials_hint', 'Select the materials this seam joins.');
 }
+/* The weld's current endoscopy video / image in the weld dialog: View, and Remove (2026-10-12) */
+function renderWeldMediaCurrent(w) {
+  const chip = (kind, url, label) => url
+    ? `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="doc-chip doc-iso">${label}</a>`
+      + `<button type="button" class="btn-link" style="color:var(--danger);" onclick="removeWeldMedia(${w.id}, '${kind}', this)">${t('remove', 'Remove')}</button></div>`
+    : '';
+  document.getElementById('weld-video-current').innerHTML = chip('video', w.endoscopyVideoUrl, t('view_video', 'View video'));
+  document.getElementById('weld-image-current').innerHTML = chip('image', w.endoscopyImageUrl, t('view_image', 'View image'));
+}
+async function removeWeldMedia(weldId, kind, btn) {
+  const msg = kind === 'video'
+    ? t('remove_endo_video_confirm', 'Remove the endoscopy video? The file is deleted from SharePoint.')
+    : t('remove_endo_image_confirm', 'Remove the endoscopy image? The file is deleted from SharePoint.');
+  if (!confirm(msg)) return;
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`${API_BASE}/welds/${weldId}/media/${kind}`, { method: 'DELETE' });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.message || r.statusText);
+    const w = getWeld(weldId);
+    if (w) {
+      if (kind === 'video') { w.endoscopyVideoUrl = ''; w.endoscopy_video_url = ''; }
+      else { w.endoscopyImageUrl = ''; w.endoscopy_image_url = ''; }
+      renderWeldMediaCurrent(w);
+    }
+    if (typeof invalidateCache === 'function') invalidateCache();
+    rerenderPage();
+  } catch (ex) {
+    alert(t('remove_failed', 'Could not remove the file:') + ' ' + ex.message);
+    if (btn) btn.disabled = false;
+  }
+}
 function openWeldModal(id = null) {
   editingWeldId = id; document.getElementById('weld-form').reset();
   const sel = id !== null ? getWeld(id) : null;
@@ -3358,8 +3393,7 @@ function openWeldModal(id = null) {
     document.getElementById('modal-weld-title').textContent = t('edit_weld', 'Edit weld');
     setV('input-weld-no', sel.weldNo); setV('input-weld-date', sel.date || TODAY_ISO); setV('input-weld-type', sel.type); setV('input-weld-visual', sel.visual || 'OK'); setV('input-weld-endoscopy', sel.endoscopy || 'n/a'); setV('input-weld-remarks', sel.remarks || '');
     setV('input-weld-proc', sel.procedure || '');
-    document.getElementById('weld-video-current').innerHTML = sel.endoscopyVideoUrl ? `<a href="${escapeHtml(sel.endoscopyVideoUrl)}" target="_blank" class="doc-chip doc-iso">${t('view_video', 'View video')}</a>` : '';
-    document.getElementById('weld-image-current').innerHTML = sel.endoscopyImageUrl ? `<a href="${escapeHtml(sel.endoscopyImageUrl)}" target="_blank" class="doc-chip doc-iso">${t('view_image', 'View image')}</a>` : '';
+    renderWeldMediaCurrent(sel);
   } else {
     document.getElementById('modal-weld-title').textContent = t('new_weld', 'New weld'); setV('input-weld-date', TODAY_ISO); setV('input-weld-type', ''); setV('input-weld-proc', '');
     document.getElementById('weld-video-current').innerHTML = '';

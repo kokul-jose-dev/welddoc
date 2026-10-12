@@ -73,6 +73,24 @@ def welder_for_user(user):
     return hits[0] if len(hits) == 1 else None
 
 
+def _number_problem(no, own_id=None):
+    """None when no other active welder has this number, else the 400 answer. One welder is one
+    entry: a further certificate is added to him, not as a second welder (2026-10-09)."""
+    key = (no or "").strip().lower()
+    if not key:
+        return None
+    q = Welder.query.filter(Welder.archived == False,  # noqa: E712
+                            db.func.lower(db.func.trim(Welder.no)) == key)
+    if own_id:
+        q = q.filter(Welder.id != own_id)
+    other = q.first()
+    if other:
+        return jsonify({"error": "welder_no_taken",
+                        "message": f"Welder number {other.no} already belongs to {other.name}. "
+                                   f"Add the certificate to that welder instead (his profile: + Add certificate)."}), 400
+    return None
+
+
 def _email_problem(email, own_id=None):
     """None when the e-mail can be saved on a welder, else the 400 answer."""
     import re
@@ -120,6 +138,10 @@ def create_or_update_welder():
     data = request.get_json()
     if "id" in data and data["id"]:
         w = Welder.query.get_or_404(data["id"])
+        if "no" in data and (data.get("no") or "").strip().lower() != (w.no or "").strip().lower():
+            problem = _number_problem(data.get("no"), own_id=w.id)
+            if problem:
+                return problem
         w.name = data.get("name", w.name)
         w.no = data.get("no", w.no)
         if "email" in data:
@@ -142,6 +164,9 @@ def create_or_update_welder():
         if "archived" in data:
             w.archived = data["archived"]
     else:
+        problem = _number_problem(data.get("no"))
+        if problem:
+            return problem
         email = (data.get("email") or "").strip()
         problem = _email_problem(email)
         if problem:
