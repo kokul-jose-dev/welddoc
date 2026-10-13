@@ -731,11 +731,17 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
     # tab that cell is one cell and would read the same on every printed page.
     # The budget is conservative on purpose - a tab that ends a little early just looks
     # normal, whereas overfilling one pushes rows onto a second printed page of that tab.
+    # (2026-10-13) The legend is printed on the LAST page only, and the pages have narrow
+    # margins (below): a page holds about 460 pt of rows instead of 400. The last page keeps
+    # room for the legend; if its rows and the legend do not fit, its trailing rows go on a
+    # new last page.
     ROW_HEIGHT = {"material": 26, "weld": WELD_ROW_H, "branch": 18, "note": 16}
-    PAGE_BUDGET = 400          # points of data rows per tab, after the header block
+    PAGE_BUDGET = 600          # points of data rows per tab, after the header block
+    LEGEND_H = 6 + 4 * 10      # the gap row + four legend rows of 10 pt (set below)
+    row_h = lambda item: ROW_HEIGHT.get(item[0], 24)
     pages, cur, used = [], [], 0
     for item in combined_rows:
-        h = ROW_HEIGHT.get(item[0], 24)
+        h = row_h(item)
         if cur and used + h > PAGE_BUDGET:
             pages.append(cur)
             cur, used = [], 0
@@ -743,6 +749,11 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
         used += h
     if cur or not pages:
         pages.append(cur)
+    last, moved = pages[-1], []
+    while len(last) > 1 and sum(map(row_h, last)) + LEGEND_H > PAGE_BUDGET:
+        moved.insert(0, last.pop())
+    if moved:
+        pages.append(moved)
     # Never one row alone on the last page: the row before it moves down with it (2026-10-06)
     if len(pages) > 1 and len(pages[-1]) == 1 and len(pages[-2]) > 1:
         pages[-1].insert(0, pages[-2].pop())
@@ -787,8 +798,12 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
 
         # Footer legend (four groups, matching the IST reference form). Smaller than the
         # table: it explains the abbreviations, it should not compete with the data.
-        row += 1
-        for c1, c2, c3, c4 in legend:
+        # Only on the last page (2026-10-13) - the other pages use the room for rows.
+        if page_idx == len(pages):
+            ws.row_dimensions[row].height = 6
+            row += 1
+        for c1, c2, c3, c4 in (legend if page_idx == len(pages) else []):
+            ws.row_dimensions[row].height = 10
             ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
             ws.cell(row, 1, c1).font = lfb
             ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=12)
@@ -799,7 +814,11 @@ def build_weld_list_workbook(pipeline_id, include_welder_sign=False, include_ins
             ws.cell(row, 16, c4).font = lf
             row += 1
 
-        # Print setup: landscape, all 17 columns on one page width.
+        # Print setup: landscape, all 17 columns on one page width, narrow margins (inches)
+        # so the page is filled by the form rather than by white border.
+        ws.page_margins.left = ws.page_margins.right = 0.25
+        ws.page_margins.top = ws.page_margins.bottom = 0.3
+        ws.page_margins.header = ws.page_margins.footer = 0
         ws.page_setup.orientation = "landscape"
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 1
