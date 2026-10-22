@@ -114,9 +114,16 @@ def _serialize(p):
     }
 
 
+# The pipe's ISO drawing folder in SharePoint, renamed from "01 Isometrie & Stückliste" on
+# 2026-10-22. Until every pipe's folder is renamed, replacing or deleting the drawing also clears
+# the old-named folder, so nothing is left behind there.
+ISO_FOLDER = "01 Isometrie"
+ISO_FOLDERS = (ISO_FOLDER, "01 Isometrie & Stückliste")
+
+
 @pipelines_bp.route("/<int:pipeline_id>/upload-iso", methods=["POST"])
 def upload_iso(pipeline_id):
-    """Upload or replace ISO document in SharePoint at {project_folder}/{pipeline_no}/01 Isometrie & Stückliste/
+    """Upload or replace ISO document in SharePoint at {project_folder}/{pipeline_no}/01 Isometrie/
     Deletes any existing file in the ISO subfolder before uploading the new one."""
     from app.models.project import Project
     from app.sharepoint import upload_to_pipeline_subfolder, list_pipeline_subfolder_files, delete_sharepoint_drive_item, delete_sharepoint_file_by_url
@@ -136,13 +143,13 @@ def upload_iso(pipeline_id):
     content_type = file.content_type or "application/pdf"
 
     try:
-        # Delete old files in the ISO subfolder if any exist
-        existing_files = list_pipeline_subfolder_files(
+        # Delete old files in the ISO subfolder (and its old-named one) if any exist
+        existing_files = [f for sub in ISO_FOLDERS for f in list_pipeline_subfolder_files(
             project.sharepoint_drive_id,
             project.sharepoint_folder_id,
             p.no,
-            "01 Isometrie & Stückliste"
-        )
+            sub
+        )]
         for item in existing_files:
             item_id = item.get("id")
             if item_id:
@@ -159,7 +166,7 @@ def upload_iso(pipeline_id):
             project.sharepoint_drive_id,
             project.sharepoint_folder_id,
             p.no,
-            "01 Isometrie & Stückliste",
+            ISO_FOLDER,
             file.filename,
             file_content,
             content_type
@@ -182,12 +189,12 @@ def delete_iso(pipeline_id):
     p = Pipeline.query.get_or_404(pipeline_id)
     project = Project.query.get(p.project_id)
     if project and project.sharepoint_drive_id and project.sharepoint_folder_id:
-        existing_files = list_pipeline_subfolder_files(
+        existing_files = [f for sub in ISO_FOLDERS for f in list_pipeline_subfolder_files(
             project.sharepoint_drive_id,
             project.sharepoint_folder_id,
             p.no,
-            "01 Isometrie & Stückliste"
-        )
+            sub
+        )]
         for item in existing_files:
             item_id = item.get("id")
             if item_id:

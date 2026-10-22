@@ -37,6 +37,7 @@ IF COL_LENGTH('weldoc_project_materials', 'replace_note') IS NULL
     ALTER TABLE weldoc_project_materials ADD replace_note NVARCHAR(500) NULL;
 IF COL_LENGTH('weldoc_global_materials', 'replaced_by_id') IS NULL
     ALTER TABLE weldoc_global_materials ADD replaced_by_id INT NULL;
+GO
 
 IF OBJECT_ID('weldoc_material_change_answers', 'U') IS NULL
 BEGIN
@@ -49,8 +50,12 @@ BEGIN
         answered_by         NVARCHAR(255) NULL,
         answered_at         DATETIME2 NULL
     );
-    CREATE INDEX ix_weldoc_material_change_answers_pipeline_id ON weldoc_material_change_answers (pipeline_id);
 END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_weldoc_material_change_answers_pipeline_id')
+    CREATE INDEX ix_weldoc_material_change_answers_pipeline_id ON weldoc_material_change_answers (pipeline_id);
+GO
 
 SELECT 'done' AS [status],
        COL_LENGTH('weldoc_project_materials', 'replaced_by_id') AS pm_replaced_by_id,
