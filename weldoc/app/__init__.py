@@ -73,6 +73,12 @@ def create_app():
             migrations = [
                 "ALTER TABLE weldoc_welders ADD signature_url NVARCHAR(500) NULL",
                 "ALTER TABLE weldoc_welders ADD email NVARCHAR(200) NULL",
+                # material change A / B / C (app/material_change.py, db/migrations/015)
+                "ALTER TABLE weldoc_project_materials ADD replaced_by_id INT NULL",
+                "ALTER TABLE weldoc_project_materials ADD replaced_at DATETIME2 NULL",
+                "ALTER TABLE weldoc_project_materials ADD replaced_by NVARCHAR(255) NULL",
+                "ALTER TABLE weldoc_project_materials ADD replace_note NVARCHAR(500) NULL",
+                "ALTER TABLE weldoc_global_materials ADD replaced_by_id INT NULL",
                 "ALTER TABLE weldoc_pipeline_materials ADD waz_package_url NVARCHAR(500) NULL",
                 "ALTER TABLE weldoc_pipelines ADD welding_start NVARCHAR(20) NULL",
                 "ALTER TABLE weldoc_pipelines ADD welding_end NVARCHAR(20) NULL",

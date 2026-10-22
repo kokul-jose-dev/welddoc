@@ -90,6 +90,12 @@ def edit_global_material(gm_id):
     }
     norm = normalize_gm_data(current_dict)
 
+    # Locked positions and pipes on final keep the old specification (app/material_change.py)
+    from app.material_change import guard_global_material_edit
+    corrected = guard_global_material_edit(m, norm)
+    if corrected is not None:
+        return jsonify(_serialize(corrected)), 200
+
     existing_other = find_matching_global_material(norm, exclude_id=gm_id)
     if existing_other:
         merge_global_materials(gm_id, existing_other.id)
@@ -214,6 +220,12 @@ def update_global_material_spec():
         db.session.commit()
         return jsonify(_serialize(gm)), 201
     else:
+        # Locked positions and pipes on final keep the old specification (app/material_change.py)
+        from app.material_change import guard_global_material_edit
+        corrected = guard_global_material_edit(gm, norm)
+        if corrected is not None:
+            return jsonify(_serialize(corrected)), 200
+
         existing_other = find_matching_global_material(norm, exclude_id=gm.id)
         if existing_other:
             merge_global_materials(gm.id, existing_other.id)

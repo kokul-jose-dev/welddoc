@@ -2409,6 +2409,17 @@ function attachFormHandlers() {
     /* Conflict check before saving */
     const isEditingMat = editingMaterialId !== null;
 
+    /* Editing the specifications of a material in a pipe: the user chooses how far the change
+       goes - A only this material, B the whole pipe, C everywhere - and it is a swap when the
+       new values are an existing material (2026-10-22, agreed with IST). See startMaterialChange. */
+    if (isEditingMat && existingMat && !_bypassMatHeatConflict) {
+      const changeDiffs = getMaterialDiffs(existingMat, existingMat, { category: piece, itemDescription: itemDesc || piece, dn1: dimension, materialCode: matCode, dienNo, diameter, thickness, surface, certificate, heatNo, ...data });
+      if (changeDiffs.length > 0) {
+        await startMaterialChange({ data, extraDns, wazFile, submitBtn, diffs: changeDiffs, materialId: editingMaterialId });
+        return;
+      }
+    }
+
     if (!_bypassMatHeatConflict) {
       const dnsObj = { dn1: dimension };
       for (let i = 2; i <= 6; i++) if (data[`dimension${i}`]) dnsObj[`dn${i}`] = data[`dimension${i}`];
@@ -2477,33 +2488,8 @@ function attachFormHandlers() {
       }
     }
 
-    if (isEditingMat && existingMat && !_bypassMatHeatConflict) {
-      // When EDITING an existing material, check if user changed any material specifications on THIS material
-      const diffs = getMaterialDiffs(existingMat, existingMat, { category: piece, itemDescription: itemDesc || piece, dn1: dimension, materialCode: matCode, dienNo, diameter, thickness, surface, certificate, heatNo, ...data });
-
-      // SCENARIO 2: If user modified any specifications on this material, show confirmation popup
-      if (diffs.length > 0) {
-        promptHeatConflictModal({
-          mode: 'update_or_add_new',
-          title: t('update_material_specs_title', 'Update Material Specifications'),
-          desc: t('update_material_specs_desc', 'You are changing the specifications for this material.<br><br><strong>Update</strong> — the change applies to <strong>every material with these specifications</strong>, in this and in every other pipeline of the project.<br><strong>Add as New Material</strong> — <strong>only this material</strong> changes; all the others keep their current specifications.'),
-          diffs,
-          updateBtnText: t('update', 'Update'),
-          addBtnText: t('add_as_new', 'Add as New Material'),
-          existingMaterial: {
-            globalMaterialId: existingMat.globalMaterialId,
-            projectMaterialId: existingMat.projectMaterialId,
-          },
-          onAddAsNew: async () => {
-            await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: editingMaterialId, forceNew: true });
-          },
-          onUpdateExisting: async () => {
-            await doSavePipelineMaterial({ data, extraDns, wazFile, submitBtn, editingId: editingMaterialId, forceNew: false });
-          }
-        });
-        return;
-      }
-    } else if (!isEditingMat && heatNo && !_bypassMatHeatConflict) {
+    /* Editing with changed specifications went to startMaterialChange above. */
+    if (!isEditingMat && heatNo && !_bypassMatHeatConflict) {
       // Adding a brand new material: check if heat number already exists on another material with different specs
       try {
         const dnsObj = { dn1: dimension };
@@ -2598,11 +2584,14 @@ async function doSavePipelineMaterial(params) {
       dienNo: data.dienNo, surface: data.surface || ''
     };
     for (let i = 2; i <= 6; i++) if (data[`dimension${i}`]) gmData[`dn${i}`] = data[`dimension${i}`];
-    const gmResult = await apiPost('/global-materials', gmData);
+    /* The specification was already changed by A / B / C (startMaterialChange): only the
+       position, connections and the rest are saved here. */
+    const specDone = params.specDone || null;
+    const gmResult = specDone ? null : await apiPost('/global-materials', gmData);
 
     // Step 2: Create/find/update project material
     const existingMat = (editingId !== null) ? getMaterial(editingId) : null;
-    const pmData = {
+    const pmData = specDone ? null : {
       projectId: currentProjectId,
       globalMaterialId: gmResult.id,
       certificate: data.certificate || '',
@@ -2612,21 +2601,21 @@ async function doSavePipelineMaterial(params) {
     };
     /* The heat this material had before the edit. A different heat is a different melt, so
        the server will not carry the old WAZ certificate onto the new material. */
-    if (existingMat) pmData.prevHeatNo = existingMat.heatNo || '';
-    if (existingMat && existingMat.projectMaterialId && !forceNew) {
+    if (pmData && existingMat) pmData.prevHeatNo = existingMat.heatNo || '';
+    if (pmData && existingMat && existingMat.projectMaterialId && !forceNew) {
       pmData.id = existingMat.projectMaterialId;
-    } else if (targetProjectMaterialId && !forceNew) {
+    } else if (pmData && targetProjectMaterialId && !forceNew) {
       pmData.id = targetProjectMaterialId;
     }
-    const pmResult = await apiPost('/project-materials', pmData);
+    const pmResult = specDone ? { id: specDone.projectMaterialId } : await apiPost('/project-materials', pmData);
 
     // Step 3: Create/edit pipeline material
     const plmData = { pipelineId: data.pipelineId, projectMaterialId: pmResult.id, position: posLtr, startOfPlumbing: data.startOfPlumbing, endOfPlumbing: data.endOfPlumbing, connections: connPositions };
     if (editingId !== null) plmData.id = editingId;
-    if (prevGlobalMaterialId) plmData.prevGlobalMaterialId = prevGlobalMaterialId;
+    if (prevGlobalMaterialId && !specDone) plmData.prevGlobalMaterialId = prevGlobalMaterialId;
     /* The heat number is changed by the project-material call above, so the server cannot see
        what it used to be. It is printed on the cover page and in the filename, so send it. */
-    if (matBeforeSave) plmData.prevHeatNo = matBeforeSave.heatNo || '';
+    if (matBeforeSave && !specDone) plmData.prevHeatNo = matBeforeSave.heatNo || '';
     let plmResult;
     if (plmData.id) { plmResult = await apiPost('/pipeline-materials/' + plmData.id, plmData); }
     else { plmResult = await apiPost('/pipeline-materials', plmData); }
@@ -5795,6 +5784,7 @@ async function initPipelineDetailPage() {
   saveDB();
   renderChrome('pipelines', `<a href="projects.html">${t('projects', 'Projects')}</a> / ${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a> / ` : ''}${escapeHtml(pl.no)}`); mountModals(); wireModalDismiss();
   renderPipelineDetail();
+  loadPendingMaterialChanges();
   const seam = qp('seam'); if (seam) { const w = getWeld(Number(seam)); if (w && w.pipelineId === PAGE.pipelineId) showSeamDetail(w.id); }
 
   // Background: load welders & global materials for modals if not already cached
@@ -8995,6 +8985,138 @@ function getMaterialDiffs(existingPm, existingGm, newSpecs) {
     }
   }
   return diffs;
+}
+
+/* ---- Changing a material's specification from a pipe: A / B / C (app/material_change.py) ---- */
+function matChangeSpecs(data) {
+  const s = {
+    category: data.piece, itemDescription: data.itemDescription, materialCode: data.materialCode,
+    dn1: data.dimension, diameter: data.diameter, thickness: data.thickness,
+    diameter2: data.diameter2 || '', diameter3: data.diameter3 || '',
+    thickness2: data.thickness2 || '', thickness3: data.thickness3 || '',
+    dienNo: data.dienNo, surface: data.surface || '',
+  };
+  for (let i = 2; i <= 6; i++) s[`dn${i}`] = data[`dimension${i}`] || '';
+  return s;
+}
+async function startMaterialChange(p) {
+  const payload = { ...matChangeSpecs(p.data), certificate: p.data.certificate || '', heatNo: p.data.heatNo || '' };
+  let info;
+  try { info = await apiPost(`/pipeline-materials/${p.materialId}/change-spec/preview`, payload); }
+  catch (ex) { alert(t('mat_change_failed', 'The material could not be changed:') + ' ' + (ex.message || ex)); return; }
+  if (info.unchanged) { await doSavePipelineMaterial({ data: p.data, extraDns: p.extraDns, wazFile: p.wazFile, submitBtn: p.submitBtn, editingId: p.materialId }); return; }
+  if (info.selfLocked) {
+    alert(t('mat_change_self_locked', 'This material is locked: a weld on it already has a welder or inspector. To correct it, strike it and add the right material.'));
+    return;
+  }
+  promptMaterialChange(info, p.diffs, async (scope, includeLocked) => {
+    if (p.submitBtn) setButtonLoading(p.submitBtn, true, t('saving', 'Saving…'));
+    let res;
+    try {
+      res = await apiPost(`/pipeline-materials/${p.materialId}/change-spec`, { ...payload, scope, includeLocked, wazPdfUrl: p.data.wazPdfUrl || '' });
+    } catch (ex) {
+      if (p.submitBtn) setButtonLoading(p.submitBtn, false);
+      alert(t('mat_change_failed', 'The material could not be changed:') + ' ' + (ex.message || ex));
+      return;
+    }
+    await doSavePipelineMaterial({ data: p.data, extraDns: p.extraDns, wazFile: p.wazFile, submitBtn: p.submitBtn, editingId: p.materialId, specDone: res.material });
+    const sm = res.summary || {};
+    const lines = [sm.swap
+      ? t('mat_change_done_swap', '{n} position(s) swapped to the existing material.').replace('{n}', sm.changed)
+      : t('mat_change_done', '{n} position(s) changed.').replace('{n}', sm.changed)];
+    if ((sm.kept || []).length) lines.push(t('mat_change_kept_locked', 'Not changed (locked):') + ' ' + sm.kept.map(k => `${k.pipelineNo} ${k.position}`).join(', '));
+    if ((sm.final || []).length) lines.push(t('mat_change_kept_final', 'Not changed (pipe on final - asked when opened):') + ' ' + sm.final.join(', '));
+    alert(lines.join('\n'));
+  });
+}
+function promptMaterialChange(info, diffs, onChoose) {
+  let modal = document.getElementById('modal-mat-change');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'modal-mat-change';
+    document.getElementById('modal-root').appendChild(modal);
+  }
+  const swap = !!info.swap;
+  const row = d => `<tr><td style="font-weight:600;color:var(--text);">${escapeHtml(t('field_' + d.field, d.label))}</td>
+    <td>${d.existingVal ? `<span class="diff-val-old">${escapeHtml(d.existingVal)}</span>` : '<span class="diff-val-empty">— empty —</span>'}</td>
+    <td>${d.newVal ? `<span class="diff-val-new">${escapeHtml(d.newVal)}</span>` : '<span class="diff-val-empty">— empty —</span>'}</td></tr>`;
+  const diffTable = (diffs || []).length ? `<table class="diff-table"><thead><tr><th>${t('field_name', 'Field')}</th><th>${t('existing_val', 'Current Value')}</th><th>${t('new_val', 'New Value')}</th></tr></thead><tbody>${diffs.map(row).join('')}</tbody></table>` : '';
+  const st = info.swapTarget;
+  const swapBox = swap && st ? `<div class="mat-change-swap"><strong>🔁 ${t('mat_swap_notice_title', 'This is a swap.')}</strong>
+      ${t('mat_swap_notice', 'A material with these values already exists in this project:')}
+      <div class="mat-change-target">${escapeHtml(st.label)}${st.wazNo ? ` · WAZ ${escapeHtml(st.wazNo)}` : ''}</div>
+      <div class="muted">${t('mat_swap_used', 'Used {n}× in {pipes}').replace('{n}', st.usedCount).replace('{pipes}', escapeHtml((st.pipelines || []).join(', ') || '—'))}</div>
+      ${t('mat_swap_notice_end', 'The chosen positions are switched to this existing material - no new material is created.')}</div>` : '';
+  const g = info.global;
+  const usage = `<ul class="mat-change-usage">
+      <li><strong>A</strong> – ${t('mat_change_usage_a', 'only this position')}</li>
+      <li><strong>B</strong> – ${t('mat_change_usage_b', '{n} position(s) in this pipe').replace('{n}', info.pipe.count)}</li>
+      ${!swap && g ? `<li><strong>C</strong> – ${t('mat_change_usage_c', '{n} position(s) in {p} pipe(s) of {j} project(s), and the global material list').replace('{n}', g.count).replace('{p}', g.pipelines).replace('{j}', g.projects)}</li>` : ''}
+    </ul>`;
+  const lockedById = new Map();
+  (info.pipe.locked || []).forEach(l => lockedById.set(l.id, l));
+  if (!swap && g) (g.locked || []).forEach(l => lockedById.set(l.id, l));
+  const locked = [...lockedById.values()];
+  const lockedBox = locked.length ? `<div class="mat-change-locked"><strong>${t('mat_change_locked_title', 'Locked positions - not changed unless ticked:')}</strong>
+      ${locked.map(l => `<label class="check-item"><input type="checkbox" class="mat-change-lock" value="${l.id}"> ${escapeHtml(l.pipelineNo)} · ${escapeHtml(l.position)}</label>`).join('')}
+      <div class="muted" style="font-size:0.78rem;">${t('mat_change_locked_hint', 'A weld on them already has a welder or inspector. Applies to B and C.')}</div></div>` : '';
+  const finalBox = !swap && g && (g.final || []).length ? `<div class="mat-change-final">${t('mat_change_final_note', 'Pipes on final are not changed by C - they are asked when someone opens them:')} ${g.final.map(f => `${escapeHtml(f.pipelineNo)} (${escapeHtml(f.positions.join(', '))})`).join(', ')}</div>` : '';
+  modal.innerHTML = `<div class="modal modal-wide" style="max-width:720px;">
+    <button class="modal-close" onclick="closeModal('modal-mat-change')">&times;</button>
+    <h2 style="color:#92400E;">${swap ? t('mat_swap_title', 'Swap material') : t('mat_change_title', 'Change material specifications')}</h2>
+    <div class="heat-diff-card">
+      <p>${swap ? t('mat_swap_desc', 'Choose where the material is swapped.') : t('mat_change_desc', 'Choose how far the change goes.')}</p>
+      ${diffTable}
+    </div>
+    ${swapBox}${usage}${lockedBox}${finalBox}
+    <div class="heat-modal-actions">
+      <button type="button" class="btn btn-ghost" id="btn-mc-cancel">${t('cancel', 'Cancel')}</button>
+      <button type="button" class="btn btn-secondary" id="btn-mc-a">${swap ? t('mat_swap_a', 'A – Swap only this material') : t('mat_change_a', 'A – Only this material')}</button>
+      <button type="button" class="btn btn-secondary" id="btn-mc-b">${swap ? t('mat_swap_b', 'B – Swap in the whole pipe') : t('mat_change_b', 'B – This material in the whole pipe')}</button>
+      ${swap ? '' : `<button type="button" class="btn btn-primary" id="btn-mc-c">${t('mat_change_c', 'C – Everywhere (global)')}</button>`}
+    </div></div>`;
+  const ticked = () => [...modal.querySelectorAll('.mat-change-lock:checked')].map(c => Number(c.value));
+  const go = scope => { const inc = ticked(); closeModal('modal-mat-change'); onChoose(scope, inc); };
+  modal.querySelector('#btn-mc-cancel').onclick = () => closeModal('modal-mat-change');
+  modal.querySelector('#btn-mc-a').onclick = () => go('one');
+  modal.querySelector('#btn-mc-b').onclick = () => go('pipe');
+  const cBtn = modal.querySelector('#btn-mc-c');
+  if (cBtn) cBtn.onclick = () => {
+    if (!confirm(t('mat_change_c_confirm', 'C changes this material EVERYWHERE: in every pipe of every project that uses it, and in the global material list.\n\nPipes on final and locked positions are not changed (unless ticked).\n\nContinue?'))) return;
+    go('global');
+  };
+  openModal('modal-mat-change');
+}
+
+/* A pipe on final whose material was changed everywhere later: apply it here too, or keep it */
+async function loadPendingMaterialChanges() {
+  const box = document.getElementById('pl-material-changes');
+  if (!box) return;
+  const pl = getPipeline(PAGE.pipelineId);
+  if (!pl || (pl.status || 0) < 5) { box.innerHTML = ''; return; }
+  let list = [];
+  try { list = await apiGet(`/pipeline-materials/pending-changes?pipelineId=${PAGE.pipelineId}`); } catch (e) { list = []; }
+  box.innerHTML = (list || []).map(c => `<div class="pl-change-banner">
+      <div><strong>⚠ ${t('pl_change_title', 'A material of this pipe was changed in the global list')}</strong>
+        <div>${escapeHtml(c.from)} <span class="muted">→</span> <strong>${escapeHtml(c.to)}</strong></div>
+        <div class="muted" style="font-size:0.8rem;">${t('pl_change_positions', 'Positions')}: ${escapeHtml((c.positions || []).join(', '))}${c.changedBy ? ` · ${escapeHtml(c.changedBy)}` : ''}${c.changedAt ? ` · ${formatDate(c.changedAt)}` : ''}</div></div>
+      <div style="display:flex;gap:8px;flex-shrink:0;">
+        <button type="button" class="btn btn-primary btn-sm" onclick="answerMaterialChange(${c.projectMaterialId}, 'apply', this)">${t('pl_change_apply', 'Apply to this pipe')}</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="answerMaterialChange(${c.projectMaterialId}, 'keep', this)">${t('pl_change_keep', 'Keep as it is')}</button>
+      </div></div>`).join('');
+}
+async function answerMaterialChange(pmId, answer, btn) {
+  if (answer === 'apply' && !confirm(t('pl_change_apply_confirm', 'Apply the changed material to this pipe? Its documents have to be generated again afterwards.'))) return;
+  if (btn) btn.disabled = true;
+  try {
+    await apiPost('/pipeline-materials/pending-changes/answer', { pipelineId: PAGE.pipelineId, projectMaterialId: pmId, answer });
+    if (answer === 'apply') { location.reload(); return; }
+    loadPendingMaterialChanges();
+  } catch (ex) {
+    alert(t('mat_change_failed', 'The material could not be changed:') + ' ' + (ex.message || ex));
+    if (btn) btn.disabled = false;
+  }
 }
 
 function promptHeatConflictModal({

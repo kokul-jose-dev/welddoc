@@ -136,6 +136,13 @@ def create_or_update_project_material():
         cert_before = clean_str(m.certificate)
         heat_before = clean_str(m.heat_no)
 
+        # Locked positions and pipes on final keep this material; only the others follow the
+        # edit (app/material_change.py). Nothing protected -> the edit goes ahead as before.
+        from app.material_change import guard_project_material_edit
+        kept_target = guard_project_material_edit(m, target_gm_id, cert, heat, waz_pdf_url)
+        if kept_target is not None:
+            return jsonify({**_serialize(kept_target), "protectedKept": True}), 200
+
         # Check if updating this PM matches another existing PM in the same project
         existing_other = find_matching_project_material(
             m.project_id, target_gm_id, cert, heat, exclude_id=m.id

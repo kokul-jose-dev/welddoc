@@ -429,6 +429,68 @@ def edit_pipeline_material(pm_id):
     return jsonify(_serialize(m)), 200
 
 
+# --- Changing the specification: A / B / C (app/material_change.py, 2026-10-22) -----------------
+
+def _change_args(data):
+    specs = {k: data.get(k) for k in (
+        "category", "itemDescription", "materialCode", "dienNo", "surface",
+        "dn1", "dn2", "dn3", "dn4", "dn5", "dn6",
+        "diameter", "diameter2", "diameter3", "thickness", "thickness2", "thickness3")}
+    return specs, data.get("certificate", ""), data.get("heatNo", "")
+
+
+@pipeline_materials_bp.route("/<int:pm_id>/change-spec/preview", methods=["POST"])
+def change_spec_preview(pm_id):
+    """What A / B / C would change - shown in the dialog before anything is saved."""
+    from app import material_change
+    m = PipelineMaterial.query.get_or_404(pm_id)
+    specs, cert, heat = _change_args(request.get_json() or {})
+    return jsonify(material_change.analyse(m, specs, cert, heat)), 200
+
+
+@pipeline_materials_bp.route("/<int:pm_id>/change-spec", methods=["POST"])
+def change_spec(pm_id):
+    """A (scope "one"), B ("pipe") or C ("global"); a swap when the values are an existing material."""
+    from app import material_change
+    m = PipelineMaterial.query.get_or_404(pm_id)
+    data = request.get_json() or {}
+    specs, cert, heat = _change_args(data)
+    try:
+        summary = material_change.apply(m, data.get("scope"), specs, cert, heat,
+                                        include_locked=data.get("includeLocked") or [],
+                                        waz_pdf_url=data.get("wazPdfUrl") or None)
+    except material_change.ChangeRefused as e:
+        db.session.rollback()
+        return jsonify({"error": e.code, "message": e.message}), e.status
+    m = db.session.get(PipelineMaterial, pm_id)
+    return jsonify({"material": _serialize(m), "summary": summary}), 200
+
+
+@pipeline_materials_bp.route("/pending-changes", methods=["GET"])
+def pending_material_changes():
+    """For a pipe on final: materials changed everywhere since - apply here too, or keep?"""
+    from app import material_change
+    pipeline_id = request.args.get("pipelineId", type=int)
+    if not pipeline_id:
+        return jsonify([]), 200
+    return jsonify(material_change.pending_changes(pipeline_id)), 200
+
+
+@pipeline_materials_bp.route("/pending-changes/answer", methods=["POST"])
+def answer_material_change():
+    from app import material_change
+    data = request.get_json() or {}
+    try:
+        result = material_change.answer(int(data.get("pipelineId") or 0), int(data.get("projectMaterialId") or 0),
+                                        data.get("answer"))
+    except material_change.ChangeRefused as e:
+        db.session.rollback()
+        return jsonify({"error": e.code, "message": e.message}), e.status
+    except (TypeError, ValueError):
+        return jsonify({"error": "bad_request", "message": "pipelineId and projectMaterialId are required."}), 400
+    return jsonify(result), 200
+
+
 @pipeline_materials_bp.route("/<int:pm_id>/upload-waz", methods=["POST"])
 def upload_waz_for_pipeline_material(pm_id):
     """Upload WAZ document — saves to project material, copies to pipeline/WAZ folder with cover page."""

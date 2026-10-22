@@ -20,6 +20,12 @@ class ProjectMaterial(db.Model):
     # The same certificate in the global WAZ folder (migration 013, app/global_waz.py)
     waz_global_url = db.Column(db.Unicode(500), nullable=True)
     archived = db.Column(db.Boolean, default=False)
+    # Changed everywhere (app/material_change.py) while a protected position - a pipe on final,
+    # a locked position - kept this one: the material that replaced it, when, by whom, what.
+    replaced_by_id = db.Column(db.Integer, nullable=True)
+    replaced_at = db.Column(db.DateTime, nullable=True)
+    replaced_by = db.Column(db.Unicode(255), nullable=True)
+    replace_note = db.Column(db.Unicode(500), nullable=True)
 
     global_material = db.relationship("GlobalMaterial", lazy="joined")
 

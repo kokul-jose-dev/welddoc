@@ -31,3 +31,5 @@ class GlobalMaterial(db.Model):
     material_code = db.Column(MaterialCodeColumn(50))
     dien_no = db.Column(db.String(100))
     archived = db.Column(db.Boolean, default=False)
+    # Corrected everywhere (app/material_change.py): the specification that replaced this one
+    replaced_by_id = db.Column(db.Integer, nullable=True)
