@@ -464,6 +464,8 @@ async function refreshMyWelderId() {
   } catch (e) { }
   return myWelderId();
 }
+/* A signature admin (SIGNATURE_ADMIN_EMAILS on the server) may change every welder's signature */
+function isSignatureAdmin() { const a = getCached('auth_user') || {}; return !!a.signatureAdmin; }
 function applySignedInWelder(u) {
   if (u && u.welderId && getRole() === 'vendor' && getCurrentUserId() !== u.welderId) setCurrentUserId(u.welderId);
 }
@@ -3157,9 +3159,11 @@ async function openWelderModal(id = null, returnToWeld = false) {
     }
   }
   else { document.getElementById('modal-welder-title').textContent = t('new_welder', 'New welder'); /* auto-show 1 required cert row */ showWelderCertSection(); }
-  /* Only the welder himself, signed in with his own account, may add or change his signature */
-  const meId = editingWelderId === null ? null : await refreshMyWelderId();
-  if (editingWelderId === null || editingWelderId !== meId) {
+  /* Only the welder himself, signed in with his own account, may add or change his signature -
+     and the signature admin, for every welder (2026-10-26) */
+  const meId = await refreshMyWelderId();
+  const mayChangeSignature = isSignatureAdmin() || (editingWelderId !== null && editingWelderId === meId);
+  if (!mayChangeSignature) {
     if (sigWrap) sigWrap.style.display = 'none';
     if (curDiv) {
       curDiv.querySelectorAll('button').forEach(b => b.remove());

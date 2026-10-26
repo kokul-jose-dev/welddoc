@@ -108,10 +108,22 @@ def _email_problem(email, own_id=None):
     return None
 
 
+def is_signature_admin(user):
+    """The signed-in account may change every welder's signature (SIGNATURE_ADMIN_EMAILS)."""
+    from flask import current_app
+    email = _norm_email((user or {}).get("email"))
+    admins = {_norm_email(e) for e in (current_app.config.get("SIGNATURE_ADMIN_EMAILS") or "").split(",")}
+    return bool(email) and email in admins
+
+
 def _signature_refusal(w):
-    """None when the signed-in account is this welder, else the 403 answer."""
+    """None when the signed-in account is this welder or a signature admin, else the 403 answer.
+    Every change is in the event log with the account that made it."""
     from flask import session
-    me = welder_for_user(session.get("user"))
+    user = session.get("user")
+    if is_signature_admin(user):
+        return None
+    me = welder_for_user(user)
     if me is not None and me.id == w.id:
         return None
     return jsonify({

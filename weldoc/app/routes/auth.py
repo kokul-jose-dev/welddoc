@@ -120,9 +120,10 @@ def auth_me():
     if not user:
         return jsonify({"logged_in": False}), 401
     # The welder this account is (matched by name) - only he may change his signature
-    from app.routes.welders import welder_for_user
+    from app.routes.welders import welder_for_user, is_signature_admin
     me = welder_for_user(user)
-    return jsonify({"logged_in": True, **user, "welderId": me.id if me else None})
+    return jsonify({"logged_in": True, **user, "welderId": me.id if me else None,
+                    "signatureAdmin": is_signature_admin(user)})
 
 
 @auth_bp.route("/logout")

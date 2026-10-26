@@ -28,4 +28,7 @@ class Config:
     SHAREPOINT_GLOBAL_WAZ_HOST = os.getenv("SHAREPOINT_GLOBAL_WAZ_HOST", "")
     SHAREPOINT_GLOBAL_WAZ_SITE = os.getenv("SHAREPOINT_GLOBAL_WAZ_SITE", "")
     SHAREPOINT_GLOBAL_WAZ_FOLDER = os.getenv("SHAREPOINT_GLOBAL_WAZ_FOLDER", "")
+    # May add, replace and remove ANY welder's signature (comma-separated sign-in e-mails).
+    # Everyone else: only the welder himself. Changeable in the Azure settings (2026-10-26).
+    SIGNATURE_ADMIN_EMAILS = os.getenv("SIGNATURE_ADMIN_EMAILS", "a.probst@istinox.ch")
     SHAREPOINT_WELDER_FOLDER = os.getenv("SHAREPOINT_WELDER_FOLDER", "General/1_QMS ISO 9001_2015/4_Nachweisend/3.2_Personal & Ausbildung/Schweissprüfungen")
