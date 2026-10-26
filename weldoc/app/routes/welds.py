@@ -73,17 +73,6 @@ def create_or_update_weld():
             db.session.add(w)
     db.session.commit()
 
-    # Copy welder/inspector certificates to pipeline folder in background
-    if data.get("welderId") or data.get("inspectorId"):
-        import threading
-        from flask import current_app
-        app = current_app._get_current_object()
-        weld_id = w.id
-        def _bg_copy_certs():
-            with app.app_context():
-                _copy_welder_certs_to_pipeline(weld_id)
-        threading.Thread(target=_bg_copy_certs, daemon=True).start()
-
     return jsonify(_serialize(w)), 200
 
 
@@ -126,21 +115,7 @@ def bulk_update_welds():
             else:
                 setattr(w, col, val)
     db.session.commit()
-
-    updated_ids = [w.id for w in rows]
-
-    # Copy welder/inspector certificates to the pipeline folder in the background
-    if values.get("welderId") or values.get("inspectorId"):
-        import threading
-        from flask import current_app
-        app = current_app._get_current_object()
-
-        def _bg_copy_certs():
-            with app.app_context():
-                for wid in updated_ids:
-                    _copy_welder_certs_to_pipeline(wid)
-
-        threading.Thread(target=_bg_copy_certs, daemon=True).start()
+    # The pipes' certificate folders follow on their own (app/pipeline_certs.py)
 
     return jsonify({"updated": len(rows), "welds": [_serialize(w) for w in rows]}), 200
 
@@ -453,66 +428,3 @@ def _serialize(w):
         "archivedBy": w.archived_by or "",
         "archiveReason": w.archive_reason or "",
     }
-
-
-def _copy_welder_certs_to_pipeline(weld_id):
-    """Copy welder/inspector certificates to {pipeline}/06 Schweisserprüfung-VT2/ if not already there."""
-    from app.models.pipeline import Pipeline
-    from app.models.project import Project
-    from app.models.welder import Welder, Certificate
-    from app.sharepoint import upload_to_pipeline_subfolder, _download_sharepoint_file_content, _sanitize_name
-    import logging
-
-    w = Weld.query.get(weld_id)
-    if not w:
-        return
-    pipeline = Pipeline.query.get(w.pipeline_id)
-    if not pipeline:
-        return
-    project = Project.query.get(pipeline.project_id)
-    if not project or not project.sharepoint_drive_id or not project.sharepoint_folder_id:
-        return
-
-    # Check which persons already have certs copied to each folder
-    existing_welds = Weld.query.filter_by(pipeline_id=w.pipeline_id, archived=False).all()
-    already_in_welders = set()
-    already_in_inspectors = set()
-    for ew in existing_welds:
-        if ew.id == w.id:
-            continue
-        if ew.welder_id:
-            already_in_welders.add(ew.welder_id)
-        if ew.inspector_id:
-            already_in_inspectors.add(ew.inspector_id)
-
-    def _copy_certs(person_id, folder_name, already_set):
-        if not person_id or person_id in already_set:
-            return
-        welder = Welder.query.get(person_id)
-        if not welder:
-            return
-        certs = Certificate.query.filter_by(welder_id=person_id, archived=False).all()
-        for c in certs:
-            if not c.pdf_url:
-                continue
-            try:
-                content = _download_sharepoint_file_content(c.pdf_url)
-                if not content:
-                    continue
-                safe_proc = _sanitize_name(c.process or "General").replace(" ", "_")
-                safe_name = _sanitize_name(welder.name or "Welder").replace(" ", "_")
-                safe_no = _sanitize_name(str(welder.no or "").strip()).replace(" ", "_")
-                if safe_no:
-                    file_name = f"WPQ_{safe_name}_{safe_no}_{safe_proc}.pdf"
-                else:
-                    file_name = f"WPQ_{safe_name}_{safe_proc}.pdf"
-
-                upload_to_pipeline_subfolder(
-                    project.sharepoint_drive_id, project.sharepoint_folder_id,
-                    pipeline.no, folder_name, file_name, content, "application/pdf"
-                )
-            except Exception as e:
-                logging.getLogger(__name__).error(f"Failed to copy cert to {folder_name}: {e}")
-
-    _copy_certs(w.welder_id, "06 Schweisserprüfung-VT2", already_in_welders)
-    _copy_certs(w.inspector_id, "06 Schweisserprüfung-VT2", already_in_inspectors)

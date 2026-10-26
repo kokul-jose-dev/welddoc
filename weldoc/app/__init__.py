@@ -116,6 +116,9 @@ def create_app():
     # The event log: every change is written to weldoc_event_log (app/event_log.py)
     from app.event_log import init_event_log
     init_event_log(app)
+    # Each pipe's welder certificate folder follows its welds (app/pipeline_certs.py)
+    from app.pipeline_certs import init_pipeline_certs
+    init_pipeline_certs(app)
 
     register_routes(app)
 
