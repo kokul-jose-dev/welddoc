@@ -477,6 +477,9 @@ const CLIENT_FILTER_KEY = 'weldoc_client_filter';
 const PROJECT_FILTER_KEY = 'weldoc_project_filter';
 function getSharedClientFilter() { try { return localStorage.getItem(CLIENT_FILTER_KEY) || ''; } catch (e) { return ''; } }
 function setSharedClientFilter(v) { try { localStorage.setItem(CLIENT_FILTER_KEY, v || ''); } catch (e) { } }
+/* "Projects" = the client page of that client (2026-10-26): it lists the client's projects with
+   New project / Edit / Archive. Without a client it opens the last one used (or the first). */
+function projectsHref(clientId) { return clientId ? `client-detail.html?id=${clientId}` : 'client-detail.html'; }
 function getSharedProjectFilter() { try { return localStorage.getItem(PROJECT_FILTER_KEY) || ''; } catch (e) { return ''; } }
 function setSharedProjectFilter(v) { try { localStorage.setItem(PROJECT_FILTER_KEY, v || ''); } catch (e) { } }
 
@@ -1418,7 +1421,7 @@ const NAV_ICONS = {
 function icon(key) { return `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">${NAV_ICONS[key] || ''}</svg>`; }
 function updateSidebarBadges(counts) {
   if (!counts) return;
-  const map = { 'index.html': counts.clients, 'projects.html': counts.projects, 'pipelines.html': counts.pipelines, 'welders.html': counts.welders, 'materials.html': counts.materials };
+  const map = { 'index.html': counts.clients, 'client-detail.html': counts.projects, 'pipelines.html': counts.pipelines, 'welders.html': counts.welders, 'materials.html': counts.materials };
   Object.entries(map).forEach(([href, count]) => {
     if (count !== undefined && count !== '') {
       const el = document.querySelector(`.nav-tab[href^="${href}"] .nav-count`);
@@ -1477,7 +1480,7 @@ function renderChrome(activeNav, breadcrumbHtml) {
 
   const activeClient = PAGE.clientId ? String(PAGE.clientId) : getSharedClientFilter();
   const activeProject = PAGE.projectId ? String(PAGE.projectId) : getSharedProjectFilter();
-  const pipeHref = activeProject ? `project-detail.html?id=${activeProject}` : (activeClient ? `projects.html?client=${activeClient}` : 'projects.html');
+  const pipeHref = activeProject ? `project-detail.html?id=${activeProject}` : projectsHref(activeClient);
 
   document.getElementById('chrome').innerHTML = `
     <div class="accent-bar"></div>
@@ -1504,7 +1507,7 @@ function renderChrome(activeNav, breadcrumbHtml) {
     <nav class="sidebar">
       ${nav('home', t('nav_home', 'Home'), 'home.html', false)}
       ${nav('clients', t('clients', 'Clients'), 'index.html', true)}
-      ${nav('projects', t('projects', 'Projects'), 'projects.html' + (activeClient ? '?client=' + activeClient : ''), true)}
+      ${nav('projects', t('projects', 'Projects'), projectsHref(activeClient), true)}
       ${nav('pipelines', t('pipelines', 'Pipelines'), pipeHref, true)}
       <div class="nav-section-divider"></div>
       ${nav('materials', t('nav_materials', 'Materials'), 'materials.html', true)}
@@ -5523,7 +5526,17 @@ async function restoreWeld(id) {
 /* ================================================================ CLIENT DETAIL PAGE ================================================================ */
 async function initClientDetailPage() {
   PAGE.name = 'client-detail'; initDB();
+  if (!qp('id')) {
+    /* side bar "Projects" without a client: the last one used, else the first */
+    let target = getSharedClientFilter();
+    if (!target) {
+      try { const list = (await apiGet('/clients')).filter(c => !c.archived); if (list.length) target = list[0].id; } catch (e) { }
+    }
+    if (target) { location.replace('client-detail.html?id=' + target); return; }
+    location.replace('index.html'); return;
+  }
   const id = Number(qp('id'));
+  setSharedClientFilter(String(id));
   PAGE.clientId = id;
   try {
     const data = await apiGet('/page/client-detail/' + id);
@@ -5534,7 +5547,7 @@ async function initClientDetailPage() {
   const cli = getClient(id);
   if (!cli) { renderChrome('clients', t('clients', 'Clients')); return; }
   projectFilters.clientId = String(id);
-  renderChrome('clients', `<a href="index.html">${t('clients', 'Clients')}</a> / ${escapeHtml(cli.name)}`); mountModals(); wireModalDismiss();
+  renderChrome('projects', `<a href="index.html">${t('clients', 'Clients')}</a> / ${escapeHtml(cli.name)}`); mountModals(); wireModalDismiss();
   renderClientDetail();
 }
 function switchClient(id) { if (id && Number(id) !== PAGE.clientId) location.href = 'client-detail.html?id=' + id; }
@@ -5573,6 +5586,9 @@ function updateProjectsCrumb() {
   return crumb;
 }
 async function initProjectsPage() {
+  /* Switched off 2026-10-26 (IST): the client page shows the same - forward there */
+  location.replace(projectsHref(qp('client') || getSharedClientFilter()));
+  return;
   PAGE.name = 'projects'; initDB();
   const clientParam = qp('client');
   if (clientParam) {
@@ -5629,7 +5645,7 @@ function renderProjectsPage() {
     <td class="col-mono">${escapeHtml(p.istProjectNo) || '<span class="muted">—</span>'}</td>
     <td class="col-name"><a class="cell-link" href="project-detail.html?id=${p.id}">${escapeHtml(p.title)}</a></td>
     <td>${escapeHtml(p.location) || '<span class="muted">—</span>'}</td>
-    <td><a class="cell-link" href="projects.html?client=${p.clientId}">${escapeHtml(getClientName(p.clientId))}</a></td>
+    <td><a class="cell-link" href="client-detail.html?id=${p.clientId}">${escapeHtml(getClientName(p.clientId))}</a></td>
     <td class="col-mono">${escapeHtml(p.order) || '<span class="muted">—</span>'}</td>
     <td class="col-remarks">${escapeHtml(p.description) || '<span class="muted">—</span>'}</td>
     <td>${p.sharepointFolderUrl ? `<a href="${escapeHtml(p.sharepointFolderUrl)}" target="_blank" class="link">${t('view_folder', 'View folder')}</a>` : `<button class="btn btn-ghost btn-sm" onclick="openFolderPicker(${p.id})">${t('select_folder', 'Select')}</button>`}</td>
@@ -5645,7 +5661,7 @@ function updatePipelinesCrumb() {
   let crumb = t('pipelines', 'Pipelines');
   if (pipeFilters.projectId) {
     const p = getProject(Number(pipeFilters.projectId));
-    if (p) crumb = `<a href="projects.html">${t('projects', 'Projects')}</a> / ${escapeHtml(p.title)} / ${t('pipelines', 'Pipelines')}`;
+    if (p) crumb = `<a href="${projectsHref(p.clientId)}">${t('projects', 'Projects')}</a> / ${escapeHtml(p.title)} / ${t('pipelines', 'Pipelines')}`;
   } else if (pipeFilters.clientId) {
     const c = getClient(Number(pipeFilters.clientId));
     if (c) crumb = `<a href="index.html">${t('clients', 'Clients')}</a> / ${escapeHtml(c.name)} / ${t('pipelines', 'Pipelines')}`;
@@ -5659,12 +5675,7 @@ async function initPipelinesPage() {
     location.replace('project-detail.html?id=' + projectParam);
     return;
   }
-  const clientParam = qp('client') || getSharedClientFilter();
-  if (clientParam) {
-    location.replace('projects.html?client=' + clientParam);
-    return;
-  }
-  location.replace('projects.html');
+  location.replace(projectsHref(qp('client') || getSharedClientFilter()));
 }
 function buildPipeFilters() {
   const cli = document.getElementById('pf-client'); if (!cli) return;
@@ -5739,7 +5750,7 @@ function renderPipelinesPage() {
     return `<tr class="clickable-row" onclick="rowToDetail(event,${pl.id})">
       <td><a class="pipe-no" href="pipeline-detail.html?id=${pl.id}">${escapeHtml(pl.no)}</a></td>
       <td>${pr ? `<a class="cell-link" href="pipelines.html?project=${pr.id}">${projLabel}</a>` : '<span class="muted">—</span>'}</td>
-      <td>${cli ? `<a class="cell-link" href="projects.html?client=${cli.id}">${escapeHtml(cli.name)}</a>` : '<span class="muted">—</span>'}</td>
+      <td>${cli ? `<a class="cell-link" href="client-detail.html?id=${cli.id}">${escapeHtml(cli.name)}</a>` : '<span class="muted">—</span>'}</td>
       <td class="col-mono">${escapeHtml(pl.plant) || '<span class="muted">—</span>'}</td>
       <td>${statusPill(pl.status)}</td>
       <td>${docCell(pl)}</td>
@@ -5786,7 +5797,7 @@ async function initPipelineDetailPage() {
   PAGE.projectId = pl.projectId;
   if (pr) PAGE.clientId = pr.clientId;
   saveDB();
-  renderChrome('pipelines', `<a href="projects.html">${t('projects', 'Projects')}</a> / ${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a> / ` : ''}${escapeHtml(pl.no)}`); mountModals(); wireModalDismiss();
+  renderChrome('pipelines', `<a href="${projectsHref(pr ? pr.clientId : null)}">${t('projects', 'Projects')}</a> / ${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a> / ` : ''}${escapeHtml(pl.no)}`); mountModals(); wireModalDismiss();
   renderPipelineDetail();
   loadPendingMaterialChanges();
   const seam = qp('seam'); if (seam) { const w = getWeld(Number(seam)); if (w && w.pipelineId === PAGE.pipelineId) showSeamDetail(w.id); }
@@ -5830,7 +5841,7 @@ function switchPipeline(id) { if (id && Number(id) !== PAGE.pipelineId) location
 function renderPipelineDetail() {
   const pl = getPipeline(PAGE.pipelineId); if (!pl) return;
   const pr = getProject(pl.projectId), cli = pr ? getClient(pr.clientId) : null;
-  document.getElementById('detail-context').innerHTML = `${cli ? `<a href="projects.html?client=${cli.id}">${escapeHtml(cli.name)}</a>` : ''}<span class="sep">›</span>${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a>` : ''}<span class="sep">›</span><span>${escapeHtml(pl.no)}</span>`;
+  document.getElementById('detail-context').innerHTML = `${cli ? `<a href="client-detail.html?id=${cli.id}">${escapeHtml(cli.name)}</a>` : ''}<span class="sep">›</span>${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a>` : ''}<span class="sep">›</span><span>${escapeHtml(pl.no)}</span>`;
   // pipeline switcher: sibling pipelines within the same project
   const siblings = pr ? projectPipelines(pr.id) : [pl];
   document.getElementById('pipeline-switch').innerHTML = siblings.map(s => `<option value="${s.id}" ${s.id === pl.id ? 'selected' : ''}>${escapeHtml(s.no)}</option>`).join('');
@@ -7182,12 +7193,12 @@ async function initMaterialDetailPage() {
   const pl = getPipeline(m.pipelineId);
   PAGE.projectId = pl.projectId;
   const pr = getProject(pl.projectId); if (pr) PAGE.clientId = pr.clientId;
-  renderChrome('projects', `<a href="projects.html">${t('projects', 'Projects')}</a> / ${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a> / ` : ''}<a href="pipeline-detail.html?id=${pl.id}">${escapeHtml(pl.no)}</a> / ${posLetter(m.position)}`); mountModals(); wireModalDismiss(); renderMaterialDetail();
+  renderChrome('projects', `<a href="${projectsHref(pr ? pr.clientId : null)}">${t('projects', 'Projects')}</a> / ${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a> / ` : ''}<a href="pipeline-detail.html?id=${pl.id}">${escapeHtml(pl.no)}</a> / ${posLetter(m.position)}`); mountModals(); wireModalDismiss(); renderMaterialDetail();
 }
 function renderMaterialDetail() {
   const m = getMaterial(PAGE.materialId); if (!m) return;
   const pl = getPipeline(m.pipelineId), pr = pl ? getProject(pl.projectId) : null, cli = pr ? getClient(pr.clientId) : null;
-  document.getElementById('material-context').innerHTML = `${cli ? `<a href="projects.html?client=${cli.id}">${escapeHtml(cli.name)}</a>` : ''}<span class="sep">›</span>${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a>` : ''}<span class="sep">›</span><a href="pipeline-detail.html?id=${pl.id}">${escapeHtml(pl.no)}</a><span class="sep">›</span><span>${posLetter(m.position)}</span>`;
+  document.getElementById('material-context').innerHTML = `${cli ? `<a href="client-detail.html?id=${cli.id}">${escapeHtml(cli.name)}</a>` : ''}<span class="sep">›</span>${pr ? `<a href="project-detail.html?id=${pr.id}">${escapeHtml(pr.title)}</a>` : ''}<span class="sep">›</span><a href="pipeline-detail.html?id=${pl.id}">${escapeHtml(pl.no)}</a><span class="sep">›</span><span>${posLetter(m.position)}</span>`;
   document.getElementById('material-title').textContent = m.itemDescription;
   let dnDisplay = m.dimension || '';
   for (let i = 2; i <= 6; i++) { if (m[`dimension${i}`]) dnDisplay += ' / ' + m[`dimension${i}`]; }
@@ -8695,7 +8706,7 @@ async function initProjectDetailPage() {
   if (!pr) { renderChrome('pipelines', t('projects', 'Projects')); return; }
   PAGE.clientId = pr.clientId;
   if (pr.clientId) setSharedClientFilter(String(pr.clientId));
-  renderChrome('pipelines', `<a href="projects.html">${t('projects', 'Projects')}</a> / ${escapeHtml(pr.title)}`); mountModals(); wireModalDismiss(); renderProjectDetail();
+  renderChrome('pipelines', `<a href="${projectsHref(pr.clientId)}">${t('projects', 'Projects')}</a> / ${escapeHtml(pr.title)}`); mountModals(); wireModalDismiss(); renderProjectDetail();
 }
 function switchProject(id) {
   if (id && Number(id) !== PAGE.projectId) {
@@ -8706,7 +8717,7 @@ function switchProject(id) {
 function renderProjectDetail() {
   const pr = getProject(PAGE.projectId); if (!pr) return; const cli = getClient(pr.clientId);
   pr.status = computeProjectStatus(pr);
-  document.getElementById('project-context').innerHTML = `${cli ? `<a href="projects.html?client=${cli.id}">${escapeHtml(cli.name)}</a>` : ''}<span class="sep">›</span><span>${escapeHtml(pr.title)}</span>`;
+  document.getElementById('project-context').innerHTML = `${cli ? `<a href="client-detail.html?id=${cli.id}">${escapeHtml(cli.name)}</a>` : ''}<span class="sep">›</span><span>${escapeHtml(pr.title)}</span>`;
   const siblings = cli ? clientProjects(cli.id) : [pr];
   document.getElementById('project-switch').innerHTML = siblings.map(s => `<option value="${s.id}" ${s.id === pr.id ? 'selected' : ''}>${escapeHtml(s.title)}</option>`).join('');
   document.getElementById('project-subtitle').textContent = `${cli ? cli.name : '—'}${pr.location ? ' · ' + pr.location : ''}${siblings.length > 1 ? ` · ${siblings.length} ${t('projects_for_client', 'projects for this client')}` : ''}`;
