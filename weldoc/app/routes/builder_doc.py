@@ -263,8 +263,12 @@ def _xlsx_response(file_bytes, filename, sp_status):
 
 @builder_doc_bp.route("/<int:pipeline_id>/builder-doc", methods=["GET"])
 def generate_builder_doc(pipeline_id):
-    """Welder document (stage 3): the weld inspection list, without signatures."""
-    pl, pr, file_bytes = build_weld_list_workbook(pipeline_id)
+    """Welder document (stage 3): the weld inspection list. Since 2026-10-26 it carries the same
+    as the final export - welder and inspector signatures, and the manufacturer's acceptance
+    (date, short mark, signature) - wherever a weld already has them; before welding those
+    cells simply stay empty."""
+    pl, pr, file_bytes = build_weld_list_workbook(pipeline_id, include_welder_sign=True,
+                                                  include_inspector_sign=True)
     # Uploaded straight away (it used to run in the background after the download), so the
     # page can be told when SharePoint refused it.
     sp_status = _upload_doc(pl, pr, "builder", file_bytes)
