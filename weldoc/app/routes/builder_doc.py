@@ -171,7 +171,7 @@ def _signature_placer(include_welder_sign, include_inspector_sign):
         ws.add_image(img)
 
     def _short_mark(name):
-        """The welder's abbreviation: first letter of the first and of the second part of his
+        """A person's abbreviation: first letter of the first and of the second part of the
         name, as it is stored - "Stefan Schmid" -> "S.S." (IST 2026-10-26)."""
         import re
         parts = [x for x in re.split(r"[\s,]+", (name or "").strip()) if x]
@@ -179,7 +179,7 @@ def _signature_placer(include_welder_sign, include_inspector_sign):
 
     def _accepted_cell(ws, row, w, p):
         """"Geprüft und akzeptiert - Hersteller", two columns (IST 2026-10-26): O the weld date,
-        P the welder's abbreviation with his signature beside it - "07. Sep. 2026 | S.S. ~"."""
+        P the inspector's abbreviation with his signature beside it - "07. Sep. 2026 | S.S. ~"."""
         from openpyxl.styles import Font, Alignment
         o = ws.cell(row, 15, fmt_date(w.date))
         o.font = Font(size=10)
@@ -196,12 +196,15 @@ def _signature_placer(include_welder_sign, include_inspector_sign):
             p = _person_for(w.welder_id, w.welder)
             if p and p.signature_url:
                 _put(ws, row, 9, p.signature_url)
-            if p or w.date:
-                _accepted_cell(ws, row, w, p)
         if include_inspector_sign:
             p = _person_for(getattr(w, "inspector_id", None), getattr(w, "inspector", None))
             if p and p.signature_url:
                 _put(ws, row, 11, p.signature_url)
+            # The check ("Geprüft und akzeptiert - Hersteller") is signed by the one who checks
+            # the weld - the inspector, who also does the endoscopy; a welder never checks his
+            # own weld (IST 2026-11-26). No inspector yet: nothing checked, the field stays empty.
+            if p:
+                _accepted_cell(ws, row, w, p)
 
     return place
 
